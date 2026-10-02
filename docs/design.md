@@ -1,73 +1,123 @@
 # Implementation design
 
-This repository implements the initial macOS local CI design in Deno, as requested. The
-earlier document proposed Go; TypeScript and native Deno APIs replace that implementation
-choice. The workflow scope remains intentionally small.
+The runner executes one selected job against the current working tree on macOS. Workflow
+validation produces an ordered plan before execution starts. Trusted shell commands retain
+the authority of the invoking user.
 
-## Boundaries
+## Module responsibilities
 
-| Module        | Owns                                                       | Does not own                         |
-| ------------- | ---------------------------------------------------------- | ------------------------------------ |
-| `workflow.ts` | Parse YAML, validate subset, produce an ordered plan       | Filesystem, process launch, triggers |
-| `process.ts`  | One isolated process group and its cleanup                 | Workflow syntax, scheduling          |
-| `runner.ts`   | Workspace resolution, step loop, environment, job deadline | Git operations, actions              |
-| `cli.ts`      | Arguments, macOS gate, diagnostics and OS signal listeners | A daemon or API server               |
-| `result.ts`   | Typed success/failure and boundary exception conversion    | Exceptions as domain control flow    |
+| Module         | Responsibility                                                                          |
+| -------------- | --------------------------------------------------------------------------------------- |
+| `workflow.ts`  | YAML parsing, supported-field validation, environment precedence, and plan construction |
+| `process.ts`   | Process groups, cancellation, bounded termination, and process identity checks          |
+| `command.ts`   | Bounded command capture, pipe closure, and command reaping                              |
+| `workspace.ts` | Workspace exclusion, contained step preparation, private scripts, and recovery journals |
+| `runner.ts`    | Step order, environment filtering, job deadlines, and final results                     |
+| `cli.ts`       | Arguments, platform policy, diagnostics, and OS signal listeners                        |
+| `runtime.ts`   | Version and source arguments that select shared configuration                           |
+| `result.ts`    | Expected failures and exception conversion at library and OS boundaries                 |
 
-The only external package is `yaml@2.8.1`, pinned with integrity in `deno.lock`. Its
-document AST allows aliases, tags and non-string keys to be rejected without misreading
-shell script text. YAML 1.2 core schema preserves `on` as a string. Parser errors include
-source locations; semantic errors include a workflow path.
+The YAML package version and integrity value reside in `deno.lock`. The parser checks the
+entire document before selected-job validation. An invalid unselected job can therefore
+prevent execution when its YAML syntax is invalid. Unsupported semantics in an unselected
+job do not prevent selected-job execution.
 
-## Execution contract
+## Workspace lifecycle
 
-1. Load a single workflow and select one job. Validate the full selected job and shared
-   configuration before performing any workflow effects.
-2. Resolve Bash from the original invocation PATH once. Resolve the workspace to a
-   canonical absolute directory.
-3. For each step, resolve its working directory at execution time. Require it to exist and
-   remain inside the canonical workspace. A prior step may create it.
-4. Write the run text to a private temporary script. Launch native `Deno.Command` with
-   `detached: true`, closed stdin, inherited output and the explicit merged environment.
-   On POSIX, the detached child leads a separate process group; `Deno.kill(-pid, signal)`
-   addresses that group.
-5. Await exit or cancellation, then clean up the group before advancing. An ordinary
-   failure stops remaining steps. Remove temporary scripts on the handled return path.
+The runner resolves the workspace to a canonical directory before acquiring its lock. A
+permanent `.mci/lock` file identifies the lock inode. A nonblocking exclusive file lock
+prevents cooperating runners from sharing the workspace during execution. The operating
+system releases the lock when the owning file descriptor closes.
 
-The job timer starts immediately before the first process launch and remains active
-between steps and through normal process cleanup. Cancellation is checked before every
-launch. Timeout ends execution but cleanup can add two seconds plus OS scheduling/reaping
-time. This is not a hard real-time deadline. The first abort reason wins; an
-already-observed failing exit remains a failure. Cleanup errors are reported as execution
-failures rather than success.
+The runner creates a private `run-*` directory beneath `.mci/`. The journal records its
+format version, private directory, and active process record. The runner writes the
+initial journal before it creates a script or launches a process. Journal updates use a
+temporary file and atomic rename.
 
-Process supervision is internally POSIX-compatible to allow Linux regression tests. The
-public CLI refuses `run` on other platforms and does not provide a platform override flag.
-There is no Node runtime or native helper.
+The workspace module resolves each step directory when that step starts. A prior step can
+create the directory. Canonical containment checks reject configured directories outside
+the workspace. The workspace module writes each script with private file permissions.
 
-## Small clarifications to the original document
+The process module records the group leader identity after process creation. The runner
+clears that record only after process cleanup and child reaping succeed. The workspace
+module removes the private directory before removing the journal. An uncertain process or
+failed cleanup retains recovery evidence. The workspace module releases the lock last on
+every handled return.
 
-- Require Deno 2.9.7 or newer, matching the verified runtime; older releases are not
-  claimed to support this implementation's detached-process API.
-- Cap job timeouts at 35791 minutes to fit JavaScript's timer range.
-- Reject all explicit YAML tags, including standard tags, to avoid coercion surprises.
-  Unused anchors are harmless, but aliases are rejected.
-- Report the actual OS kernel release, architecture and resolved shell. A runner label
-  does not claim that a particular GitHub-hosted macOS image is reproduced.
-- Failed preflight, including missing Bash, uses exit 2. Missing commands inside a step
-  are execution failures and use exit 1.
-- `completed` counts steps whose shell exited, including a failing step; cancellation does
-  not count its interrupted step as completed.
+## Process supervision
 
-## Deliberate limits
+Each step uses a fresh Bash process group with closed stdin and inherited output. Bash
+receives `--noprofile --norc -e -o pipefail`. The first failed step stops the selected
+job. An export or directory change affects only the current shell; file changes persist
+between steps.
 
-This is trusted local execution. Path validation prevents accidental directory
-configuration escapes; scripts can still access the rest of the host. Detached or
-daemonized descendants can escape cleanup. SIGKILL of the runner may leave processes and
-temporary files. There are no snapshots, locks, recovery journal, secret masking, outputs,
-caches or cleanup of project-generated files.
+The job deadline starts immediately before the first process launch. The deadline remains
+active between steps and during ordinary cleanup. Cancellation reaches the active group,
+with SIGKILL escalation after the configured grace period. The process module bounds the
+subsequent wait for the direct child. Cleanup errors make the run fail and preserve the
+original execution detail. OS scheduling and filesystem operations prevent a hard
+real-time completion guarantee.
 
-The shell and installed tools are part of the local environment. A local pass does not
-certify a clean commit, toolchain reproducibility, hosted-image parity or results for
-unselected jobs. If those become requirements, revisit the product boundary before
-extending the interpreter.
+Native process inspection uses bounded command capture. If inspection times out, the
+capture module kills its subprocess, bounds reaping, and closes its output pipe.
+Registration failure keeps its original diagnostic. Confirmed group cleanup and reaping
+allow the process module to clear the record even after registration fails.
+
+The `mci` task sets an internal marker for parent supervision. The CLI captures its parent
+PID and checks the current parent during execution. Parent death cancels the job through
+the existing signal path. The CLI clears the watcher after the run. The runner removes the
+marker from step environments, and workflow validation rejects marker overrides.
+
+## Recovery rules
+
+The next run reads the journal while it holds the workspace lock. Recovery compares the
+recorded PID, process group, start text, and unique script path. The process module uses
+wide `ps` output with a fixed locale. Recovery checks identity immediately before each
+signal.
+
+A missing leader with no remaining group counts as completed cleanup. A missing leader
+with an existing group leaves identity uncertain. A changed command or start identity also
+leaves identity uncertain. Recovery reports those states and preserves the journal instead
+of signaling an unconfirmed process. The diagnostic identifies the recorded PID and
+private state location for manual investigation.
+
+Recovery remains best effort because process inspection and signaling are separate
+operations. A crash between process creation and journal persistence can leave an
+unrecorded process. The runner does not claim automatic recovery for that interval or for
+detached descendants. File locks are advisory and inode-bound; trusted commands can
+replace the lock file or alter runner state.
+
+## Configuration and checks
+
+`deno.json` owns the application version and the `mci` permission set. Direct source,
+compilation, and test tasks select that set. The runtime module supplies source arguments
+with absolute source and configuration paths. The CLI reports the host, Deno version, and
+resolved Bash path.
+
+`ci/local-ci.yml` contains the supported local workflow. `.github/workflows/ci.yml` checks
+out the repository and installs pinned Deno before verification. The hosted matrix
+includes Linux, Apple Silicon macOS, and Intel macOS. The configured matrix establishes
+intended coverage; passing results require an actual hosted run. `VERIFICATION.md` records
+observed coverage and keeps evidence limits explicit.
+
+## Release responsibility
+
+The repository maintainer owns release acceptance, supported-host claims, and dependency
+updates. A contributor owns the checks and evidence for each submitted change. The
+repository maintainer accepts a release only after reviewing those results and unresolved
+compatibility limits. The workflow author owns command versions and the trust decision for
+workflow scripts. The invoking user owns local credentials, installed tools, and manual
+investigation after uncertain recovery.
+
+## Product boundaries
+
+The runner does not sandbox child commands or mask secrets. The runner does not implement
+GitHub actions, expressions, event evaluation, scheduling, or unselected-job execution.
+The runner does not restore project files or record a history of completed runs. The
+runner validates reserved environment names and removes inherited GitHub runner state. The
+remaining inherited environment and installed commands remain inputs to the job.
+
+A local pass covers the selected job and current workspace only. It does not establish
+clean-commit status, reproducible toolchains, or GitHub-hosted image parity. A
+compatibility claim requires execution on the named operating system and architecture.
+Unmeasured hosts remain outside the verified support statement.

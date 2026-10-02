@@ -16,8 +16,9 @@ evidence without execution results.
 ## Process supervision
 
 Bound child reaping after termination and retain every cleanup error. Normalize
-cancellation reasons at the boundary. Expose ProcessRecord with pid, started, and script
-fields. Expose optional onStart(record) and onFinish() callbacks that return Result
+cancellation reasons at the boundary. Bound native process inspection, output capture,
+pipe closure, and inspection child reaping. Expose ProcessRecord with pid, started, and
+script fields. Expose optional onStart(record) and onFinish() callbacks that return Result
 values. Use ps -ww with a fixed locale and require PID equals PGID. Compare exact start
 text and the unique script path immediately before each recovery signal. Recovery remains
 best effort because inspection and signaling are separate OS operations. If the leader is
@@ -52,12 +53,16 @@ locking and the ability of trusted scripts to replace the lock inode.
 ## Configuration and hosted checks
 
 Read CLI version from deno.json and centralize source and compilation permissions in one
-executable configuration module. Use that module in task launchers and CLI subprocess
-tests. Keep local workflow YAML outside .github/workflows and add a complete hosted
-workflow with checkout and pinned Deno installation. Run verification and compiled smoke
-checks on Linux, Apple Silicon macOS, and Intel macOS. Keep actual execution evidence
-separate from configured checks. Test help, version, missing workflow, missing Bash,
-timeout limits, and global YAML validation boundaries.
+named Deno permission set. Source tasks, compilation, and CLI subprocess tests select that
+set. Run tasks directly without an application launcher. The mci task marks its CLI child
+for parent supervision. If that task parent exits, the CLI cancels the active job and
+cleans the workspace. Standalone execution keeps its existing parent-independent behavior.
+Keep the task marker out of workflow environments. Keep local workflow YAML outside
+.github/workflows and add a complete hosted workflow with checkout and pinned Deno
+installation. Run verification and compiled smoke checks on Linux, Apple Silicon macOS,
+and Intel macOS. Keep actual execution evidence separate from configured checks. Test
+help, version, missing workflow, missing Bash, timeout limits, and global YAML validation
+boundaries.
 
 ## Integration and evidence
 
@@ -69,3 +74,12 @@ host and runtime evidence in VERIFICATION.md. Describe maintainer responsibility
 release acceptance, compatibility evidence, and dependency updates. Document local tool
 variability and the limits of host execution. Review every changed line and complete an
 independent code review before the final report.
+
+## Accepted follow-up from code review
+
+The complete independent review retained four findings. The task path must stop its CLI
+child after parent SIGKILL. Recovery command identity needs an isolated refusal test.
+Confirmed cleanup after failed registration must clear stale state. Native ps inspection
+must bound capture, termination, and reaping. The process tests also cover already-reaped
+launches and finish registration failures. A native probe confirmed that removing the
+application launcher alone does not stop a Deno task child after parent SIGKILL.
