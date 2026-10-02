@@ -1,8 +1,9 @@
 import { attempt } from "./result.ts";
 import { resolveBash, runPlan } from "./runner.ts";
+import { cliVersion } from "./runtime.ts";
 import { planWorkflow } from "./workflow.ts";
 
-const usage = `mci 0.1.0 — local macOS CI
+const usage = `mci ${cliVersion}: local macOS CI
 Usage: mci <check|run> <workflow.yml> --job <id>
        mci --help | --version
 
@@ -15,7 +16,7 @@ export const main = async (args: readonly string[]): Promise<number> => {
     return 0;
   }
   if (args.length === 1 && args[0] === "--version") {
-    console.log("0.1.0");
+    console.log(cliVersion);
     return 0;
   }
   const [command, file, flag, job] = args;
@@ -36,7 +37,7 @@ export const main = async (args: readonly string[]): Promise<number> => {
     inherited: Deno.env.toObject(),
   }));
   if (!loaded.ok) {
-    console.error(loaded.error);
+    console.error(`${file}: ${loaded.error}`);
     return 2;
   }
   const planned = planWorkflow(loaded.value.source, job);
@@ -55,8 +56,10 @@ export const main = async (args: readonly string[]): Promise<number> => {
   }
   console.log(`${file} :: ${job} (${plan.name})`);
   console.log(`Workspace: ${loaded.value.workspace}`);
-  console.log(`Host: ${Deno.build.os}/${Deno.build.arch}; bash: ${shell.value}`);
-  console.log("Manual local invocation; on is not evaluated.");
+  console.log(
+    `Host: ${Deno.build.os}/${Deno.build.arch}; Deno ${Deno.version.deno}; bash: ${shell.value}`,
+  );
+  console.log("Result covers the selected job only; on is not evaluated.");
   if (plan.otherJobs.length) console.log(`Unselected jobs: ${plan.otherJobs.join(", ")}`);
   if (command === "check") {
     console.log(

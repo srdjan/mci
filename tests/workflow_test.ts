@@ -106,3 +106,30 @@ Deno.test("missing jobs, steps and non-string defaults have useful errors", () =
   );
   assert(!badDefault.ok);
 });
+
+Deno.test("job timeout uses the default, accepts the maximum, and rejects overflow", () => {
+  const source = fixture("      - run: echo ok");
+  equal(unwrap(planWorkflow(source, "check")).timeoutMs, 15 * 60_000);
+  equal(
+    unwrap(planWorkflow(
+      source.replace("    steps:", "    timeout-minutes: 35791\n    steps:"),
+      "check",
+    )).timeoutMs,
+    35791 * 60_000,
+  );
+  const overflow = planWorkflow(
+    source.replace("    steps:", "    timeout-minutes: 35792\n    steps:"),
+    "check",
+  );
+  assert(!overflow.ok && overflow.error.includes("jobs.check.timeout-minutes"));
+});
+
+Deno.test("global YAML errors keep locations when another job is selected", () => {
+  const source = fixture("      - run: echo ok").replace(
+    "  check:",
+    "  broken:\n    runs-on: macos-latest\n    steps:\n      - run: echo one\n        run: echo two\n  check:",
+  );
+  const plan = planWorkflow(source, "check");
+  assert(!plan.ok);
+  assert(/line \d+, column \d+/.test(plan.error), plan.error);
+});
