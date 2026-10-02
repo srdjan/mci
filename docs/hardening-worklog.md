@@ -21,8 +21,13 @@ limits until those systems execute the checks.
 
 ## Current work
 
-Delegate independent process, workspace, and configuration units with exclusive file
-ownership. The main agent owns integration, documentation, verification, review, and
+The plan review accepted the direction and required explicit journal states, recovery
+limits, and compound diagnostics. The plan now includes those corrections. Two public
+runner regressions failed as expected before implementation. A competing run changed the
+same workspace, and cleanup failure hid exit 23. The regression patch is saved outside the
+repository until runner integration. Delegate independent process and configuration units
+with exclusive file ownership. Delegate workspace lifecycle after the process API is
+committed. The main agent owns integration, documentation, verification, review, and
 commits.
 
 ## Next action

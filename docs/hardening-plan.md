@@ -16,29 +16,38 @@ evidence without execution results.
 ## Process supervision
 
 Bound child reaping after termination and retain every cleanup error. Normalize
-cancellation reasons at the boundary. Register process identity for recovery through an
-optional onStart callback. Expose ProcessRecord with pid, started, and script fields. Use
-native ps output to record and compare the process start identity and command. Recover
-only a matching process group leader whose command contains the recorded private script
-path. Treat uncertain identity as an explicit recovery failure and never signal an
-unrelated process. Keep the existing two-second termination grace period as policy, not a
-measured capacity estimate. Test native supervision and injected OS failures through the
-public process API with small capability records.
+cancellation reasons at the boundary. Expose ProcessRecord with pid, started, and script
+fields. Expose optional onStart(record) and onFinish() callbacks that return Result
+values. Use ps -ww with a fixed locale and require PID equals PGID. Compare exact start
+text and the unique script path immediately before each recovery signal. Recovery remains
+best effort because inspection and signaling are separate OS operations. If the leader is
+absent but its group exists, preserve the journal and require manual recovery. If a
+command changes after exec, preserve the journal and require manual recovery. Treat an
+already-reaped short process as complete when identity capture finds no leader. Keep the
+existing two-second termination grace period as policy, not a measured capacity estimate.
+Test native supervision and injected OS failures through the public process API with small
+capability records.
 
 ## Workspace lifecycle
 
 Own workspace exclusion, private scripts, and recovery in src/workspace.ts. Keep a
 permanent .mci/lock inode and hold a nonblocking exclusive Deno file lock for the entire
 run. Store private scripts beneath .mci/run-* and store one atomic journal in
-.mci/run.json. Reject a competing run before it performs workflow effects. On the next
-run, recover the recorded process through recoverProcess and remove abandoned private
-script directories. Validate journal data and restrict removal to immediate run-*
-directories beneath the canonical state directory. Do not silently discard an uncertain
-process identity or failed recovery. Expose acquireWorkspace(workspace) returning a lease
-with directory, record(ProcessRecord), and close() Result methods. The runner records each
-launched process and closes the lease on every handled return. Retain recovery evidence
-when recovery or cleanup fails. Document the unavoidable interval between process creation
-and journal persistence.
+.mci/run.json. Persist version, runDir, and process: null before script creation or
+process launch. Clear the process record only after group cleanup and direct-child reaping
+succeed. Reject a competing run before it performs workflow effects. On the next run,
+recover the recorded process through recoverProcess and remove abandoned private script
+directories. Validate journal data and restrict removal to immediate run-* directories
+beneath the canonical state directory. Do not silently discard an uncertain process
+identity or failed recovery. Expose acquireWorkspace(workspace) returning a lease with
+directory, record(ProcessRecord | null), and close() Result methods. The lease also
+exposes prepare(step, index) for contained directory resolution and private script
+creation. The runner records each launched process and closes the lease on every handled
+return. Retain recovery evidence when recovery or cleanup fails. Release the file lock
+last, including after an uncertain cleanup failure. Preserve the primary result and append
+process, journal, directory, and lock cleanup errors in stable order. Document the
+unavoidable interval between process creation and journal persistence. Document advisory
+locking and the ability of trusted scripts to replace the lock inode.
 
 ## Configuration and hosted checks
 
