@@ -55,6 +55,10 @@ Deno.test("unknown features and malformed values fail before execution", () => {
     basic.replace("run: echo first", "run: echo x\n        working-directory: ../escape"),
     basic.replace("run: echo first", "run: echo x\n        env: {NUMBER: 1}"),
     basic.replace("run: echo first", "run: echo x\n        env: {CI: 'false'}"),
+    basic.replace(
+      "run: echo first",
+      "run: echo x\n        env: {MCI_TASK_PARENT: 'true'}",
+    ),
     basic.replace("run: echo first", "run: echo x\n        env: {BASH_ENV: file}"),
     basic.replace("run: echo first", "run: echo x\n        env: {GITHUB_TOKEN: value}"),
     basic.replace("shell: bash", "shell: zsh"),

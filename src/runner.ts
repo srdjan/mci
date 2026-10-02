@@ -17,7 +17,8 @@ export const stepEnvironment = (
 ): Record<string, string> => ({
   ...Object.fromEntries(
     Object.entries(inherited).filter(([key]) =>
-      !/^(GITHUB_|RUNNER_)/.test(key) && !["BASH_ENV", "ENV"].includes(key)
+      !/^(GITHUB_|RUNNER_)/.test(key) &&
+      !["BASH_ENV", "ENV", "MCI_TASK_PARENT"].includes(key)
     ),
   ),
   ...overlay,

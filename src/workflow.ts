@@ -29,7 +29,8 @@ const mapping = (value: unknown): value is MapValue =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 const own = (value: MapValue, key: string) => Object.hasOwn(value, key);
 const reserved = (key: string) =>
-  /^(GITHUB_|RUNNER_)/.test(key) || ["CI", "MCI_LOCAL", "BASH_ENV", "ENV"].includes(key);
+  /^(GITHUB_|RUNNER_)/.test(key) ||
+  ["CI", "MCI_LOCAL", "MCI_TASK_PARENT", "BASH_ENV", "ENV"].includes(key);
 
 export const validDirectory = (path: string): boolean => {
   if (!path || path.startsWith("/") || path.includes("\0")) return false;

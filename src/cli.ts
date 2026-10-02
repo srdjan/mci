@@ -11,6 +11,7 @@ Run from the workspace root. check executes no workflow commands.
 Only run steps with an explicit effective shell: bash are supported.`;
 
 export const main = async (args: readonly string[]): Promise<number> => {
+  const parent = Deno.ppid;
   if (args.length === 1 && ["--help", "-h"].includes(args[0]!)) {
     console.log(usage);
     return 0;
@@ -76,6 +77,12 @@ export const main = async (args: readonly string[]): Promise<number> => {
   const terminate = () => controller.abort("SIGTERM");
   Deno.addSignalListener("SIGINT", interrupt);
   Deno.addSignalListener("SIGTERM", terminate);
+  const checkParent = () => {
+    if (parent <= 1 || Deno.ppid !== parent) controller.abort("SIGTERM");
+  };
+  const supervised = loaded.value.inherited.MCI_TASK_PARENT === "true";
+  const parentTimer = supervised ? setInterval(checkParent, 25) : undefined;
+  if (supervised) checkParent();
   try {
     const outcome = await runPlan(plan, {
       workspace: loaded.value.workspace,
@@ -90,6 +97,7 @@ export const main = async (args: readonly string[]): Promise<number> => {
     );
     return outcome.code;
   } finally {
+    if (parentTimer !== undefined) clearInterval(parentTimer);
     Deno.removeSignalListener("SIGINT", interrupt);
     Deno.removeSignalListener("SIGTERM", terminate);
   }

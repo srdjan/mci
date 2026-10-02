@@ -16,6 +16,27 @@ const command = (
   });
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 
+const taskCommand = async (workspace: string, args: readonly string[]) => {
+  await Deno.writeTextFile(
+    `${workspace}/deno.json`,
+    JSON.stringify({
+      ...denoConfig,
+      tasks: {
+        mci: denoConfig.tasks.mci.replace(
+          "src/main.ts",
+          new URL("../src/main.ts", import.meta.url).href,
+        ),
+      },
+    }),
+  );
+  return new Deno.Command(Deno.execPath(), {
+    args: ["task", "mci", ...args],
+    cwd: workspace,
+    stdout: "piped",
+    stderr: "piped",
+  });
+};
+
 Deno.test("CLI help and version use the public configuration", () =>
   inWorkspace(async (workspace) => {
     const help = await command(workspace, ["--help"]).output();
@@ -114,7 +135,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "macOS task launcher forwards SIGINT to the CLI",
+  name: "macOS Deno task forwards SIGINT to the CLI",
   ignore: Deno.build.os !== "darwin",
   fn: () =>
     inWorkspace(async (workspace) => {
@@ -124,21 +145,8 @@ Deno.test({
           "      - run: |\n          touch ready\n          sleep 30\n      - run: touch skipped",
         ),
       );
-      const child = new Deno.Command(Deno.execPath(), {
-        args: [
-          "run",
-          "--allow-run=deno",
-          decodeURIComponent(new URL("../scripts/task.ts", import.meta.url).pathname),
-          "mci",
-          "run",
-          "ci.yml",
-          "--job",
-          "check",
-        ],
-        cwd: workspace,
-        stdout: "piped",
-        stderr: "piped",
-      }).spawn();
+      const child = (await taskCommand(workspace, ["run", "ci.yml", "--job", "check"]))
+        .spawn();
       const output = child.output();
       try {
         await waitFor(() => exists(`${workspace}/ready`));
@@ -148,5 +156,67 @@ Deno.test({
       const outcome = await output;
       equal(outcome.code, 130);
       assert(!await exists(`${workspace}/skipped`));
+    }),
+});
+
+Deno.test({
+  name: "macOS task SIGKILL stops its CLI and releases the workspace",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      await Deno.writeTextFile(
+        `${workspace}/ci.yml`,
+        fixture(
+          "      - run: |\n          echo $PPID > cli.pid\n          trap 'touch stopped; exit 0' TERM\n          touch ready\n          while :; do sleep 0.01; done\n      - run: touch skipped",
+        ),
+      );
+      const owner = (await taskCommand(workspace, ["run", "ci.yml", "--job", "check"]))
+        .spawn();
+      const output = owner.output();
+      let killed = false;
+      let cliPid: number | undefined;
+      try {
+        await waitFor(async () => {
+          if (!await exists(`${workspace}/ready`)) return false;
+          const journal: unknown = JSON.parse(
+            await Deno.readTextFile(`${workspace}/.mci/run.json`),
+          );
+          return typeof journal === "object" && journal !== null &&
+            "process" in journal && journal.process !== null;
+        });
+        cliPid = Number((await Deno.readTextFile(`${workspace}/cli.pid`)).trim());
+        assert(Number.isSafeInteger(cliPid) && cliPid > 1);
+        owner.kill("SIGKILL");
+        killed = true;
+        await owner.status;
+        await waitFor(async () => !await exists(`${workspace}/.mci/run.json`));
+        const stopped = await output;
+        assert(text(stopped.stdout).includes("cancelled:"), text(stopped.stderr));
+        assert(await exists(`${workspace}/stopped`));
+        assert(!await exists(`${workspace}/skipped`));
+        cliPid = undefined;
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture("      - run: touch next-run"),
+        );
+        const next = await (await taskCommand(workspace, [
+          "run",
+          "ci.yml",
+          "--job",
+          "check",
+        ])).output();
+        equal(next.code, 0);
+        assert(await exists(`${workspace}/next-run`));
+      } finally {
+        if (cliPid !== undefined) {
+          try {
+            Deno.kill(cliPid, "SIGTERM");
+          } catch (error) {
+            assert(error instanceof Deno.errors.NotFound, `CLI cleanup failed: ${error}`);
+          }
+        }
+        if (!killed) owner.kill("SIGKILL");
+        await output;
+      }
     }),
 });

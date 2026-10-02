@@ -119,6 +119,7 @@ Deno.test("environment filters inherited runner state and startup files", () => 
       ENV: "evil",
       GITHUB_ENV: "file",
       RUNNER_TEMP: "path",
+      MCI_TASK_PARENT: "true",
       X: "old",
     }, { X: "new" }),
     { PATH: "/bin", X: "new", CI: "true", MCI_LOCAL: "true" },
