@@ -1,4 +1,5 @@
 import { resolveBash, runPlan, stepEnvironment } from "../src/runner.ts";
+import { cliSourceArgs } from "../src/runtime.ts";
 import { type Plan, planWorkflow } from "../src/workflow.ts";
 import {
   assert,
@@ -33,6 +34,14 @@ const execute = async (source: string, workspace: string, extra: {
     signal: extra.signal,
     log: () => {},
   });
+};
+
+const stopGroup = (pid: number): void => {
+  try {
+    Deno.kill(-pid, "SIGKILL");
+  } catch (error) {
+    assert(error instanceof Deno.errors.NotFound, String(error));
+  }
 };
 
 Deno.test("later unsupported step causes zero effects", () =>
@@ -206,3 +215,109 @@ Deno.test("already-cancelled invocation launches no step", () =>
     equal(result.code, 130);
     assert(!await exists(`${workspace}/forbidden`));
   }));
+
+Deno.test("competing runs cannot change the same workspace", () =>
+  inWorkspace(async (workspace) => {
+    const first = execute(
+      fixture(
+        "      - run: |\n          touch ready\n          while [ ! -f release ]; do sleep 0.01; done",
+      ),
+      workspace,
+    );
+    let second;
+    try {
+      await waitFor(() => exists(`${workspace}/ready`));
+      second = await execute(fixture("      - run: touch forbidden"), workspace);
+    } finally {
+      await Deno.writeTextFile(`${workspace}/release`, "release");
+      await first;
+    }
+    equal(second.code, 1);
+    assert(second.detail.includes("already running"), second.detail);
+    assert(!await exists(`${workspace}/forbidden`));
+    equal(
+      (await execute(fixture("      - run: touch after-release"), workspace)).code,
+      0,
+    );
+  }));
+
+Deno.test("cleanup failure retains the failed step detail", () =>
+  inWorkspace(async (workspace) => {
+    let directory: string | undefined;
+    try {
+      const outcome = await execute(
+        fixture(
+          '      - run: |\n          dirname "$0" > private-directory\n          chmod 000 "$(dirname "$0")"\n          exit 23',
+        ),
+        workspace,
+      );
+      directory = (await Deno.readTextFile(`${workspace}/private-directory`)).trim();
+      equal(outcome.code, 1);
+      assert(outcome.detail.includes("exit 23"), outcome.detail);
+      assert(outcome.detail.includes("cleanup"), outcome.detail);
+    } finally {
+      if (directory) {
+        await Deno.chmod(directory, 0o700);
+        await Deno.remove(directory, { recursive: true });
+      }
+    }
+  }));
+
+Deno.test({
+  name: "macOS next run recovers a recorded process after runner SIGKILL",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      await Deno.writeTextFile(
+        `${workspace}/crash.yml`,
+        fixture(
+          "      - run: |\n          trap 'echo stopped > stopped; exit 0' TERM\n          echo $$ > active-pid\n          touch ready\n          while :; do sleep 0.02; done",
+        ),
+      );
+      const command = (file: string) =>
+        new Deno.Command(Deno.execPath(), {
+          args: cliSourceArgs(["run", file, "--job", "check"]),
+          cwd: workspace,
+          stdout: "piped",
+          stderr: "piped",
+        });
+      const owner = command("crash.yml").spawn();
+      const output = owner.output();
+      let pid: number | undefined;
+      let ownerStopped = false;
+      try {
+        await waitFor(async () => {
+          if (!await exists(`${workspace}/ready`)) return false;
+          const value: unknown = JSON.parse(
+            await Deno.readTextFile(`${workspace}/.mci/run.json`),
+          );
+          return typeof value === "object" && value !== null && "process" in value &&
+            typeof value.process === "object" && value.process !== null;
+        });
+        pid = Number((await Deno.readTextFile(`${workspace}/active-pid`)).trim());
+        assert(Number.isSafeInteger(pid) && pid > 0);
+        owner.kill("SIGKILL");
+        ownerStopped = true;
+        await owner.status;
+        assert(await exists(`${workspace}/.mci/run.json`));
+        await Deno.writeTextFile(
+          `${workspace}/next.yml`,
+          fixture("      - run: touch recovered"),
+        );
+        const next = await command("next.yml").output();
+        equal(next.code, 0);
+        assert(await exists(`${workspace}/stopped`));
+        assert(await exists(`${workspace}/recovered`));
+        assert(!await exists(`${workspace}/.mci/run.json`));
+        await output;
+      } finally {
+        if (pid !== undefined) {
+          stopGroup(pid);
+        }
+        if (!ownerStopped) {
+          owner.kill("SIGKILL");
+        }
+        await output;
+      }
+    }),
+});

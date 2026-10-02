@@ -1,6 +1,7 @@
 import { attempt, err, ok, type Result } from "./result.ts";
-import { runProcess, type Stop } from "./process.ts";
+import { normalizeStop, runProcess, type Stop } from "./process.ts";
 import type { Env, Plan } from "./workflow.ts";
+import { acquireWorkspace } from "./workspace.ts";
 
 export type RunResult = {
   readonly kind: "success" | "failure" | "timeout" | "cancelled";
@@ -65,40 +66,26 @@ export const runPlan = async (plan: Plan, options: {
       reason,
     );
   const controller = new AbortController();
-  const forward = () => controller.abort(options.signal?.reason ?? "SIGTERM");
+  const forward = () => controller.abort(normalizeStop(options.signal?.reason));
   options.signal?.addEventListener("abort", forward, { once: true });
   if (options.signal?.aborted) forward();
-  const workspace = await attempt(() => Deno.realPath(options.workspace));
-  if (!workspace.ok) {
+  if (controller.signal.aborted) {
     options.signal?.removeEventListener("abort", forward);
-    return result("failure", 1, workspace.error);
+    return stopped(normalizeStop(controller.signal.reason));
   }
-  const temp = await attempt(() => Deno.makeTempDir({ prefix: "mci-" }));
-  if (!temp.ok) {
+  const acquired = await acquireWorkspace(options.workspace);
+  if (!acquired.ok) {
     options.signal?.removeEventListener("abort", forward);
-    return result("failure", 1, temp.error);
+    return result("failure", 1, acquired.error);
   }
+  const lease = acquired.value;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let deadline = Infinity;
   const execute = async (): Promise<RunResult> => {
     for (const [index, step] of plan.steps.entries()) {
       if (controller.signal.aborted) return stopped(controller.signal.reason);
-      const prepared = await attempt(async () => {
-        const cwd = await Deno.realPath(`${workspace.value}/${step.directory}`);
-        const inside = cwd === workspace.value ||
-          cwd.startsWith(`${workspace.value.replace(/\/$/, "")}/`);
-        if (!inside) return err("working-directory resolves outside the workspace");
-        if (!(await Deno.stat(cwd)).isDirectory) {
-          return err("working-directory is not a directory");
-        }
-        const script = `${temp.value}/step-${index + 1}.sh`;
-        await Deno.writeTextFile(script, step.script, { mode: 0o600 });
-        return ok({ cwd, script });
-      });
+      const prepared = await lease.prepare(step, index);
       if (!prepared.ok) return result("failure", 1, `${step.name}: ${prepared.error}`);
-      if (!prepared.value.ok) {
-        return result("failure", 1, `${step.name}: ${prepared.value.error}`);
-      }
       if (controller.signal.aborted) return stopped(controller.signal.reason);
       if (timer === undefined) {
         deadline = performance.now() + plan.timeoutMs;
@@ -110,9 +97,11 @@ export const runPlan = async (plan: Plan, options: {
       const start = performance.now();
       const outcome = await runProcess({
         shell: options.shell,
-        ...prepared.value.value,
+        ...prepared.value,
         env: stepEnvironment(options.inherited, step.env),
         signal: controller.signal,
+        onStart: lease.record,
+        onFinish: () => lease.record(null),
       });
       if (!outcome.ok) return result("failure", 1, `${step.name}: ${outcome.error}`);
       log(
@@ -134,9 +123,15 @@ export const runPlan = async (plan: Plan, options: {
   const executed = await attempt(execute);
   clearTimeout(timer);
   options.signal?.removeEventListener("abort", forward);
-  const cleaned = await attempt(() => Deno.remove(temp.value, { recursive: true }));
+  const primary = executed.ok ? executed.value : result("failure", 1, executed.error);
+  const closed = await attempt(lease.close);
+  const cleaned = closed.ok ? closed.value : closed;
   if (!cleaned.ok) {
-    return result("failure", 1, `temporary script cleanup failed: ${cleaned.error}`);
+    return result(
+      "failure",
+      1,
+      `${primary.detail}; workspace cleanup failed: ${cleaned.error}`,
+    );
   }
-  return executed.ok ? executed.value : result("failure", 1, executed.error);
+  return primary;
 };
