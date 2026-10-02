@@ -1,0 +1,207 @@
+import { readCiStatus, runLoggedCi } from "../src/ci.ts";
+import { assert, equal, exists, inWorkspace, unwrap, waitFor } from "./helpers.ts";
+
+const text = (chunks: readonly Uint8Array[]): string => {
+  const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const joined = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return new TextDecoder().decode(joined);
+};
+
+const runShell = (
+  workspace: string,
+  script: string,
+  signal?: AbortSignal,
+  stdout?: (chunk: Uint8Array) => void,
+  stderr?: (chunk: Uint8Array) => void,
+) =>
+  runLoggedCi({
+    workspace,
+    command: "/bin/sh",
+    args: ["-c", script],
+    signal,
+    stdout,
+    stderr,
+  });
+
+Deno.test("logged CI saves and forwards both streams on success", () =>
+  inWorkspace(async (workspace) => {
+    const stdout: Uint8Array[] = [];
+    const stderr: Uint8Array[] = [];
+    const result = unwrap(
+      await runShell(
+        workspace,
+        "printf 'standard output\\n'; printf 'standard error\\n' >&2",
+        undefined,
+        (chunk) => stdout.push(chunk.slice()),
+        (chunk) => stderr.push(chunk.slice()),
+      ),
+    );
+
+    equal(result, { code: 0, diagnostics: [] });
+    equal(text(stdout), "standard output\n");
+    equal(text(stderr), "standard error\n");
+    const log = await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`);
+    assert(log.includes("standard output\n"));
+    assert(log.includes("standard error\n"));
+    const status = unwrap(await readCiStatus(workspace));
+    assert(status !== null);
+    equal(status.state, "pass");
+    equal(status.code, 0);
+    assert(status.finished !== null);
+  }));
+
+Deno.test("logged CI retains exit 23 in the log, status, and result", () =>
+  inWorkspace(async (workspace) => {
+    const result = unwrap(
+      await runShell(
+        workspace,
+        "printf 'failed output\\n'; printf 'failed error\\n' >&2; exit 23",
+      ),
+    );
+
+    equal(result.code, 23);
+    equal(result.diagnostics, []);
+    const log = await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`);
+    assert(log.includes("failed output\n"));
+    assert(log.includes("failed error\n"));
+    const status = unwrap(await readCiStatus(workspace));
+    assert(status !== null);
+    equal(status.state, "fail");
+    equal(status.code, 23);
+  }));
+
+Deno.test("logged CI preserves exit 23 when an output sink fails", () =>
+  inWorkspace(async (workspace) => {
+    const result = unwrap(
+      await runShell(
+        workspace,
+        "printf 'retained output\\n'; exit 23",
+        undefined,
+        () => Promise.reject(new Error("terminal closed")),
+      ),
+    );
+
+    equal(result.code, 23);
+    assert(result.diagnostics.some((detail) => detail.includes("terminal closed")));
+    const log = await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`);
+    assert(log.includes("retained output\n"));
+    assert(log.includes("terminal closed"));
+    assert(log.includes("[mci] exit 23"));
+    const status = unwrap(await readCiStatus(workspace));
+    assert(status !== null);
+    equal(status.state, "fail");
+    equal(status.code, 23);
+  }));
+
+Deno.test("logged CI converts a successful child with a sink failure to failure", () =>
+  inWorkspace(async (workspace) => {
+    const result = unwrap(
+      await runShell(
+        workspace,
+        "printf 'child passed\\n'",
+        undefined,
+        () => Promise.reject(new Error("terminal closed")),
+      ),
+    );
+
+    equal(result.code, 1);
+    assert(result.diagnostics.some((detail) => detail.includes("terminal closed")));
+    const status = unwrap(await readCiStatus(workspace));
+    assert(status !== null);
+    equal(status.state, "fail");
+    equal(status.code, 1);
+  }));
+
+Deno.test("CI status reader distinguishes missing and invalid records", () =>
+  inWorkspace(async (workspace) => {
+    equal(unwrap(await readCiStatus(workspace)), null);
+    await Deno.mkdir(`${workspace}/.mci/ci`, { recursive: true });
+    await Deno.writeTextFile(
+      `${workspace}/.mci/ci/status.json`,
+      JSON.stringify({ version: 1, state: "pass" }),
+    );
+    const invalid = await readCiStatus(workspace);
+    assert(!invalid.ok && invalid.error.includes("invalid CI status"));
+  }));
+
+Deno.test("logged CI records a missing command as a failure", () =>
+  inWorkspace(async (workspace) => {
+    const result = unwrap(
+      await runLoggedCi({
+        workspace,
+        command: `${workspace}/missing-command`,
+        args: [],
+      }),
+    );
+
+    equal(result.code, 1);
+    assert(result.diagnostics.some((detail) => detail.includes("launch")));
+    const log = await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`);
+    assert(log.includes("command launch failed"));
+    assert(log.includes("[mci] exit 1"));
+    const status = unwrap(await readCiStatus(workspace));
+    assert(status !== null);
+    equal(status.state, "fail");
+    equal(status.code, 1);
+  }));
+
+Deno.test("logged CI excludes a competing writer without changing its files", () =>
+  inWorkspace(async (workspace) => {
+    const first = runShell(
+      workspace,
+      "printf 'first writer\\n'; while [ ! -f release ]; do :; done",
+    );
+    try {
+      await waitFor(async () =>
+        await exists(`${workspace}/.mci/ci/status.json`) &&
+        (await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`)).includes(
+          "first writer",
+        )
+      );
+      const beforeStatus = await Deno.readTextFile(
+        `${workspace}/.mci/ci/status.json`,
+      );
+      const beforeLog = await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`);
+      const second = await runShell(workspace, "printf 'second writer\\n'");
+      assert(!second.ok && second.error.includes("already running"));
+      equal(await Deno.readTextFile(`${workspace}/.mci/ci/status.json`), beforeStatus);
+      equal(await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`), beforeLog);
+    } finally {
+      await Deno.writeTextFile(`${workspace}/release`, "release");
+      unwrap(await first);
+    }
+  }));
+
+Deno.test("logged CI cancellation records cancelled and reaps the direct child", () =>
+  inWorkspace(async (workspace) => {
+    const controller = new AbortController();
+    const running = runShell(
+      workspace,
+      "echo $$ > child.pid; touch ready; trap 'exit 143' TERM; while :; do :; done",
+      controller.signal,
+    );
+    await waitFor(() => exists(`${workspace}/ready`));
+    const pid = Number((await Deno.readTextFile(`${workspace}/child.pid`)).trim());
+    controller.abort("SIGTERM");
+
+    const result = unwrap(await running);
+    equal(result.code, 143);
+    const status = unwrap(await readCiStatus(workspace));
+    assert(status !== null);
+    equal(status.state, "cancelled");
+    equal(status.code, 143);
+    const absent = await Promise.resolve().then(() => {
+      try {
+        Deno.kill(pid, 0);
+        return false;
+      } catch (error) {
+        return error instanceof Deno.errors.NotFound;
+      }
+    });
+    assert(absent, `direct child ${pid} remains alive`);
+  }));
