@@ -1,8 +1,15 @@
 // @light-fp adapter
+import { inspectProcessIdentity } from "./process.ts";
 import { attempt, err, ok, type Result } from "./result.ts";
+
+export type LoggerIdentity = {
+  readonly started: string;
+  readonly command: string;
+};
 
 export type CiStatus = {
   readonly version: 1;
+  readonly logger: LoggerIdentity | null;
   readonly state: "running" | "pass" | "fail" | "cancelled";
   readonly pid: number;
   readonly started: string;
@@ -38,13 +45,29 @@ const timestamp = (value: unknown): value is string => {
   return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
 };
 
+const decodeLogger = (value: unknown): Result<LoggerIdentity | null> => {
+  if (value === undefined || value === null) return ok(null);
+  if (
+    !object(value) || Object.keys(value).length !== 2 ||
+    typeof value.started !== "string" || value.started.length !== 24 ||
+    typeof value.command !== "string" || value.command.length === 0
+  ) return err("invalid CI logger identity");
+  return ok({ started: value.started, command: value.command });
+};
+
 const decodeStatus = (value: unknown): Result<CiStatus> => {
   if (
-    !object(value) || Object.keys(value).length !== 6 || value.version !== 1 ||
+    !object(value) ||
+    (Object.keys(value).length !== 6 &&
+      (Object.keys(value).length !== 7 || !Object.hasOwn(value, "logger"))) ||
+    value.version !== 1 ||
     !ciState(value.state) || typeof value.pid !== "number" ||
     !Number.isSafeInteger(value.pid) ||
     value.pid < 1 || !timestamp(value.started)
   ) return err("invalid CI status shape");
+
+  const logger = decodeLogger(value.logger);
+  if (!logger.ok) return logger;
 
   if (value.state === "running") {
     if (value.finished !== null || value.code !== null) {
@@ -52,6 +75,7 @@ const decodeStatus = (value: unknown): Result<CiStatus> => {
     }
     return ok({
       version: 1,
+      logger: logger.value,
       state: value.state,
       pid: value.pid,
       started: value.started,
@@ -72,6 +96,7 @@ const decodeStatus = (value: unknown): Result<CiStatus> => {
 
   return ok({
     version: 1,
+    logger: logger.value,
     state: value.state,
     pid: value.pid,
     started: value.started,
@@ -169,6 +194,26 @@ const writeStatus = async (
   );
 };
 
+const createLog = async (directory: string): Promise<Result<Deno.FsFile>> => {
+  const temporary = `${directory}/.log-${crypto.randomUUID()}`;
+  const opened = await attempt(() =>
+    Deno.open(temporary, { createNew: true, write: true, mode: 0o600 })
+  );
+  if (!opened.ok) return opened;
+  const prepared = await attempt(async () => {
+    await Deno.chmod(temporary, 0o600);
+    await Deno.rename(temporary, `${directory}/latest.log`);
+  });
+  if (prepared.ok) return opened;
+  const closed = await attempt(() => opened.value.close());
+  const removed = await attempt(() => Deno.remove(temporary));
+  return err([
+    prepared.error,
+    ...(closed.ok ? [] : [`log cleanup failed: ${closed.error}`]),
+    ...(removed.ok ? [] : [`temporary log cleanup failed: ${removed.error}`]),
+  ].join("; "));
+};
+
 const writeBytes = async (
   file: Deno.FsFile,
   bytes: Uint8Array,
@@ -230,34 +275,43 @@ export const runLoggedCi = async (
   const privateLock = await attempt(() => Deno.chmod(lockPath, 0o600));
   if (!privateLock.ok) return await closeLock(privateLock.error);
 
+  const logPath = `${directory}/latest.log`;
+  const logInfo = await metadata(logPath);
+  if (!logInfo.ok) return await closeLock(logInfo.error);
+  if (logInfo.value !== null && (!logInfo.value.isFile || logInfo.value.isSymlink)) {
+    return await closeLock("CI log must be a real file");
+  }
+
   const diagnostics: string[] = [];
+  const inspectedLogger = await inspectProcessIdentity(Deno.pid);
+  const logger = inspectedLogger.ok && inspectedLogger.value !== null
+    ? {
+      started: inspectedLogger.value.started,
+      command: inspectedLogger.value.command,
+    }
+    : null;
+  if (!inspectedLogger.ok) {
+    diagnostics.push(`logger identity failed: ${inspectedLogger.error}`);
+  } else if (logger === null || inspectedLogger.value?.pid !== Deno.pid) {
+    diagnostics.push("logger identity is unavailable");
+  }
   const started = new Date().toISOString();
   const running: CiStatus = {
     version: 1,
+    logger,
     state: "running",
     pid: Deno.pid,
     started,
     finished: null,
     code: null,
   };
-  const openedLog = await attempt(() =>
-    Deno.open(`${directory}/latest.log`, {
-      create: true,
-      write: true,
-      truncate: true,
-      mode: 0o600,
-    })
-  );
-  let log: Deno.FsFile | null = openedLog.ok ? openedLog.value : null;
-  if (!openedLog.ok) diagnostics.push(`log open failed: ${openedLog.error}`);
-  if (log !== null) {
-    const privateLog = await attempt(() => Deno.chmod(`${directory}/latest.log`, 0o600));
-    if (!privateLog.ok) diagnostics.push(`log mode failed: ${privateLog.error}`);
-  }
   const recordedRunning = await writeStatus(directory, running);
   if (!recordedRunning.ok) {
-    diagnostics.push(`running status update failed: ${recordedRunning.error}`);
+    return await closeLock(`running status update failed: ${recordedRunning.error}`);
   }
+  const openedLog = await createLog(directory);
+  let log: Deno.FsFile | null = openedLog.ok ? openedLog.value : null;
+  if (!openedLog.ok) diagnostics.push(`log open failed: ${openedLog.error}`);
 
   let childCode: number | null = null;
   let cancelled = false;
@@ -277,11 +331,9 @@ export const runLoggedCi = async (
     } else {
       const child = spawned.value;
       let settled = false;
-      let cancellationRequested = false;
       let cancellationError: string | null = null;
       const cancel = () => {
-        if (settled || cancellationRequested) return;
-        cancellationRequested = true;
+        if (settled || cancelled) return;
         cancelled = true;
         const sent = signalChild(child, interruption(options.signal?.reason).signal);
         if (!sent.ok) cancellationError = sent.error;
@@ -349,8 +401,11 @@ export const runLoggedCi = async (
         diagnostics.push(`command cancellation failed: ${cancellationError}`);
       }
       const status = completed[0];
-      if (status.ok) childCode = status.value.code;
-      else diagnostics.push(`command status failed: ${status.error}`);
+      if (status.ok) {
+        childCode = cancelled && status.value.code === 0
+          ? interruption(options.signal?.reason).code
+          : status.value.code;
+      } else diagnostics.push(`command status failed: ${status.error}`);
     }
   } else if (options.signal?.aborted) {
     cancelled = true;
@@ -399,15 +454,15 @@ export const runLoggedCi = async (
       diagnostics.push(`final status retry failed: ${recordedFinal.error}`);
     }
   }
+  const released = await attempt(() => lock.close());
+  if (!released.ok) diagnostics.push(`lock cleanup failed: ${released.error}`);
   const finalCode = childCode !== null && childCode !== 0
     ? childCode
     : diagnostics.length > 0
     ? 1
     : code;
-  const released = await attempt(() => lock.close());
-  if (!released.ok) diagnostics.push(`lock cleanup failed: ${released.error}`);
   return ok({
-    code: finalCode === 0 && diagnostics.length > 0 ? 1 : finalCode,
+    code: finalCode,
     diagnostics,
   });
 };

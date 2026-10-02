@@ -103,7 +103,9 @@ const parseIdentity = (pid: number, output: string): Result<ProcessIdentity | nu
   return ok({ pid: parsedPid, pgid, started, command });
 };
 
-const inspectNative = async (pid: number): Promise<Result<ProcessIdentity | null>> => {
+export const inspectProcessIdentity = async (
+  pid: number,
+): Promise<Result<ProcessIdentity | null>> => {
   const inspected = await captureCommand(
     "/bin/ps",
     {
@@ -155,7 +157,7 @@ const nativeCapabilities: ProcessCapabilities = {
       ? ok({ pid: spawned.value.pid, status: spawned.value.status })
       : spawned;
   },
-  inspect: inspectNative,
+  inspect: inspectProcessIdentity,
   signalGroup: (pid, signal) => signalNative(-pid, signal, `process group ${pid}`),
   signalProcess: (pid, signal) => signalNative(pid, signal, `process ${pid}`),
   now: () => performance.now(),
