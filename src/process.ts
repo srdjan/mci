@@ -362,11 +362,8 @@ export const runProcess = async (
   );
   const completed = status.completed.then((result): ProcessOutcome | {
     readonly kind: "status-failed";
-    readonly error: string;
   } =>
-    result.ok
-      ? { kind: "exited", code: result.value.code }
-      : { kind: "status-failed", error: result.error }
+    result.ok ? { kind: "exited", code: result.value.code } : { kind: "status-failed" }
   );
   const outcome = await Promise.race([completed, stopped]);
   options.signal.removeEventListener("abort", abortListener);
@@ -381,10 +378,6 @@ export const runProcess = async (
     policy,
   );
   const diagnostics = [...cleaned.diagnostics];
-  if (outcome.kind === "status-failed") {
-    const statusDiagnostic = `Direct child status failed: ${outcome.error}`;
-    if (!diagnostics.includes(statusDiagnostic)) diagnostics.unshift(statusDiagnostic);
-  }
   if (
     cleaned.groupClean && cleaned.reaped && registered && options.onFinish !== undefined
   ) {
@@ -399,9 +392,8 @@ export const runProcess = async (
   if (diagnostics.length > 0 && outcome.kind === "stopped") {
     diagnostics.unshift(`Process stopped because of ${outcome.reason}`);
   }
-  if (diagnostics.length > 0) return err(diagnostics.join("\n"));
-  if (outcome.kind === "status-failed") {
-    return err(`Direct child status failed: ${outcome.error}`);
+  if (diagnostics.length > 0 || outcome.kind === "status-failed") {
+    return err(diagnostics.join("\n"));
   }
   return ok(outcome);
 };

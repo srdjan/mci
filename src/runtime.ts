@@ -2,7 +2,7 @@ import denoConfig from "../deno.json" with { type: "json" };
 
 export const cliVersion = denoConfig.version;
 
-export const cliPermissionArgs = [
+const cliPermissionArgs = [
   "--allow-read",
   "--allow-write",
   "--allow-env",

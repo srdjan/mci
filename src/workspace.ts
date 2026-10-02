@@ -88,6 +88,13 @@ const removePrivateDirectory = async (
   return await attempt(() => Deno.remove(path, { recursive: true }));
 };
 
+const removeRun = async (state: string, runDir: string): Promise<Result<void>> => {
+  const removed = await removePrivateDirectory(state, runDir);
+  if (!removed.ok) return err(`private script cleanup failed: ${removed.error}`);
+  const cleared = await attempt(() => Deno.remove(`${state}/run.json`));
+  return cleared.ok ? cleared : err(`journal cleanup failed: ${cleared.error}`);
+};
+
 const recoverWorkspace = async (state: string): Promise<Result<void>> => {
   const journalPath = `${state}/run.json`;
   const found = await metadata(journalPath);
@@ -113,10 +120,8 @@ const recoverWorkspace = async (state: string): Promise<Result<void>> => {
       const cleared = await writeJournal(state, { ...journal, process: null });
       if (!cleared.ok) return err(`journal cleanup failed: ${cleared.error}`);
     }
-    const removed = await removePrivateDirectory(state, journal.runDir);
-    if (!removed.ok) return err(`private script cleanup failed: ${removed.error}`);
-    const cleared = await attempt(() => Deno.remove(journalPath));
-    if (!cleared.ok) return err(`journal cleanup failed: ${cleared.error}`);
+    const removed = await removeRun(state, journal.runDir);
+    if (!removed.ok) return removed;
   }
   const entries = await attempt(() => Array.fromAsync(Deno.readDir(state)));
   if (!entries.ok) return entries;
@@ -218,13 +223,8 @@ export const acquireWorkspace = async (workspace: string): Promise<Result<RunLea
         `process cleanup remains uncertain; retained journal: ${state}/run.json`,
       );
     } else {
-      const removed = await removePrivateDirectory(state, journal.runDir);
-      if (!removed.ok) {
-        diagnostics.push(`private script cleanup failed: ${removed.error}`);
-      } else {
-        const cleared = await attempt(() => Deno.remove(`${state}/run.json`));
-        if (!cleared.ok) diagnostics.push(`journal cleanup failed: ${cleared.error}`);
-      }
+      const removed = await removeRun(state, journal.runDir);
+      if (!removed.ok) diagnostics.push(removed.error);
     }
     const released = await attempt(() => lock.close());
     if (!released.ok) diagnostics.push(`lock cleanup failed: ${released.error}`);
