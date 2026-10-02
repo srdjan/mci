@@ -1,0 +1,15 @@
+{
+  "version": "0.1.0",
+  "imports": { "yaml": "npm:yaml@2.8.1" },
+  "tasks": {
+    "mci": "deno run --allow-read --allow-write --allow-env --allow-run --allow-sys=osRelease src/main.ts",
+    "check": "deno check src/main.ts tests/*.ts",
+    "test": "deno test --allow-read --allow-write --allow-env --allow-run tests/",
+    "verify": "deno fmt --check && deno lint && deno task check && deno task test",
+    "demo": "deno task mci run examples/basic.yml --job check",
+    "compile": "deno compile --allow-read --allow-write --allow-env --allow-run --allow-sys=osRelease --output dist/mci src/main.ts"
+  },
+  "compilerOptions": { "strict": true, "noUncheckedIndexedAccess": true },
+  "fmt": { "lineWidth": 90 },
+  "exclude": ["dist/"]
+}

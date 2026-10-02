@@ -1,0 +1,17 @@
+{
+  "version": "5",
+  "specifiers": {
+    "npm:yaml@2.8.1": "2.8.1"
+  },
+  "npm": {
+    "yaml@2.8.1": {
+      "integrity": "sha512-lcYcMxX2PO9XMGvAJkJ3OsNMw+/7FKes7/hgerGUYWIoWu5j/+YQqcZr5JnPZWzOsEBgMbSbiSTn/dv/69Mkpw==",
+      "bin": true
+    }
+  },
+  "workspace": {
+    "dependencies": [
+      "npm:yaml@2.8.1"
+    ]
+  }
+}

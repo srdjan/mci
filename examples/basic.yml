@@ -1,0 +1,19 @@
+name: Basic local CI
+on: workflow_dispatch
+defaults:
+  run:
+    shell: bash
+env:
+  GREETING: "hello"
+jobs:
+  check:
+    runs-on: macos-latest
+    timeout-minutes: 1
+    steps:
+      - name: Show local environment
+        run: |
+          printf '%s from local CI\n' "$GREETING"
+          test "$CI" = true
+          test "$MCI_LOCAL" = true
+      - name: Check Deno
+        run: deno --version

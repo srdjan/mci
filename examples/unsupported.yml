@@ -1,0 +1,11 @@
+name: Intentionally rejected before any commands run
+on: workflow_dispatch
+defaults:
+  run:
+    shell: bash
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - run: echo "This command must never execute"
+      - uses: actions/checkout@v4
