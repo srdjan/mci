@@ -167,6 +167,33 @@ Deno.test("runProcess accepts a current process that already changed command", a
   );
 });
 
+Deno.test("runProcess accepts a completed process without a remaining identity", async () => {
+  const fake = fakeCapabilities({
+    status: Promise.resolve({ success: true, code: 0, signal: null }),
+    identity: ok(null),
+  });
+  let started = false;
+  let finished = false;
+  const result = await runProcess({
+    shell: "/bin/bash",
+    script: "/private/step.sh",
+    cwd: "/private",
+    env: {},
+    signal: new AbortController().signal,
+    onStart: () => {
+      started = true;
+      return Promise.resolve(ok(undefined));
+    },
+    onFinish: () => {
+      finished = true;
+      return Promise.resolve(ok(undefined));
+    },
+  }, { capabilities: fake.capabilities, policy });
+  equal(result, ok({ kind: "exited", code: 0 }));
+  equal(started, false);
+  equal(finished, false);
+});
+
 Deno.test("runProcess bounds reaping and retains cleanup diagnostics", async () => {
   const fake = fakeCapabilities({
     group: () => err("group denied"),
@@ -190,6 +217,55 @@ Deno.test("runProcess bounds reaping and retains cleanup diagnostics", async () 
   assert(result.error.includes("Process group cleanup failed: group denied"));
   assert(result.error.includes("Direct process kill failed: direct denied"));
   assert(result.error.includes("Direct child reaping timed out after 3 ms"));
+  equal(finished, false);
+});
+
+Deno.test("runProcess clears confirmed registration cleanup and retains hook errors", async () => {
+  const fake = fakeCapabilities({
+    status: Promise.resolve({ success: true, code: 0, signal: null }),
+  });
+  let finished = false;
+  const result = await runProcess({
+    shell: "/bin/bash",
+    script: "/private/step.sh",
+    cwd: "/private",
+    env: {},
+    signal: new AbortController().signal,
+    onStart: () => Promise.resolve(err("journal full")),
+    onFinish: () => {
+      finished = true;
+      return Promise.resolve(err("journal clear failed"));
+    },
+  }, { capabilities: fake.capabilities, policy });
+  assert(!result.ok);
+  assert(result.error.startsWith("Process registration failed: journal full"));
+  assert(
+    result.error.includes(
+      "Process finish registration failed: journal clear failed",
+    ),
+  );
+  equal(finished, true);
+});
+
+Deno.test("runProcess skips onFinish after identity capture failure", async () => {
+  const fake = fakeCapabilities({
+    status: Promise.resolve({ success: true, code: 0, signal: null }),
+    identity: err("ps unavailable"),
+  });
+  let finished = false;
+  const result = await runProcess({
+    shell: "/bin/bash",
+    script: "/private/step.sh",
+    cwd: "/private",
+    env: {},
+    signal: new AbortController().signal,
+    onFinish: () => {
+      finished = true;
+      return Promise.resolve(ok(undefined));
+    },
+  }, { capabilities: fake.capabilities, policy });
+  assert(!result.ok);
+  assert(result.error.startsWith("Process identity capture failed: ps unavailable"));
   equal(finished, false);
 });
 
@@ -229,6 +305,27 @@ Deno.test("runProcess retains the exit code with cleanup failures", async () => 
   assert(!result.ok);
   assert(result.error.startsWith("Process exited with code 23\n"));
   assert(result.error.includes("Process group cleanup failed: group denied"));
+});
+
+Deno.test("runProcess retains a failed exit and onFinish rejection", async () => {
+  const fake = fakeCapabilities({
+    status: Promise.resolve({ success: false, code: 23, signal: null }),
+  });
+  const result = await runProcess({
+    shell: "/bin/bash",
+    script: "/private/step.sh",
+    cwd: "/private",
+    env: {},
+    signal: new AbortController().signal,
+    onFinish: () => Promise.resolve(err("journal clear failed")),
+  }, { capabilities: fake.capabilities, policy });
+  assert(!result.ok);
+  assert(result.error.startsWith("Process exited with code 23\n"));
+  assert(
+    result.error.includes(
+      "Process finish registration failed: journal clear failed",
+    ),
+  );
 });
 
 Deno.test("runProcess skips onFinish while group cleanup is uncertain", async () => {
@@ -297,6 +394,26 @@ Deno.test("recoverProcess rejects the wrong identity without killing it", async 
     child.kill("SIGKILL");
     await child.status;
   }
+});
+
+Deno.test("recoverProcess rejects a wrong command without any signal", async () => {
+  const fake = fakeCapabilities({
+    identity: ok({
+      pid: 321,
+      pgid: 321,
+      started: "Fri Oct  2 11:09:09 2026",
+      command: "/bin/bash /private/other.sh",
+    }),
+  });
+  const result = await recoverProcess({
+    pid: 321,
+    started: "Fri Oct  2 11:09:09 2026",
+    script: "/private/step.sh",
+  }, { capabilities: fake.capabilities, policy });
+  assert(!result.ok);
+  assert(result.error.includes("does not contain journal script /private/step.sh"));
+  equal(fake.groupSignals, []);
+  equal(fake.directSignals, []);
 });
 
 Deno.test("recoverProcess accepts an already-gone process", async () => {

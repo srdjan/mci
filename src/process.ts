@@ -1,4 +1,5 @@
 import { attempt, err, ok, type Result } from "./result.ts";
+import { captureCommand } from "./command.ts";
 
 export type Stop = "timeout" | "SIGINT" | "SIGTERM";
 export type ProcessOutcome =
@@ -103,22 +104,21 @@ const parseIdentity = (pid: number, output: string): Result<ProcessIdentity | nu
 };
 
 const inspectNative = async (pid: number): Promise<Result<ProcessIdentity | null>> => {
-  const inspected = await attempt(() =>
-    new Deno.Command("/bin/ps", {
+  const inspected = await captureCommand(
+    "/bin/ps",
+    {
       args: ["-ww", "-o", "pid=,pgid=,lstart=,command=", "-p", String(pid)],
       clearEnv: true,
       env: { LC_ALL: "C" },
-      stdin: "null",
-      stdout: "piped",
-      stderr: "null",
-    }).output()
+    },
+    { timeoutMs: nativePolicy.graceMs, reapMs: nativePolicy.reapMs },
   );
   if (!inspected.ok) return err(`Unable to inspect process ${pid}: ${inspected.error}`);
   const output = new TextDecoder().decode(inspected.value.stdout);
-  if (!inspected.value.success) {
+  if (!inspected.value.status.success) {
     return output.trim().length === 0
       ? ok(null)
-      : err(`Unable to inspect process ${pid}: ps exited ${inspected.value.code}`);
+      : err(`Unable to inspect process ${pid}: ps exited ${inspected.value.status.code}`);
   }
   return parseIdentity(pid, output);
 };
@@ -298,15 +298,37 @@ const cleanProcess = async (
   return { diagnostics, groupClean, reaped: didReap };
 };
 
+const finishAfterCleanup = async (
+  cleaned: Cleanup,
+  onFinish?: () => Promise<Result<void>>,
+): Promise<string[]> => {
+  const diagnostics = [...cleaned.diagnostics];
+  if (cleaned.groupClean && cleaned.reaped && onFinish !== undefined) {
+    const finished = await runHook(onFinish);
+    if (!finished.ok) {
+      diagnostics.push(`Process finish registration failed: ${finished.error}`);
+    }
+  }
+  return diagnostics;
+};
+
 const failWithCleanup = async (
   initial: readonly string[],
   pid: number,
   status: ObservedStatus,
   capabilities: ProcessCapabilities,
   policy: ProcessPolicy,
+  onConfirmedCleanup?: () => Promise<Result<void>>,
 ): Promise<Result<ProcessOutcome>> => {
   const cleaned = await cleanProcess(pid, "SIGTERM", status, capabilities, policy);
-  return err([...initial, ...cleaned.diagnostics].join("\n"));
+  const diagnostics = [
+    ...initial,
+    ...await finishAfterCleanup(
+      cleaned,
+      onConfirmedCleanup,
+    ),
+  ];
+  return err(diagnostics.join("\n"));
 };
 
 /** Run one detached POSIX process group and reap its direct child. */
@@ -347,6 +369,7 @@ export const runProcess = async (
         status,
         capabilities,
         policy,
+        options.onFinish,
       );
     }
   }
@@ -377,15 +400,10 @@ export const runProcess = async (
     capabilities,
     policy,
   );
-  const diagnostics = [...cleaned.diagnostics];
-  if (
-    cleaned.groupClean && cleaned.reaped && registered && options.onFinish !== undefined
-  ) {
-    const finished = await runHook(options.onFinish);
-    if (!finished.ok) {
-      diagnostics.push(`Process finish registration failed: ${finished.error}`);
-    }
-  }
+  const diagnostics = await finishAfterCleanup(
+    cleaned,
+    registered ? options.onFinish : undefined,
+  );
   if (diagnostics.length > 0 && outcome.kind === "exited") {
     diagnostics.unshift(`Process exited with code ${outcome.code}`);
   }
