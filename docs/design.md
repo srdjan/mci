@@ -6,16 +6,19 @@ the authority of the invoking user.
 
 ## Module responsibilities
 
-| Module         | Responsibility                                                                          |
-| -------------- | --------------------------------------------------------------------------------------- |
-| `workflow.ts`  | YAML parsing, supported-field validation, environment precedence, and plan construction |
-| `process.ts`   | Process groups, cancellation, bounded termination, and process identity checks          |
-| `command.ts`   | Bounded command capture, pipe closure, and command reaping                              |
-| `workspace.ts` | Workspace exclusion, contained step preparation, private scripts, and recovery journals |
-| `runner.ts`    | Step order, environment filtering, job deadlines, and final results                     |
-| `cli.ts`       | Arguments, platform policy, diagnostics, and OS signal listeners                        |
-| `runtime.ts`   | Version and source arguments that select shared configuration                           |
-| `result.ts`    | Expected failures and exception conversion at library and OS boundaries                 |
+| Module               | Responsibility                                                                          |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| `workflow.ts`        | YAML parsing, supported-field validation, environment precedence, and plan construction |
+| `process.ts`         | Process groups, cancellation, bounded termination, and process identity checks          |
+| `command.ts`         | Bounded command capture, pipe closure, and command reaping                              |
+| `workspace.ts`       | Workspace exclusion, contained step preparation, private scripts, and recovery journals |
+| `runner.ts`          | Step order, environment filtering, job deadlines, and final results                     |
+| `cli.ts`             | Arguments, platform policy, diagnostics, and OS signal listeners                        |
+| `ci.ts`              | Saved CI output, writer exclusion, cancellation, and atomic status records              |
+| `monitor.ts`         | SwiftBar menu rendering and logger inspection                                           |
+| `install-monitor.ts` | Plugin generation and safe installation                                                 |
+| `runtime.ts`         | Version and source arguments that select shared configuration                           |
+| `result.ts`          | Expected failures and exception conversion at library and OS boundaries                 |
 
 The YAML package version and integrity value reside in `deno.lock`. The parser checks the
 entire document before selected-job validation. An invalid unselected job can therefore
@@ -96,12 +99,43 @@ resolved Bash path.
 
 `ci/local-ci.yml` contains the supported local workflow. GitHub serves only as a
 repository backup service. Automatic CI runs only through `.githooks/pre-commit`. The hook
-resolves the repository root and calls `bash ci/check.sh`. Failed checks block the commit.
+resolves the repository root and calls `deno task ci`. The logging adapter executes the
+local YAML, which calls `deno task verify` directly. Failed checks block the commit.
 
 `deno task hooks:install` sets the local Git hook path to `.githooks`. Each clone needs
 its own installation because Git does not copy local configuration. The checks cover the
 working tree, including unstaged changes. Manual verification and compilation remain
 available. `VERIFICATION.md` records observed coverage and keeps evidence limits explicit.
+
+## Saved CI results and monitor
+
+The CI adapter holds a separate file lock beneath `.mci/ci/` before replacing saved
+output. It publishes running status before replacing the log with a private new file. The
+adapter rejects log symlinks and preserves other hard links. It streams both output
+channels to the terminal and `.mci/ci/latest.log`.
+
+Atomic status updates record running, pass, fail, or cancelled. A nonzero child exit keeps
+its exit code when logging also fails. Cancellation converts a zero child exit to the
+interruption code.
+
+The adapter launches the source CLI directly with parent supervision enabled. It forwards
+OS cancellation and observes its own Deno task parent. The existing CLI handles workflow
+process cleanup if the logging adapter dies.
+
+The status record includes the logger's PID, native process start text, and command. The
+SwiftBar plugin compares that identity through bounded `/bin/ps` inspection. An absent or
+changed identity with running status displays interrupted.
+
+Completed legacy records remain readable. A live legacy running record displays an
+identity error. The menu opens the fixed log path or repository and refreshes its display.
+The monitor provides no CI trigger.
+
+The installer creates an executable plugin with absolute Deno and repository paths. It
+uses the configured SwiftBar plugin directory when available. Otherwise it selects a
+dedicated directory outside SwiftBar's internal cache. Plugin installation leaves
+unrelated plugins in place. The plugin enters the quoted repository path before using
+`--allow-read=.`. Its process permission permits only `/bin/ps`. Logs and status remain
+local and gitignored.
 
 ## Release responsibility
 

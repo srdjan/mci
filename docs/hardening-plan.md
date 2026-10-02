@@ -60,11 +60,11 @@ for parent supervision. If that task parent exits, the CLI cancels the active jo
 cleans the workspace. Standalone execution keeps its existing parent-independent behavior.
 Keep the task marker out of workflow environments. Keep local workflow YAML in `ci/`.
 Remove the hosted workflow because GitHub provides repository backups only. Install a
-tracked pre-commit hook that calls the shared local verification script. Provide a local
-installation task for each clone. Confirm that failed checks block commits and passing
-checks permit commits. Keep actual execution evidence separate from intended coverage.
-Test help, version, missing workflow, missing Bash, timeout limits, and global YAML
-validation boundaries.
+tracked pre-commit hook that calls the local CI task. Provide a local installation task
+for each clone. Confirm that failed checks block commits and passing checks permit
+commits. Keep actual execution evidence separate from intended coverage. Test help,
+version, missing workflow, missing Bash, timeout limits, and global YAML validation
+boundaries.
 
 ## Integration and evidence
 

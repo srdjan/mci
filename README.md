@@ -152,10 +152,34 @@ After cloning the repository, install its local pre-commit hook:
 deno task hooks:install
 ```
 
-Git runs `.githooks/pre-commit` before each commit. The hook calls `bash ci/check.sh` from
-the repository root. A failed check blocks the commit. The checks cover the current
-working tree. Each clone needs its own hook installation because Git configuration stays
-local.
+Git runs `.githooks/pre-commit` before each commit. The hook calls `deno task ci` from the
+repository root. The CI adapter executes `ci/local-ci.yml`, which calls `deno task verify`
+directly. A failed check blocks the commit. The checks cover the current working tree.
+Each clone needs its own hook installation because Git configuration stays local.
+
+CI saves its latest output at `.mci/ci/latest.log`. The status file at
+`.mci/ci/status.json` records the state, start time, finish time, and exit code. Those
+files remain local and gitignored. A new CI run replaces the previous log after acquiring
+the CI lock.
+
+To read the latest saved output:
+
+```sh
+less .mci/ci/latest.log
+```
+
+For a macOS menu bar monitor, install [SwiftBar](https://github.com/swiftbar/SwiftBar),
+then install this repository's plugin:
+
+```sh
+brew install --cask swiftbar
+deno task monitor:install
+open -a SwiftBar
+```
+
+The monitor shows the latest CI status and run time. Its menu opens the log or repository
+and refreshes the display. The monitor reads saved results; it does not start CI. If a
+logger exits without writing its final status, the monitor displays interrupted.
 
 For a manual check:
 
@@ -168,6 +192,9 @@ runs the CLI success/SIGINT test skipped on Linux. The source is organized as pu
 workflow validation, process supervision and a small CLI. There are no application
 classes, inheritance, expression engine or plugin system. Typed results carry failures;
 exception handling is limited to library and OS boundaries.
+
+`deno task ci` runs the local YAML and saves its output. `deno task monitor` prints the
+menu representation without starting SwiftBar.
 
 Read [docs/design.md](docs/design.md) for module responsibilities, recovery rules, and
 release ownership. The local workflow lives in `ci/local-ci.yml` and uses the current

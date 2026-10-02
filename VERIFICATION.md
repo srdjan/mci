@@ -1,10 +1,10 @@
 # Verification
 
-The architecture hardening checks passed on Apple Silicon macOS on 2026-10-02. The host
-uses macOS 26.6.2, build 25G83, and Darwin kernel 25.6.0. Deno reports
-`aarch64-apple-darwin`, version 2.9.7, V8 15.0.245.2-rusty, and TypeScript 6.0.3.
+The architecture hardening and CI monitor checks passed on Apple Silicon macOS on
+2026-10-02. The host uses macOS 26.6.2, build 25G83, and Darwin kernel 25.6.0. Deno
+reports `aarch64-apple-darwin`, version 2.9.7, V8 15.0.245.2-rusty, and TypeScript 6.0.3.
 
-The current suite passes **54 tests**, with no failures and one Linux-only test ignored.
+The current suite passes **80 tests**, with no failures and one Linux-only test ignored.
 Formatting, linting, and type checking pass. The local workflow passes against the current
 checkout.
 
@@ -51,10 +51,43 @@ Two runner regressions failed before the corresponding changes. A competing run 
 the same workspace. A directory cleanup failure hid the original exit code 23. Both
 regressions pass after workspace integration.
 
-The installed pre-commit hook passes all 54 active tests and the other verification
+The installed pre-commit hook passes all 80 active tests and the other verification
 checks. A temporary local repository with spaces exercises the Git commit boundary. A
 failed check blocks the commit without creating a revision. A passing check permits the
 commit. The hook resolves the correct repository root in both cases.
+
+## Saved CI output and SwiftBar
+
+The pre-commit hook calls `deno task ci`. The logging adapter executes the local YAML,
+which calls `deno task verify` directly. The adapter records stdout, stderr, exit status,
+and failures beneath `.mci/ci/`. The saved files remain gitignored. Thirteen public tests
+cover stream forwarding, exit preservation, failed sinks, launch failure, writer
+exclusion, status validation, cancellation, linked log preservation, and publication
+failure. The adapter lifecycle test kills a disposable task parent. It confirms workflow
+cancellation, journal cleanup, cancelled status, and successful writer reuse.
+
+Native probes killed the Deno task parent and the CI logger in separate temporary
+workspaces. Both probes confirmed active workflow cancellation and removal of the
+workspace journal. Logger death left running status for the monitor to identify as
+interrupted.
+
+Thirteen public monitor tests cover display states, malformed records, changed identities,
+legacy records, paths with commas and shell punctuation, missing logs, executable plugin
+generation, collisions, owned reinstall, and internal cache refusal. The generated plugin
+executes against copied sources in a temporary repository. Each new test completed in less
+than one second during the full verification run.
+
+SwiftBar 2.1.1 is installed at `/Applications/SwiftBar.app`. The configured plugin folder
+is `~/Library/Application Support/meeci/SwiftBar`. The installer generated
+`mci-meeci.5s.sh` in that folder. The installed script displays PASS with an empty
+environment and `PATH=/usr/bin:/bin`. The menu output includes Open log, Open repository,
+and Refresh. The plugin enters the quoted repository path and grants only repository reads
+and `/bin/ps` execution. The monitor provides no CI action.
+
+macOS accepted the app as a notarized developer application. Application startup was
+requested, but native inspection did not confirm completed startup or menu display. The
+installed plugin and app configuration are checked. Visual menu confirmation remains
+unavailable in this session.
 
 ## Evidence limits
 

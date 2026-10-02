@@ -12,6 +12,89 @@ through the local Git pre-commit hook. This direction replaces the earlier hoste
 The correction removes the hosted workflow and installs the tracked hook locally.
 Repository instructions now bind future agents to this rule.
 
+## Active monitor work
+
+The user accepted SwiftBar and requested direct Deno task calls from CI YAML. The user
+also authorized installation and configuration of SwiftBar on this Mac. The current tree
+starts clean at c17bbc1 with version 0.1.1. `docs/ci-monitor-plan.md` defines saved logs,
+status, menu actions, installation, cancellation, and verification. GitHub remains a
+backup service, and the pre-commit hook remains the only automatic CI trigger. The advisor
+route is unavailable because the preflight cannot identify the parent runtime.
+
+Root owns integration and app configuration. The CI and monitor implementations use fresh
+Sol workers with high effort and exclusive file ownership. Native execution is the
+selected engine. Root reviewed the CI files and corrected status validation, saved
+diagnostics, and exit ordering during the implementation review.
+
+The CI logging unit is committed at f8cb8f2. Its hook passed 62 tests with one platform
+test ignored. The hook saved pass status and its full output beneath `.mci/ci/`. Native
+probes confirmed that task parent or logger SIGKILL stops the workflow and clears its
+journal. The CI correction unit is committed at 7ccec05. Its hook passed all 80 active
+tests and saved the logger identity with pass status.
+
+SwiftBar 2.1.1 is installed with a dedicated plugin folder at
+`~/Library/Application Support/meeci/SwiftBar`. Root installed the updated executable
+plugin and confirmed PASS output with an empty environment and restricted PATH. App
+startup remains incomplete under native inspection. Visual menu confirmation remains
+pending. The user owns that confirmation after opening SwiftBar.
+
+## Monitor review and correction evidence
+
+The simplification reviews considered reuse, quality, and efficiency. Root removed
+duplicate cancellation state and duplicate exit correction. Root retained private helpers,
+explicit presentation values, and input ordering. Those alternatives add cross-adapter
+coupling or change observable failure order without a material benefit. Native measurement
+confirmed that `Deno.kill` requires unrestricted run permission for another process. The
+final monitor uses bounded `/bin/ps` inspection with narrow permission and reuses the
+existing process identity parser.
+
+The independent review covers the complete change from c17bbc1. Seven Sol reviewers
+completed correctness, standards, testing, maintainability, security, reliability, and
+adversarial checks. No reviewer failed. The report completed at
+`/tmp/compound-engineering-501/ce-code-review/20261002-133409-6e101b7d/review.json`. The
+validator confirmed five functional defects. Root applied all five corrections.
+
+A log symlink could truncate an unrelated file and change its mode. The adapter now
+rejects symlinks and atomically replaces regular logs with private new files. Public
+regressions confirm preservation of symlink targets and other hard links. The adapter
+publishes running status before replacing the previous log. A publication failure now
+preserves that log and launches no child.
+
+Cancellation could return zero and save an unreadable cancelled record. The adapter now
+converts a cancelled zero exit to the interruption code. A public regression confirms
+cancelled state and exit 143. Nonzero child exits retain their original codes.
+
+Repository commas could split the monitor's read grant. The generated plugin now enters
+the quoted repository path and uses `--allow-read=.`. A copied source fixture confirms
+plugin execution from a path with commas and shell punctuation.
+
+A reused PID could make an interrupted logger appear active. Status now records the
+logger's native start text and command. The monitor requires those values to match. Public
+tests confirm rejection of changed identities and unconfirmed legacy running records.
+Completed legacy records remain readable.
+
+The added adapter lifecycle test closes the review's testing gap. Killing a disposable
+parent cancels the workflow, clears the journal, records cancellation, and permits another
+writer. An additional installer test confirms refusal of the internal cache through a
+parent symlink. Root corrected test cleanup after lint rejected throws within finally.
+
+Root reviewed the actual changes and ran all 80 tests with one Linux-only test ignored.
+Formatting, linting, type checking, layer checks, suppression checks, and native
+compilation pass. The compiled binary reports 0.1.1 and passes example validation and
+execution. Every new test completed within one second.
+
+Root retained separate supervision adapters and private URL helpers. Both adapters have
+public lifecycle coverage; moving the helpers would expand this feature into CLI cleanup.
+The review's concurrent plugin replacement limit remains: another writer can change the
+target after ownership inspection. The installer checks ownership twice and preserves
+ordinary foreign collisions, but it cannot coordinate an unrelated writer.
+
+Raw logs retain workflow output by design. Private directories and files protect the
+records within the accepted local account contract. The plugin executes repository source
+by design, so source updates change its behavior without another installation. The
+completion advisor route remains unavailable because the parent runtime is unidentified.
+Root retains responsibility for final checks and acceptance.
+
 ## Starting evidence
 
 The starting tree was clean at 7a0ab4c. The Apple Silicon macOS baseline passed
@@ -75,13 +158,13 @@ The advisor preflight could not identify the parent runtime at initiation or com
 The advisor route remained unavailable. The main agent retained ownership of verification
 and acceptance.
 
-## Final evidence and limits
+## Architecture hardening evidence and limits
 
-The full suite passes 54 tests with no failures and one Linux-only test ignored.
-Formatting, linting, type checking, local workflow execution, the demo, and native
-compilation pass. The compiled CLI passes validation and execution, including a separate
-workspace with spaces. `VERIFICATION.md` records the host, commands, and compatibility
-limits.
+The architecture hardening suite passed 54 tests with no failures and one Linux-only test
+ignored. Formatting, linting, type checking, local workflow execution, the demo, and
+native compilation pass. The compiled CLI passes validation and execution, including a
+separate workspace with spaces. `VERIFICATION.md` records the host, commands, and
+compatibility limits.
 
 Recovery remains best effort because inspection and signaling are separate operations.
 Current Linux, Intel macOS, minimum macOS, and binary distribution results remain
