@@ -10,8 +10,9 @@ execution or the selected-job workflow contract.
 Work on local main, commit each complete unit, and never push. Use gpt-5.6-sol with high
 effort for delegated work. Keep expected failures in Result values and never use the any
 type. Keep whole-document YAML validation because malformed YAML has no reliable
-selected-job boundary. Do not claim Intel, minimum macOS, hosted, or reproducibility
-evidence without execution results.
+selected-job boundary. GitHub serves only as a repository backup service. Automatic CI
+runs only through the local Git pre-commit hook. Do not claim Intel, minimum macOS, or
+reproducibility evidence without execution results.
 
 ## Process supervision
 
@@ -50,19 +51,20 @@ process, journal, directory, and lock cleanup errors in stable order. Document t
 unavoidable interval between process creation and journal persistence. Document advisory
 locking and the ability of trusted scripts to replace the lock inode.
 
-## Configuration and hosted checks
+## Configuration and local checks
 
 Read CLI version from deno.json and centralize source and compilation permissions in one
 named Deno permission set. Source tasks, compilation, and CLI subprocess tests select that
 set. Run tasks directly without an application launcher. The mci task marks its CLI child
 for parent supervision. If that task parent exits, the CLI cancels the active job and
 cleans the workspace. Standalone execution keeps its existing parent-independent behavior.
-Keep the task marker out of workflow environments. Keep local workflow YAML outside
-.github/workflows and add a complete hosted workflow with checkout and pinned Deno
-installation. Run verification and compiled smoke checks on Linux, Apple Silicon macOS,
-and Intel macOS. Keep actual execution evidence separate from configured checks. Test
-help, version, missing workflow, missing Bash, timeout limits, and global YAML validation
-boundaries.
+Keep the task marker out of workflow environments. Keep local workflow YAML in `ci/`.
+Remove the hosted workflow because GitHub provides repository backups only. Install a
+tracked pre-commit hook that calls the shared local verification script. Provide a local
+installation task for each clone. Confirm that failed checks block commits and passing
+checks permit commits. Keep actual execution evidence separate from intended coverage.
+Test help, version, missing workflow, missing Bash, timeout limits, and global YAML
+validation boundaries.
 
 ## Integration and evidence
 
@@ -83,3 +85,9 @@ Confirmed cleanup after failed registration must clear stale state. Native ps in
 must bound capture, termination, and reaping. The process tests also cover already-reaped
 launches and finish registration failures. A native probe confirmed that removing the
 application launcher alone does not stop a Deno task child after parent SIGKILL.
+
+## Accepted trigger correction
+
+The user replaced hosted checks with automatic CI through the local Git pre-commit hook.
+GitHub serves only as a repository backup service. Additional compatibility evidence comes
+from local execution on any system that the maintainer intends to support.

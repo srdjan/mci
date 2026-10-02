@@ -29,8 +29,8 @@ To use the CLI from another repository, compile it on your Mac:
 ```sh
 deno task compile
 cd /path/to/your/repository
-/path/to/mci/dist/mci check .github/workflows/local-ci.yml --job check
-/path/to/mci/dist/mci run .github/workflows/local-ci.yml --job check
+/path/to/mci/dist/mci check ci/local-ci.yml --job check
+/path/to/mci/dist/mci run ci/local-ci.yml --job check
 ```
 
 Compilation may download Deno's compilation runtime. The compiled binary uses the same
@@ -146,6 +146,19 @@ instead of terminating an unrelated process.
 
 ## Develop and validate
 
+After cloning the repository, install its local pre-commit hook:
+
+```sh
+deno task hooks:install
+```
+
+Git runs `.githooks/pre-commit` before each commit. The hook calls `bash ci/check.sh` from
+the repository root. A failed check blocks the commit. The checks cover the current
+working tree. Each clone needs its own hook installation because Git configuration stays
+local.
+
+For a manual check:
+
 ```sh
 deno task verify
 ```
@@ -158,10 +171,8 @@ exception handling is limited to library and OS boundaries.
 
 Read [docs/design.md](docs/design.md) for module responsibilities, recovery rules, and
 release ownership. The local workflow lives in `ci/local-ci.yml` and uses the current
-checkout and installed Deno. The hosted workflow lives in `.github/workflows/ci.yml` and
-installs its pinned Deno runtime before checks. Hosted CI checks Linux, Apple Silicon
-macOS, and Intel macOS. Configured checks do not establish passing hosted results until
-GitHub executes the workflow.
+checkout and installed Deno. Automatic CI runs only through the pre-commit hook. GitHub
+serves only as a repository backup service.
 
 The CLI identifies the host, runtime, and resolved Bash executable. Installed commands and
 the inherited environment remain inputs to each local run. A local pass does not establish

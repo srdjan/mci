@@ -15,6 +15,7 @@
     "check": "deno check src/main.ts tests/*.ts",
     "test": "deno test --permission-set=mci",
     "verify": "deno fmt --check && deno lint && deno task check && deno task test",
+    "hooks:install": "git config --local core.hooksPath .githooks",
     "demo": "deno task mci run examples/basic.yml --job check",
     "compile": "deno compile --permission-set=mci --output dist/mci src/main.ts"
   },

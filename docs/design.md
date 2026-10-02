@@ -94,11 +94,14 @@ compilation, and test tasks select that set. The runtime module supplies source 
 with absolute source and configuration paths. The CLI reports the host, Deno version, and
 resolved Bash path.
 
-`ci/local-ci.yml` contains the supported local workflow. `.github/workflows/ci.yml` checks
-out the repository and installs pinned Deno before verification. The hosted matrix
-includes Linux, Apple Silicon macOS, and Intel macOS. The configured matrix establishes
-intended coverage; passing results require an actual hosted run. `VERIFICATION.md` records
-observed coverage and keeps evidence limits explicit.
+`ci/local-ci.yml` contains the supported local workflow. GitHub serves only as a
+repository backup service. Automatic CI runs only through `.githooks/pre-commit`. The hook
+resolves the repository root and calls `bash ci/check.sh`. Failed checks block the commit.
+
+`deno task hooks:install` sets the local Git hook path to `.githooks`. Each clone needs
+its own installation because Git does not copy local configuration. The checks cover the
+working tree, including unstaged changes. Manual verification and compilation remain
+available. `VERIFICATION.md` records observed coverage and keeps evidence limits explicit.
 
 ## Release responsibility
 

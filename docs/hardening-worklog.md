@@ -7,6 +7,11 @@ Resolve all actionable findings from the architecture review and execute
 Use gpt-5.6-sol with high effort for delegated work. Keep expected failures in Result
 values and keep the trusted local execution contract.
 
+The user now requires GitHub only as a repository backup service. Automatic CI runs only
+through the local Git pre-commit hook. This direction replaces the earlier hosted checks.
+The correction removes the hosted workflow and installs the tracked hook locally.
+Repository instructions now bind future agents to this rule.
+
 ## Starting evidence
 
 The starting tree was clean at 7a0ab4c. The Apple Silicon macOS baseline passed
@@ -48,6 +53,12 @@ registration failure after exit code 23.
 An independent focused review confirmed closure of all four findings. The main agent
 reviewed every follow-up change and ran the complete verification suite.
 
+The trigger correction adds `.githooks/pre-commit` and `deno task hooks:install`. The
+local Git configuration selects `.githooks`. The main agent reviewed the hook and task
+changes and checked the shell syntax. A temporary repository with spaces confirmed that
+failed checks block commits and passing checks permit commits. The installed hook also
+passed all 54 active tests when invoked from `src/`.
+
 ## Review decisions
 
 Reuse and quality reviews removed duplicate diagnostics and shared ordered workspace
@@ -73,11 +84,13 @@ workspace with spaces. `VERIFICATION.md` records the host, commands, and compati
 limits.
 
 Recovery remains best effort because inspection and signaling are separate operations.
-Current Linux, Intel macOS, hosted CI, minimum macOS, and binary distribution results
-remain unavailable. Configured hosted checks do not establish passing results. All commits
-remain local; the main agent did not push.
+Current Linux, Intel macOS, minimum macOS, and binary distribution results remain
+unavailable. Additional compatibility checks run locally on any claimed systems. Hosted
+checks are outside the accepted scope. All commits remain local; the main agent did not
+push.
 
 ## Next action
 
-The repository maintainer owns pushing the local commits, observing hosted checks, and
-collecting the remaining compatibility evidence before release acceptance.
+Git runs local CI before the next normal commit. The repository maintainer owns local
+commits, repository backups, and any additional local compatibility evidence before
+release acceptance.

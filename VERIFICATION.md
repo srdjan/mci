@@ -13,6 +13,8 @@ checkout.
 | Command                                           | Result                                                    |
 | ------------------------------------------------- | --------------------------------------------------------- |
 | `deno task verify`                                | Formatting, linting, type checking, and native tests pass |
+| `deno task hooks:install`                         | The local Git configuration selects `.githooks`           |
+| `git hook run pre-commit` from `src/`             | The hook runs checks from the repository root             |
 | `deno task mci run ci/local-ci.yml --job check`   | The selected verification step passes                     |
 | `deno task demo`                                  | Both example steps pass                                   |
 | `deno task compile`                               | The native binary builds at `dist/mci`                    |
@@ -49,17 +51,25 @@ Two runner regressions failed before the corresponding changes. A competing run 
 the same workspace. A directory cleanup failure hid the original exit code 23. Both
 regressions pass after workspace integration.
 
+The installed pre-commit hook passes all 54 active tests and the other verification
+checks. A temporary local repository with spaces exercises the Git commit boundary. A
+failed check blocks the commit without creating a revision. A passing check permits the
+commit. The hook resolves the correct repository root in both cases.
+
 ## Evidence limits
 
 The initial package passed 18 tests on Linux x86_64 before architecture hardening. That
-result does not establish Linux evidence for the current changes. The hosted workflow now
-configures Linux, Apple Silicon macOS, and Intel macOS checks. No hosted run or Intel
-execution result is available for this change. Minimum macOS compatibility and binary
-distribution remain untested.
+result does not establish Linux evidence for the current changes. Current Linux and Intel
+execution results remain unavailable. Minimum macOS compatibility and binary distribution
+remain untested. Any additional compatibility checks run locally on the claimed systems.
+
+GitHub serves only as a repository backup service. Automatic CI runs only through the
+local Git pre-commit hook. The repository does not require hosted checks.
 
 Recovery uses separate process inspection and signal operations. The native recovery test
 establishes the tested scenario only. It does not establish recovery for changed
 identities, detached descendants, or a crash before process registration. Local commands
 retain host authority and inherited tool variability.
 
-The repository maintainer owns the next compatibility checks and release acceptance.
+The repository maintainer owns any additional local compatibility checks and release
+acceptance.
