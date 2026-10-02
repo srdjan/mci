@@ -7,7 +7,7 @@ import {
   runProcess,
 } from "../src/process.ts";
 import { err, ok, type Result } from "../src/result.ts";
-import { assert, equal, inWorkspace } from "./helpers.ts";
+import { assert, equal, exists, inWorkspace, waitFor } from "./helpers.ts";
 
 const policy: ProcessPolicy = { graceMs: 3, reapMs: 3, pollMs: 1 };
 
@@ -121,6 +121,28 @@ Deno.test("runProcess records and finishes a supervised native process", () =>
     assert(events[0]?.startsWith(`start:`));
     assert(events[0]?.includes(`:${script}:`));
     equal(events[1], "finish");
+  }));
+
+Deno.test("native process cleanup escalates when the shell ignores TERM", () =>
+  inWorkspace(async (workspace) => {
+    const script = await scriptFile(
+      workspace,
+      "trap '' TERM\ntouch ready\nwhile :; do sleep 0.01; done\n",
+    );
+    const controller = new AbortController();
+    const result = await runProcess({
+      shell: "/bin/bash",
+      script,
+      cwd: workspace,
+      env: { PATH: "/bin:/usr/bin" },
+      signal: controller.signal,
+      onStart: async () => {
+        await waitFor(() => exists(`${workspace}/ready`));
+        controller.abort("timeout");
+        return ok(undefined);
+      },
+    }, { policy: { graceMs: 50, reapMs: 250, pollMs: 5 } });
+    equal(result, ok({ kind: "stopped", reason: "timeout" }));
   }));
 
 Deno.test("runProcess accepts a current process that already changed command", async () => {

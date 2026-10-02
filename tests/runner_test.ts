@@ -190,21 +190,6 @@ Deno.test("cancellation terminates the active group", () =>
     assert(!await exists(`${workspace}/skipped`));
   }));
 
-Deno.test("timeout escalates when shell ignores TERM", () =>
-  inWorkspace(async (workspace) => {
-    const start = performance.now();
-    const result = await execute(
-      fixture(
-        "      - run: |\n          trap '' TERM\n          while :; do sleep 0.05; done",
-      ),
-      workspace,
-      { timeoutMs: 150 },
-    );
-    equal(result.code, 124);
-    const elapsed = performance.now() - start;
-    assert(elapsed >= 2000 && elapsed < 6000, `unexpected cleanup duration ${elapsed}`);
-  }));
-
 Deno.test("already-cancelled invocation launches no step", () =>
   inWorkspace(async (workspace) => {
     const controller = new AbortController();
