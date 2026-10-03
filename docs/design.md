@@ -72,8 +72,8 @@ request that never started can still replace the latest result in this case.
 
 When a repository becomes blocked, the daemon settles every queued request of that
 repository with a failure result. The detail names the block. The daemon starts no queued
-command for a blocked repository, and it settles a request that arrives later in the same
-way.
+command for a blocked repository. It rejects a later submission with the block as the
+unavailable reason.
 
 When a pending request has no spool log on restart, the daemon treats the log as empty. It
 creates an empty log in the request directory and finishes the journal entry. A log path
@@ -154,7 +154,7 @@ recorded PID, process group, start text, and unique script path. The process mod
 wide `ps` output with a fixed locale and the UTC time zone. A change of the host time zone
 then cannot change the recorded start text. A journal that an earlier version wrote in the
 host time zone fails recovery once with a different start time. Recovery checks identity
-immediately before each signal.
+immediately before SIGTERM and at each grace poll.
 
 A missing leader with no remaining group counts as completed cleanup. A missing leader
 with an existing group leaves identity uncertain. A changed command or start identity also
