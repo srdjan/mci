@@ -4,7 +4,7 @@ The architecture hardening and CI monitor checks passed on Apple Silicon macOS o
 2026-10-02. The host uses macOS 26.6.2, build 25G83, and Darwin kernel 25.6.0. Deno
 reports `aarch64-apple-darwin`, version 2.9.7, V8 15.0.245.2-rusty, and TypeScript 6.0.3.
 
-The current suite passes **90 tests**, with no failures and one Linux-only test ignored.
+The current suite passes **93 tests**, with no failures and one Linux-only test ignored.
 Formatting, linting, and type checking pass. The local workflow passes against the current
 checkout.
 
@@ -41,6 +41,14 @@ termination after the capture deadline. Process tests cover completed children w
 identities, failed registration cleanup, rejected finish registration, and command
 identity refusal without signals.
 
+On 2026-10-03, a probe confirmed that macOS returns EPERM for `killpg` on a group whose
+only member is an unreaped zombie, and ESRCH after reaping. Before the cleanup change, a
+native probe that cancelled a step with a background child failed in 12 of 60 rounds with
+a group inspection EPERM. After the change, the same probe passed 60 of 60 rounds, and a
+faster-policy probe passed 200 of 200. Three capability tests cover a vanished group after
+an EPERM, an EPERM during the grace poll, and an EPERM that remains while the group
+exists.
+
 Workspace tests cover competing runs, lock release, private scripts, abandoned
 directories, invalid journals, and symlink rejection. A native macOS test kills the owning
 runner with SIGKILL. The next run recovers its recorded process before executing the next
@@ -51,7 +59,7 @@ Two runner regressions failed before the corresponding changes. A competing run 
 the same workspace. A directory cleanup failure hid the original exit code 23. Both
 regressions pass after workspace integration.
 
-The installed pre-commit hook passes all 90 active tests and the other verification
+The installed pre-commit hook passes all 93 active tests and the other verification
 checks. A temporary local repository with spaces exercises the Git commit boundary. A
 failed check blocks the commit without creating a revision. A passing check permits the
 commit. The hook resolves the correct repository root in both cases.
@@ -101,11 +109,13 @@ the temporary repository, replaced that repository's plugin in place. Each new t
 completed in less than one second during the full verification run.
 
 SwiftBar 2.1.1 is installed at `/Applications/SwiftBar.app`. The configured plugin folder
-is `~/Library/Application Support/meeci/SwiftBar`. The installer generated
-`mci-meeci.5s.sh` in that folder. The installed script displays PASS with an empty
-environment and `PATH=/usr/bin:/bin`. The menu output includes Open log, Open repository,
-and Refresh. The plugin enters the quoted repository path and grants only repository reads
-and `/bin/ps` execution. The monitor provides no CI action.
+is `~/Library/Application Support/meeci/SwiftBar`. On 2026-10-03, a reinstall generated
+`mci-meeci-03a32585.5s.sh` in that folder and removed the legacy `mci-meeci.5s.sh`. The
+folder then held only the new plugin. The installed script displays `meeci: PASS` and the
+repository path with an empty environment and `PATH=/usr/bin:/bin`. The menu output
+includes Open log, Open repository, and Refresh. The plugin enters the quoted repository
+path and grants only repository reads and `/bin/ps` execution. The monitor provides no CI
+action.
 
 macOS accepted the app as a notarized developer application. Application startup was
 requested, but native inspection did not confirm completed startup or menu display. The
