@@ -501,10 +501,9 @@ export const recoverProcess = async (
   const graceful = await waitForRecovery(record, capabilities, policy, policy.graceMs);
   if (!graceful.ok) return graceful;
   if (graceful.value === "gone") return ok(undefined);
-  if (graceful.value === "orphaned") {
-    return err(`Process ${record.pid} leader is absent while its group still exists`);
-  }
-  const killed = await signalRecoveryGroup(record, "SIGKILL", capabilities, policy);
+  // Recovery confirmed the leader before SIGTERM, so a leader that left since then
+  // does not make the group unconfirmed. Escalate without a second identity check.
+  const killed = await signalSettledGroup(record.pid, "SIGKILL", capabilities, policy);
   if (!killed.ok) return killed;
   if (!killed.value) return ok(undefined);
   const forced = await waitForRecovery(record, capabilities, policy, policy.reapMs);

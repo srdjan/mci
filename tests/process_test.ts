@@ -501,6 +501,73 @@ Deno.test("recoverProcess waits for group disappearance after SIGKILL", async ()
   equal(orphanChecks, 2);
 });
 
+const escalationCapabilities = (
+  identity: (inspections: number, termSent: boolean) => ProcessIdentity | null,
+) => {
+  const groupSignals: Array<Deno.Signal | 0> = [];
+  let now = 0;
+  let inspections = 0;
+  let termSent = false;
+  let killed = false;
+  const capabilities: ProcessCapabilities = {
+    launch: () => Promise.resolve(err("unused")),
+    inspect: () => Promise.resolve(ok(identity(++inspections, termSent))),
+    signalGroup: (_pid, signal) => {
+      groupSignals.push(signal);
+      if (signal === "SIGTERM") termSent = true;
+      if (signal === "SIGKILL") killed = true;
+      return Promise.resolve(ok(signal === "SIGKILL" ? true : !killed));
+    },
+    signalProcess: () => Promise.resolve(ok(false)),
+    now: () => now,
+    delay: (ms) => {
+      now += ms;
+      return Promise.resolve();
+    },
+  };
+  return { capabilities, groupSignals };
+};
+
+const matchingIdentity: ProcessIdentity = {
+  pid: 321,
+  pgid: 321,
+  started: "Fri Oct  2 11:09:09 2026",
+  command: "/bin/bash /private/step.sh",
+};
+
+Deno.test("recoverProcess escalates to SIGKILL after its own SIGTERM", async () => {
+  const fake = escalationCapabilities((_inspections, termSent) =>
+    termSent ? null : matchingIdentity
+  );
+  equal(
+    await recoverProcess(recoveryRecord, {
+      capabilities: fake.capabilities,
+      policy,
+    }),
+    ok(undefined),
+  );
+  const kill = fake.groupSignals.indexOf("SIGKILL");
+  equal(fake.groupSignals[0], "SIGTERM");
+  assert(kill > 1, "SIGKILL must follow the SIGTERM and its probes");
+  assert(fake.groupSignals.slice(1, kill).every((signal) => signal === 0));
+  assert(fake.groupSignals.slice(kill + 1).every((signal) => signal === 0));
+});
+
+Deno.test("recoverProcess escalates when the leader exits late in the grace period", async () => {
+  const graceChecks = policy.graceMs / policy.pollMs;
+  const fake = escalationCapabilities((inspections) =>
+    inspections <= 1 + graceChecks ? matchingIdentity : null
+  );
+  equal(
+    await recoverProcess(recoveryRecord, {
+      capabilities: fake.capabilities,
+      policy,
+    }),
+    ok(undefined),
+  );
+  assert(fake.groupSignals.includes("SIGKILL"));
+});
+
 const recoveryRecord = {
   pid: 321,
   started: "Fri Oct  2 11:09:09 2026",

@@ -130,8 +130,14 @@ immediately before each signal.
 A missing leader with no remaining group counts as completed cleanup. A missing leader
 with an existing group leaves identity uncertain. A changed command or start identity also
 leaves identity uncertain. Recovery reports those states and preserves the journal instead
-of signaling an unconfirmed process. The diagnostic identifies the recorded PID and
-private state location for manual investigation.
+of signaling an unconfirmed process. This refusal applies to the first check, before
+recovery sends any signal. The diagnostic identifies the recorded PID and private state
+location for manual investigation.
+
+After recovery confirms the leader and sends SIGTERM, it waits for the grace period. If
+the group still exists then, the leader can be present or gone. Recovery sends SIGKILL to
+the group without another identity check and waits for the group to disappear. Run cleanup
+also escalates to SIGKILL. A group that survives SIGKILL leaves cleanup uncertain.
 
 Recovery remains best effort because process inspection and signaling are separate
 operations. A crash between process creation and journal persistence can leave an
