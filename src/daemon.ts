@@ -67,6 +67,7 @@ type DaemonRuntime = {
   management: Promise<void>;
   routing: Promise<void>;
   readonly resolvePath: (path: string) => Promise<Result<string>>;
+  readonly requestDeadlineMs: number;
   closed: boolean;
 };
 
@@ -859,12 +860,29 @@ const handleRequest = (
   return operation;
 };
 
+const firstMessage = async (
+  runtime: DaemonRuntime,
+  messages: AsyncGenerator<Result<unknown>>,
+): Promise<IteratorResult<Result<unknown>> | null> => {
+  const expired = Promise.withResolvers<null>();
+  const timer = setTimeout(() => expired.resolve(null), runtime.requestDeadlineMs);
+  try {
+    return await Promise.race([messages.next(), expired.promise]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 const handleConnection = async (
   runtime: DaemonRuntime,
   connection: Deno.UnixConn,
 ): Promise<void> => {
   const messages = readJson(connection);
-  const first = await messages.next();
+  const first = await firstMessage(runtime, messages);
+  if (first === null) {
+    closeConnection(connection);
+    return;
+  }
   if (first.done) {
     closeConnection(connection);
     return;
@@ -886,6 +904,7 @@ const handleConnection = async (
 const prepareRuntime = async (
   store: DaemonStore,
   resolvePath: (path: string) => Promise<Result<string>>,
+  requestDeadlineMs: number,
 ): Promise<Result<DaemonRuntime>> => {
   const runtime: DaemonRuntime = {
     store,
@@ -896,6 +915,7 @@ const prepareRuntime = async (
     management: Promise.resolve(),
     routing: Promise.resolve(),
     resolvePath,
+    requestDeadlineMs,
     closed: false,
   };
   for (const repository of store.repositories()) {
@@ -984,7 +1004,19 @@ const prepareRuntime = async (
   return published.ok ? ok(runtime) : published;
 };
 
+export type DaemonListener = {
+  readonly accept: () => Promise<Deno.UnixConn>;
+  readonly close: () => void;
+};
+
+// A policy value, not a measured capacity.
+const defaultRequestDeadlineMs = 5000;
+const firstAcceptBackoffMs = 50;
+const maximumAcceptBackoffMs = 1000;
+
 export const startDaemon = async (options: {
+  readonly listen?: (path: string) => DaemonListener;
+  readonly requestDeadlineMs?: number;
   readonly directory?: string;
   readonly signal?: AbortSignal;
   readonly openStore?: (paths: ServicePaths) => Promise<Result<DaemonStore>>;
@@ -1046,6 +1078,7 @@ export const startDaemon = async (options: {
   const runtime = await prepareRuntime(
     store.value,
     options.resolvePath ?? ((path) => attempt(() => Deno.realPath(path))),
+    options.requestDeadlineMs ?? defaultRequestDeadlineMs,
   );
   if (!runtime.ok) {
     lock.close();
@@ -1075,7 +1108,7 @@ export const startDaemon = async (options: {
     }
   }
   const listened = await attempt(() =>
-    Deno.listen({ transport: "unix", path: paths.socket })
+    (options.listen ?? ((path) => Deno.listen({ transport: "unix", path })))(paths.socket)
   );
   if (!listened.ok) {
     lock.close();
@@ -1091,40 +1124,29 @@ export const startDaemon = async (options: {
     lock.close();
     return privateSocket;
   }
-  let closeResolve = (): void => {};
-  const closed = new Promise<void>((resolve) => closeResolve = resolve);
-  let closing: Promise<void> | null = null;
-  const close = (): Promise<void> => {
-    if (closing !== null) return closing;
-    closing = (async () => {
-      runtime.value.closed = true;
-      try {
-        listener.close();
-      } catch { /* The listener is already closed. */ }
-      for (const connection of connections) closeConnection(connection);
-      const jobs = Array.from(runtime.value.repositories.values()).flatMap((state) => [
-        ...(state.active === null ? [] : [state.active]),
-        ...state.queue,
-      ]);
-      await Promise.all(jobs.map((job) => cancelQueued(runtime.value, job, "SIGTERM")));
-      await Promise.all(jobs.map((job) => job.result));
-      await Promise.all(handlers);
-      await attempt(() => Deno.remove(paths.socket));
-      lock.close();
-      closeResolve();
-    })();
-    return closing;
-  };
-  const abort = () => void close();
-  options.signal?.addEventListener("abort", abort, { once: true });
-  if (options.signal?.aborted) void close();
-  void (async () => {
+  let cancelBackoff = (): void => {};
+  const backoff = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      cancelBackoff = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
+  const accepting = (async () => {
+    let wait = 0;
     while (!runtime.value.closed) {
       const accepted = await attempt(() => listener.accept());
       if (!accepted.ok) {
-        if (!runtime.value.closed) await close();
-        break;
+        if (runtime.value.closed) break;
+        console.error(`mci daemon: accept failed: ${accepted.error}`);
+        wait = wait === 0
+          ? firstAcceptBackoffMs
+          : Math.min(wait * 2, maximumAcceptBackoffMs);
+        await backoff(wait);
+        continue;
       }
+      wait = 0;
       if (runtime.value.closed) {
         closeConnection(accepted.value);
         break;
@@ -1139,6 +1161,35 @@ export const startDaemon = async (options: {
       handlers.add(handler);
     }
   })();
+  let closeResolve = (): void => {};
+  const closed = new Promise<void>((resolve) => closeResolve = resolve);
+  let closing: Promise<void> | null = null;
+  const close = (): Promise<void> => {
+    if (closing !== null) return closing;
+    closing = (async () => {
+      runtime.value.closed = true;
+      try {
+        listener.close();
+      } catch { /* The listener is already closed. */ }
+      cancelBackoff();
+      for (const connection of connections) closeConnection(connection);
+      const jobs = Array.from(runtime.value.repositories.values()).flatMap((state) => [
+        ...(state.active === null ? [] : [state.active]),
+        ...state.queue,
+      ]);
+      await Promise.all(jobs.map((job) => cancelQueued(runtime.value, job, "SIGTERM")));
+      await Promise.all(jobs.map((job) => job.result));
+      await accepting;
+      await Promise.all(handlers);
+      await attempt(() => Deno.remove(paths.socket));
+      lock.close();
+      closeResolve();
+    })();
+    return closing;
+  };
+  const abort = () => void close();
+  options.signal?.addEventListener("abort", abort, { once: true });
+  if (options.signal?.aborted) void close();
   return ok({ closed, close, snapshot: () => snapshot(runtime.value) });
 };
 

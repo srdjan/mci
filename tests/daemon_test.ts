@@ -1,5 +1,5 @@
 import { rpc, submit } from "../src/client.ts";
-import { startDaemon } from "../src/daemon.ts";
+import { type DaemonListener, startDaemon } from "../src/daemon.ts";
 import { readJson, sendJson } from "../src/ipc.ts";
 import { servicePaths } from "../src/paths.ts";
 import { cliSourceArgs } from "../src/runtime.ts";
@@ -732,3 +732,90 @@ Deno.test({
       }
     }),
 });
+
+const failingListener = (failures: number) => (path: string): DaemonListener => {
+  const real = Deno.listen({ transport: "unix", path });
+  let remaining = failures;
+  return {
+    accept: () =>
+      remaining-- > 0
+        ? Promise.reject(new Error("injected accept failure"))
+        : real.accept(),
+    close: () => real.close(),
+  };
+};
+
+const withTestDaemon = async (
+  options: Parameters<typeof startDaemon>[0],
+  test: (
+    directory: string,
+    daemon: { readonly closed: Promise<void>; readonly close: () => Promise<void> },
+  ) => Promise<void>,
+): Promise<void> => {
+  const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+  const started = await startDaemon({ ...options, directory });
+  assert(started.ok, started.ok ? "" : started.error);
+  try {
+    await test(directory, started.value);
+  } finally {
+    await started.value.close();
+    await started.value.closed;
+    await Deno.remove(directory, { recursive: true });
+  }
+};
+
+Deno.test("daemon survives an accept error and keeps serving", () =>
+  inWorkspace((workspace) =>
+    withTestDaemon({ listen: failingListener(1) }, async (directory, daemon) => {
+      let closed = false;
+      void daemon.closed.then(() => closed = true);
+      assert((await rpc({ version: 1, op: "register", path: workspace }, directory)).ok);
+      const result = await submit(
+        {
+          version: 1,
+          op: "submit",
+          path: workspace,
+          workflow: "after-accept-error.yml",
+          job: "check",
+          source: fixture("      - run: touch after-accept-error"),
+          env: capturedEnv(),
+        },
+        new AbortController().signal,
+        directory,
+      );
+      assert(result.ok && result.value.kind === "success");
+      const paths = servicePaths(directory);
+      assert(paths.ok);
+      assert(await exists(paths.value.socket));
+      assert(!closed);
+    })
+  ));
+
+Deno.test("closing the daemon ends the accept retry wait without a pending timer", async () => {
+  await withTestDaemon(
+    { listen: failingListener(Infinity) },
+    async (_directory, daemon) => {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      await daemon.close();
+      await daemon.closed;
+    },
+  );
+});
+
+Deno.test("daemon closes a connection that sends no first request", () =>
+  withTestDaemon({ requestDeadlineMs: 100 }, async (directory) => {
+    const paths = servicePaths(directory);
+    assert(paths.ok);
+    const idle = await Deno.connect({ transport: "unix", path: paths.value.socket });
+    const limit = Promise.withResolvers<"timeout">();
+    const timer = setTimeout(() => limit.resolve("timeout"), 2000);
+    try {
+      const read = await Promise.race([idle.read(new Uint8Array(1)), limit.promise]);
+      equal(read, null);
+      const status = await rpc({ version: 1, op: "status" }, directory);
+      assert(status.ok, status.ok ? "" : status.error);
+    } finally {
+      clearTimeout(timer);
+      idle.close();
+    }
+  }));

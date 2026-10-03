@@ -43,6 +43,13 @@ for each registered repository.
 The daemon starts one worker per active repository. Different repositories can run at the
 same time, while each repository runs one request at a time.
 
+If `accept()` fails while the daemon is open, the daemon writes the error to stderr and
+retries. The wait starts at 50 ms, doubles after each consecutive error, and stops at 1000
+ms. A successful accept resets the wait. Shutdown ends the wait at once.
+
+A connection must send its first request within 5000 ms. The daemon closes a connection
+that sends no first frame in that time. This value is a policy, not a measured capacity.
+
 The submitting connection owns its request. A cancel message or connection loss cancels
 only that request.
 
