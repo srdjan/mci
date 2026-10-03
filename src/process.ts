@@ -111,7 +111,7 @@ export const inspectProcessIdentity = async (
     {
       args: ["-ww", "-o", "pid=,pgid=,lstart=,command=", "-p", String(pid)],
       clearEnv: true,
-      env: { LC_ALL: "C" },
+      env: { LC_ALL: "C", TZ: "UTC" },
     },
     { timeoutMs: nativePolicy.graceMs, reapMs: nativePolicy.reapMs },
   );

@@ -1,4 +1,5 @@
 import {
+  inspectProcessIdentity,
   normalizeStop,
   type ProcessCapabilities,
   type ProcessIdentity,
@@ -92,6 +93,25 @@ Deno.test("normalizeStop maps unknown abort reasons to SIGTERM", () => {
   equal(normalizeStop("timeout"), "timeout");
   equal(normalizeStop(new Error("cancelled")), "SIGTERM");
   equal(normalizeStop(undefined), "SIGTERM");
+});
+
+Deno.test("inspectProcessIdentity reports the start time in UTC", async () => {
+  const inspected = await inspectProcessIdentity(Deno.pid);
+  assert(inspected.ok && inspected.value !== null);
+  const reference = await new Deno.Command("/usr/bin/env", {
+    args: [
+      "-i",
+      "LC_ALL=C",
+      "TZ=UTC",
+      "/bin/ps",
+      "-o",
+      "lstart=",
+      "-p",
+      String(Deno.pid),
+    ],
+    stdout: "piped",
+  }).output();
+  equal(inspected.value.started, new TextDecoder().decode(reference.stdout).trim());
 });
 
 Deno.test("runProcess preserves the existing successful exit behavior", () =>

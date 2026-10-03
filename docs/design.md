@@ -117,8 +117,10 @@ marker from step environments, and workflow validation rejects marker overrides.
 
 The next run reads the journal while it holds the workspace lock. Recovery compares the
 recorded PID, process group, start text, and unique script path. The process module uses
-wide `ps` output with a fixed locale. Recovery checks identity immediately before each
-signal.
+wide `ps` output with a fixed locale and the UTC time zone. A change of the host time zone
+then cannot change the recorded start text. A journal that an earlier version wrote in the
+host time zone fails recovery once with a different start time. Recovery checks identity
+immediately before each signal.
 
 A missing leader with no remaining group counts as completed cleanup. A missing leader
 with an existing group leaves identity uncertain. A changed command or start identity also
