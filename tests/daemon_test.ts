@@ -2,9 +2,19 @@ import { rpc, submit } from "../src/client.ts";
 import { type DaemonListener, startDaemon } from "../src/daemon.ts";
 import { readJson, sendJson } from "../src/ipc.ts";
 import { servicePaths } from "../src/paths.ts";
+import type { Snapshot } from "../src/protocol.ts";
 import { attempt, type Result } from "../src/result.ts";
 import { cliSourceArgs } from "../src/runtime.ts";
-import { assert, equal, exists, fixture, inWorkspace, waitFor } from "./helpers.ts";
+import {
+  assert,
+  equal,
+  exists,
+  fixture,
+  inWorkspace,
+  sleep,
+  waitFor,
+  within,
+} from "./helpers.ts";
 import { withDaemon } from "./daemon_helpers.ts";
 
 const capturedEnv = (extra: Readonly<Record<string, string>> = {}) => ({
@@ -196,59 +206,65 @@ Deno.test("daemon restart prunes logs without a current result or connected owne
     }
   }));
 
-Deno.test("daemon startup removes interrupted temporary files and keeps other names", () =>
-  inWorkspace(async (workspace) => {
-    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+// Registers the workspace, stops the daemon, runs change, and checks a restarted daemon.
+const restartAfter = async (
+  workspace: string,
+  change: (directory: string, repositoryId: string | undefined) => Promise<void>,
+  check: (snapshot: Snapshot) => Promise<void> | void,
+): Promise<void> => {
+  const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+  try {
+    const first = await startDaemon({ directory });
+    assert(first.ok);
+    const registered = await rpc(
+      { version: 1, op: "register", path: workspace },
+      directory,
+    );
+    assert(registered.ok, registered.ok ? "" : registered.error);
+    await first.value.close();
+    await change(directory, registered.value.repositories[0]?.id);
+    const second = await startDaemon({ directory });
+    assert(second.ok, second.ok ? "" : second.error);
     try {
-      const first = await startDaemon({ directory });
-      assert(first.ok);
-      assert((await rpc({ version: 1, op: "register", path: workspace }, directory)).ok);
-      await first.value.close();
-      const ci = `${workspace}/.mci/ci`;
+      await check(second.value.snapshot());
+    } finally {
+      await second.value.close();
+    }
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+};
+
+Deno.test("daemon startup removes interrupted temporary files and keeps other names", () =>
+  inWorkspace((workspace) => {
+    const ci = `${workspace}/.mci/ci`;
+    const doomed: string[] = [];
+    const kept = `${ci}/.status-f`;
+    return restartAfter(workspace, async (directory) => {
       await Deno.mkdir(`${ci}/requests`, { recursive: true });
-      const doomed = [
+      doomed.push(
         `${directory}/.write-a`,
         `${ci}/requests/.write-b`,
         `${ci}/requests/.copy-c`,
         `${ci}/.write-d`,
         `${ci}/.latest-e`,
-      ];
-      const kept = `${ci}/.status-f`;
+      );
       for (const path of [...doomed, kept]) await Deno.writeTextFile(path, "partial");
-      const second = await startDaemon({ directory });
-      assert(second.ok, second.ok ? "" : second.error);
-      try {
-        for (const path of doomed) assert(!await exists(path), path);
-        assert(await exists(kept));
-      } finally {
-        await second.value.close();
-      }
-    } finally {
-      await Deno.remove(directory, { recursive: true });
-    }
+    }, async () => {
+      for (const path of doomed) assert(!await exists(path), path);
+      assert(await exists(kept));
+    });
   }));
 
 Deno.test("daemon startup removes temporary files when the request directory is missing", () =>
-  inWorkspace(async (workspace) => {
-    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
-    try {
-      const first = await startDaemon({ directory });
-      assert(first.ok);
-      assert((await rpc({ version: 1, op: "register", path: workspace }, directory)).ok);
-      await first.value.close();
-      const ci = `${workspace}/.mci/ci`;
+  inWorkspace((workspace) => {
+    const ci = `${workspace}/.mci/ci`;
+    return restartAfter(workspace, async () => {
       await Deno.mkdir(ci, { recursive: true });
       await Deno.writeTextFile(`${ci}/.write-d`, "partial");
-      const second = await startDaemon({ directory });
-      assert(second.ok, second.ok ? "" : second.error);
-      try {
-        assert(!await exists(`${ci}/.write-d`));
-      } finally {
-        await second.value.close();
-      }
-    } finally {
-      await Deno.remove(directory, { recursive: true });
-    }
+    }, async () => {
+      assert(!await exists(`${ci}/.write-d`));
+    });
   }));
 
 Deno.test("daemon shutdown closes idle clients and interrupts unfinished requests", () =>
@@ -926,17 +942,8 @@ Deno.test({
 });
 
 Deno.test("daemon restart records a legacy journal entry as interrupted", () =>
-  inWorkspace(async (workspace) => {
-    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
-    try {
-      const first = await startDaemon({ directory });
-      assert(first.ok);
-      const registered = await rpc(
-        { version: 1, op: "register", path: workspace },
-        directory,
-      );
-      assert(registered.ok, registered.ok ? "" : registered.error);
-      await first.value.close();
+  inWorkspace((workspace) =>
+    restartAfter(workspace, async (directory, repositoryId) => {
       const log = `${workspace}/.mci/ci/requests/legacy.log`;
       await Deno.mkdir(`${workspace}/.mci/ci/requests`, { recursive: true });
       await Deno.writeTextFile(log, "");
@@ -946,7 +953,7 @@ Deno.test("daemon restart records a legacy journal entry as interrupted", () =>
           version: 1,
           requests: [{
             id: "legacy",
-            repositoryId: registered.value.repositories[0]?.id,
+            repositoryId,
             workflow: "legacy.yml",
             job: "check",
             started: "2026-10-03T18:00:00.000Z",
@@ -955,19 +962,12 @@ Deno.test("daemon restart records a legacy journal entry as interrupted", () =>
           }],
         }),
       );
-      const second = await startDaemon({ directory });
-      assert(second.ok, second.ok ? "" : second.error);
-      try {
-        const repository = second.value.snapshot().repositories[0];
-        equal(repository?.latest?.id, "legacy");
-        equal(repository?.latest?.kind, "interrupted");
-      } finally {
-        await second.value.close();
-      }
-    } finally {
-      await Deno.remove(directory, { recursive: true });
-    }
-  }));
+    }, (snapshot) => {
+      const repository = snapshot.repositories[0];
+      equal(repository?.latest?.id, "legacy");
+      equal(repository?.latest?.kind, "interrupted");
+    })
+  ));
 
 Deno.test("a management client that does not read cannot stall later registrations", async () => {
   const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
@@ -1000,13 +1000,11 @@ Deno.test("a management client that does not read cannot stall later registratio
     assert(
       (await sendJson(stalled, { version: 1, op: "register", path: await make(40) })).ok,
     );
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    const timer = Promise.withResolvers<null>();
-    const timeout = setTimeout(() => timer.resolve(null), 2000);
-    const second = await Promise.race([
+    await sleep(200);
+    const second = await within(
       rpc({ version: 1, op: "register", path: await make(41) }, directory),
-      timer.promise,
-    ]).finally(() => clearTimeout(timeout));
+      2000,
+    );
     assert(second !== null, "a non-reading client stalled a later registration");
     assert(second.ok, second.ok ? "" : second.error);
   } finally {
@@ -1049,12 +1047,8 @@ Deno.test("a stalled path resolution does not delay a submission for another pat
           assert((await rpc({ version: 1, op: "register", path }, directory)).ok);
         }
         const stalled = run(slow);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        const timer = Promise.withResolvers<null>();
-        const timeout = setTimeout(() => timer.resolve(null), 3000);
-        const other = await Promise.race([run(fast), timer.promise]).finally(() =>
-          clearTimeout(timeout)
-        );
+        await sleep(100);
+        const other = await within(run(fast), 3000);
         assert(other !== null, "a stalled path delayed another path");
         assert(other.ok, other.ok ? "" : other.error);
         equal(other.value.kind, "success");
@@ -1145,16 +1139,10 @@ Deno.test("daemon stops after an accept failure lasts past its limit", () =>
   withTestDaemon(
     { listen: failingListener(Infinity), acceptFailureLimitMs: 200 },
     async (directory, daemon) => {
-      const limit = Promise.withResolvers<"timeout">();
-      const timer = setTimeout(() => limit.resolve("timeout"), 3000);
-      try {
-        const outcome = await Promise.race([daemon.closed, limit.promise]);
-        assert(outcome !== "timeout", "the daemon did not stop");
-        assert(!outcome.ok);
-        assert(outcome.error.includes("accept failed"), outcome.error);
-      } finally {
-        clearTimeout(timer);
-      }
+      const outcome = await within(daemon.closed, 3000);
+      assert(outcome !== null, "the daemon did not stop");
+      assert(!outcome.ok);
+      assert(outcome.error.includes("accept failed"), outcome.error);
       const paths = servicePaths(directory);
       assert(paths.ok);
       assert(!await exists(paths.value.socket));

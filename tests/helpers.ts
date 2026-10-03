@@ -36,11 +36,27 @@ export const inWorkspace = async (
   }
 };
 
+export const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+// Resolves with null when the promise does not settle within the limit.
+export const within = async <T>(promise: Promise<T>, ms: number): Promise<T | null> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  try {
+    return await Promise.race([promise, limit]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 export const waitFor = async (test: () => Promise<boolean>, timeout = 4000) => {
   const end = performance.now() + timeout;
   while (performance.now() < end) {
     if (await test()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await sleep(20);
   }
   throw new Error("condition not reached before test deadline");
 };
