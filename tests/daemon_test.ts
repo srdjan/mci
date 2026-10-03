@@ -158,6 +158,61 @@ Deno.test("daemon restart prunes logs without a current result or connected owne
     }
   }));
 
+Deno.test("daemon startup removes interrupted temporary files and keeps other names", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+    try {
+      const first = await startDaemon({ directory });
+      assert(first.ok);
+      assert((await rpc({ version: 1, op: "register", path: workspace }, directory)).ok);
+      await first.value.close();
+      const ci = `${workspace}/.mci/ci`;
+      await Deno.mkdir(`${ci}/requests`, { recursive: true });
+      const doomed = [
+        `${directory}/.write-a`,
+        `${ci}/requests/.write-b`,
+        `${ci}/requests/.copy-c`,
+        `${ci}/.write-d`,
+        `${ci}/.latest-e`,
+      ];
+      const kept = `${ci}/.status-f`;
+      for (const path of [...doomed, kept]) await Deno.writeTextFile(path, "partial");
+      const second = await startDaemon({ directory });
+      assert(second.ok, second.ok ? "" : second.error);
+      try {
+        for (const path of doomed) assert(!await exists(path), path);
+        assert(await exists(kept));
+      } finally {
+        await second.value.close();
+      }
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
+Deno.test("daemon startup removes temporary files when the request directory is missing", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+    try {
+      const first = await startDaemon({ directory });
+      assert(first.ok);
+      assert((await rpc({ version: 1, op: "register", path: workspace }, directory)).ok);
+      await first.value.close();
+      const ci = `${workspace}/.mci/ci`;
+      await Deno.mkdir(ci, { recursive: true });
+      await Deno.writeTextFile(`${ci}/.write-d`, "partial");
+      const second = await startDaemon({ directory });
+      assert(second.ok, second.ok ? "" : second.error);
+      try {
+        assert(!await exists(`${ci}/.write-d`));
+      } finally {
+        await second.value.close();
+      }
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
 Deno.test("daemon shutdown closes idle clients and interrupts unfinished requests", () =>
   inWorkspace(async (workspace) => {
     const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });

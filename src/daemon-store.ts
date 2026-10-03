@@ -329,6 +329,34 @@ const decodeLegacyTerminal = (
 
 const requestDirectory = (path: string): string => `${path}/.mci/ci/requests`;
 
+const presentDirectory = async (path: string): Promise<Result<boolean>> => {
+  const found = await metadata(path);
+  if (!found.ok) return found;
+  if (found.value === null) return ok(false);
+  if (!found.value.isDirectory || found.value.isSymlink) {
+    return err(`${path} must be a real directory`);
+  }
+  return ok(true);
+};
+
+// An interrupted atomic write leaves its temporary file. Only the daemon that holds the
+// service lock writes these prefixes, and this runs before the listener opens.
+const removeTemporaries = async (
+  directory: string,
+  prefixes: readonly string[],
+): Promise<Result<void>> => {
+  const present = await presentDirectory(directory);
+  if (!present.ok) return present;
+  if (!present.value) return ok(undefined);
+  return await attempt(async () => {
+    for await (const entry of Deno.readDir(directory)) {
+      if (!entry.isFile || entry.isSymlink) continue;
+      if (!prefixes.some((prefix) => entry.name.startsWith(prefix))) continue;
+      await Deno.remove(`${directory}/${entry.name}`);
+    }
+  });
+};
+
 const prepareRequestDirectory = async (path: string): Promise<Result<string>> => {
   for (const directory of [`${path}/.mci`, `${path}/.mci/ci`, requestDirectory(path)]) {
     const ready = await realDirectory(directory);
@@ -351,6 +379,8 @@ export const openDaemonStore = async (
 ): Promise<Result<DaemonStore>> => {
   const ready = await realDirectory(paths.directory);
   if (!ready.ok) return ready;
+  const swept = await removeTemporaries(paths.directory, [".write-"]);
+  if (!swept.ok) return swept;
   let repositories: readonly Repository[];
   const storedRegistry = await parseFile(paths.registry);
   if (!storedRegistry.ok) return storedRegistry;
@@ -584,6 +614,12 @@ export const openDaemonStore = async (
       return update;
     },
     pruneRuns: async (path, keep) => {
+      const mci = await presentDirectory(`${path}/.mci`);
+      if (!mci.ok) return mci;
+      if (mci.value) {
+        const swept = await removeTemporaries(`${path}/.mci/ci`, [".write-", ".latest-"]);
+        if (!swept.ok) return swept;
+      }
       const directory = requestDirectory(path);
       const found = await metadata(directory);
       if (!found.ok) return found;
@@ -593,6 +629,8 @@ export const openDaemonStore = async (
       }
       const safe = await prepareRequestDirectory(path);
       if (!safe.ok) return safe;
+      const requests = await removeTemporaries(directory, [".write-", ".copy-"]);
+      if (!requests.ok) return requests;
       return await attempt(async () => {
         for await (const entry of Deno.readDir(directory)) {
           const match = /^(.*)\.(log|jsonl|json)$/.exec(entry.name);
