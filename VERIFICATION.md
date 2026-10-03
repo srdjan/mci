@@ -103,6 +103,17 @@ rounds and never inspected a `<defunct>` leader. The rounds were 500 with one sl
 with an added background sleep, 500 with native capabilities, and 300 with 14 busy CPU
 cores. The probe does not cover other hosts or heavier load.
 
+On 2026-10-03, eight hardening fixes added 11 tests. Each test failed before its fix,
+except the D1 test for a pending retry timer at shutdown. That test guards new code and
+had no earlier failure. `deno task test` passed 170 tests with 1 ignored. After the fixes,
+the audit probes showed the corrected behavior. Under `ulimit -n 48`, the daemon received
+80 idle connections. It logged EMFILE, kept its socket, and continued to run. Restart
+recovery without a spool log left the repository unblocked twice. A queued request behind
+a retention block received a failure result. A cancelled queued request left the PASS
+result and a 41-byte `latest.log`. Registration during a held lock left the repository
+unblocked, and the next job succeeded. Recovery killed a TERM-ignoring child and returned
+success. Four stray `run-*` entries no longer blocked a run.
+
 Workspace tests cover competing runs, lock release, private scripts, abandoned
 directories, invalid journals, and symlink rejection. A native macOS test kills the owning
 runner with SIGKILL. The next run recovers its recorded process before executing the next

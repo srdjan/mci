@@ -34,6 +34,27 @@ fix.
 
 Labels with D come from the daemon review. Labels with P come from the process review.
 
+## Fix status
+
+On 2026-10-03, the plan in `docs/hardening-fix-plan.md` fixed the eight confirmed
+findings. Each fix has a test that failed before the change. The main session reran the
+audit probes after the fixes, and each probe showed the corrected behavior.
+
+| Label | Commit    | Result after the fix                                               |
+| ----- | --------- | ------------------------------------------------------------------ |
+| P3    | `a7f6af6` | `ps` reports the start time in UTC                                 |
+| P2    | `d899a4b` | Stray `run-*` entries stay in place, and the run succeeds          |
+| P1    | `8a3ca33` | Recovery kills a TERM-resistant child and clears the journal       |
+| D4    | `efb8ed9` | A busy lock at registration leaves the repository unblocked        |
+| D5    | `cc55bb0` | A cancelled queued request keeps the latest result and its log     |
+| D2    | `b199005` | A queued request behind a block receives a failure result          |
+| D3    | `9ed9343` | Restart recovery creates an empty log and finishes the entry       |
+| D1    | `6344db5` | The daemon logs an `accept()` error, waits, and continues to serve |
+
+Commit `73c3c3b` corrected the P1 late-exit test, and commit `1a75652` corrected two
+design sentences. The plausible findings D6 to D9, P4, and the test finding T1 remain
+open.
+
 ## Confirmed findings
 
 ### D1: one `accept()` error stops the daemon
