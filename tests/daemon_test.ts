@@ -2,7 +2,7 @@ import { rpc, submit } from "../src/client.ts";
 import { type DaemonListener, startDaemon } from "../src/daemon.ts";
 import { readJson, sendJson } from "../src/ipc.ts";
 import { servicePaths } from "../src/paths.ts";
-import { attempt } from "../src/result.ts";
+import { attempt, type Result } from "../src/result.ts";
 import { cliSourceArgs } from "../src/runtime.ts";
 import { assert, equal, exists, fixture, inWorkspace, waitFor } from "./helpers.ts";
 import { withDaemon } from "./daemon_helpers.ts";
@@ -1083,7 +1083,10 @@ const withTestDaemon = async (
   options: Parameters<typeof startDaemon>[0],
   test: (
     directory: string,
-    daemon: { readonly closed: Promise<void>; readonly close: () => Promise<void> },
+    daemon: {
+      readonly closed: Promise<Result<void>>;
+      readonly close: () => Promise<void>;
+    },
   ) => Promise<void>,
 ): Promise<void> => {
   const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
@@ -1135,6 +1138,26 @@ Deno.test("closing the daemon ends the accept retry wait without a pending timer
     },
   );
 });
+
+Deno.test("daemon stops after an accept failure lasts past its limit", () =>
+  withTestDaemon(
+    { listen: failingListener(Infinity), acceptFailureLimitMs: 200 },
+    async (directory, daemon) => {
+      const limit = Promise.withResolvers<"timeout">();
+      const timer = setTimeout(() => limit.resolve("timeout"), 3000);
+      try {
+        const outcome = await Promise.race([daemon.closed, limit.promise]);
+        assert(outcome !== "timeout", "the daemon did not stop");
+        assert(!outcome.ok);
+        assert(outcome.error.includes("accept failed"), outcome.error);
+      } finally {
+        clearTimeout(timer);
+      }
+      const paths = servicePaths(directory);
+      assert(paths.ok);
+      assert(!await exists(paths.value.socket));
+    },
+  ));
 
 Deno.test("daemon closes a connection that sends no first request", () =>
   withTestDaemon({ requestDeadlineMs: 100 }, async (directory) => {

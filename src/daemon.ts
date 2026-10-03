@@ -1016,17 +1016,19 @@ export type DaemonListener = {
 const defaultRequestDeadlineMs = 5000;
 const firstAcceptBackoffMs = 50;
 const maximumAcceptBackoffMs = 1000;
+const defaultAcceptFailureLimitMs = 60000;
 
 export const startDaemon = async (options: {
   readonly listen?: (path: string) => DaemonListener;
   readonly requestDeadlineMs?: number;
+  readonly acceptFailureLimitMs?: number;
   readonly directory?: string;
   readonly signal?: AbortSignal;
   readonly openStore?: (paths: ServicePaths) => Promise<Result<DaemonStore>>;
   readonly resolvePath?: (path: string) => Promise<Result<string>>;
 } = {}): Promise<
   Result<{
-    readonly closed: Promise<void>;
+    readonly closed: Promise<Result<void>>;
     readonly close: () => Promise<void>;
     readonly snapshot: () => Snapshot;
   }>
@@ -1136,12 +1138,24 @@ export const startDaemon = async (options: {
         resolve();
       };
     });
+  const acceptFailureLimitMs = options.acceptFailureLimitMs ??
+    defaultAcceptFailureLimitMs;
+  let acceptFailure: string | null = null;
   const accepting = (async () => {
     let wait = 0;
+    let failingSince: number | null = null;
     while (!runtime.value.closed) {
       const accepted = await attempt(() => listener.accept());
       if (!accepted.ok) {
         if (runtime.value.closed) break;
+        const now = performance.now();
+        failingSince ??= now;
+        const lasted = Math.round(now - failingSince);
+        if (lasted >= acceptFailureLimitMs) {
+          console.error(`mci daemon: accept failed for ${lasted} ms; stopping`);
+          acceptFailure = `accept failed for ${lasted} ms: ${accepted.error}`;
+          break;
+        }
         console.error(`mci daemon: accept failed: ${accepted.error}`);
         wait = wait === 0
           ? firstAcceptBackoffMs
@@ -1150,6 +1164,7 @@ export const startDaemon = async (options: {
         continue;
       }
       wait = 0;
+      failingSince = null;
       if (runtime.value.closed) {
         closeConnection(accepted.value);
         break;
@@ -1164,8 +1179,8 @@ export const startDaemon = async (options: {
       handlers.add(handler);
     }
   })();
-  let closeResolve = (): void => {};
-  const closed = new Promise<void>((resolve) => closeResolve = resolve);
+  let closeResolve = (_result: Result<void>): void => {};
+  const closed = new Promise<Result<void>>((resolve) => closeResolve = resolve);
   let closing: Promise<void> | null = null;
   const close = (): Promise<void> => {
     if (closing !== null) return closing;
@@ -1186,10 +1201,14 @@ export const startDaemon = async (options: {
       await Promise.all(handlers);
       await attempt(() => Deno.remove(paths.socket));
       lock.close();
-      closeResolve();
+      closeResolve(acceptFailure === null ? ok(undefined) : err(acceptFailure));
     })();
     return closing;
   };
+  // close() awaits the accept loop, so only a callback after the loop may call it.
+  void accepting.then(() => {
+    if (acceptFailure !== null) void close();
+  });
   const abort = () => void close();
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) void close();
@@ -1209,8 +1228,12 @@ export const runDaemon = async (): Promise<number> => {
     Deno.removeSignalListener("SIGTERM", stopTerm);
     return 1;
   }
-  await started.value.closed;
+  const stopped = await started.value.closed;
   Deno.removeSignalListener("SIGINT", stopInt);
   Deno.removeSignalListener("SIGTERM", stopTerm);
+  if (!stopped.ok) {
+    console.error(`mci daemon: ${stopped.error}`);
+    return 1;
+  }
   return 0;
 };
