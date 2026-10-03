@@ -6,6 +6,7 @@ struct PanelView: View {
     let model: MonitorModel
     let loginItem: LoginItem
     let presenter: AddRepositoryPresenter
+    let logPresenter: LogWindowPresenter
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -61,7 +62,7 @@ struct PanelView: View {
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(model.rows, id: \.workspace) { row in
-                    RowView(row: row, now: now, model: model)
+                    RowView(row: row, now: now, model: model, logPresenter: logPresenter)
                 }
             }
         }
@@ -101,6 +102,7 @@ struct RowView: View {
     let row: RowState
     let now: Date
     let model: MonitorModel
+    let logPresenter: LogWindowPresenter
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -126,6 +128,12 @@ struct RowView: View {
                             .help(detail)
                     }
                     Spacer(minLength: 4)
+                    Button { logPresenter.show(workspace: row.workspace) } label: {
+                        Image(systemName: "doc.text")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("View log")
+                    .accessibilityLabel("View log")
                     Button { model.open(row) } label: { Image(systemName: "folder") }
                         .buttonStyle(.borderless)
                         .help("Open repository")

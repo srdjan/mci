@@ -209,7 +209,9 @@ It adds the repository to `~/Library/Application Support/meeci/monitor.json` and
 app. One menu bar icon shows the most urgent state of all repositories, with a count of
 the repositories that need attention. The panel lists each repository with its state,
 time, exit code, and duration. The app watches each `.mci/ci/` folder, so a new result
-shows within one second. It reads saved results only and never starts CI.
+shows within one second. It reads saved results only and never starts CI. "View log" opens
+the last 256 KiB of `latest.log` in a window with its terminal colors; the file itself
+stays unchanged.
 
 For a manual check:
 

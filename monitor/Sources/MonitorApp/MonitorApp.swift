@@ -12,6 +12,7 @@ struct MonitorApp: App {
             .map { Registry(directory: $0) } ?? Registry())
     private let loginItem = LoginItem()
     private let presenter = AddRepositoryPresenter()
+    private let logPresenter = LogWindowPresenter()
 
     init() {
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -20,7 +21,9 @@ struct MonitorApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            PanelView(model: model, loginItem: loginItem, presenter: presenter)
+            PanelView(
+                model: model, loginItem: loginItem, presenter: presenter,
+                logPresenter: logPresenter)
         } label: {
             MenuBarLabel(combined: model.combined)
         }
