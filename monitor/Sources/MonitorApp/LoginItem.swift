@@ -11,13 +11,14 @@ final class LoginItem {
     var note: String? {
         switch status {
         case .requiresApproval: "Approve in System Settings > General > Login Items"
-        case .notFound: "Available after install"
-        case .enabled, .notRegistered: nil
+        case .enabled, .notRegistered, .notFound: nil
         @unknown default: nil
         }
     }
 
-    var canToggle: Bool { status != .notFound }
+    /// An app that was never registered reports `.notFound`, and `register()` still works
+    /// for the installed, ad-hoc signed bundle. A failed registration shows its error.
+    var canToggle: Bool { true }
 
     func refresh() {
         status = SMAppService.mainApp.status
