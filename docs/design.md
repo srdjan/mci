@@ -47,6 +47,11 @@ If `accept()` fails while the daemon is open, the daemon writes the error to std
 retries. The wait starts at 50 ms, doubles after each consecutive error, and stops at 1000
 ms. A successful accept resets the wait. Shutdown ends the wait at once.
 
+If `accept()` fails without a success for 60000 ms, the daemon stops. It writes
+`mci daemon: accept failed for <n> ms; stopping` to stderr and shuts down. The shutdown
+interrupts running jobs, as any shutdown does. The process exits with code 1, and launchd
+restarts the daemon. The value 60000 ms is a policy, not a measured capacity.
+
 A connection must send its first request within 5000 ms. The daemon closes a connection
 that sends no first frame in that time. This value is a policy, not a measured capacity.
 
@@ -54,8 +59,17 @@ The submitting connection owns its request. A cancel message or connection loss 
 only that request.
 
 The daemon journals every accepted request before it confirms acceptance. On restart, it
-records each unfinished request as INTERRUPTED and does not retry it. A durable terminal
-record preserves completed work if projection or journal cleanup fails.
+records each unfinished request that began as INTERRUPTED and does not retry it. A durable
+terminal record preserves completed work if projection or journal cleanup fails.
+
+The daemon sends the response to a register or unregister request after the management
+chain step ends. A client that does not read its response cannot stall later management
+requests. The daemon publishes the snapshot before it resolves a job result. A shutdown
+therefore ends after the last snapshot write.
+
+The daemon resolves request paths in one chain for each path text. A stalled volume delays
+only requests for its own path. An unregister request no longer reports busy after the
+result frame of a finished client, even if that client keeps its connection open.
 
 Registration and daemon startup recover each workspace. A held workspace lock, such as a
 direct `mci run`, does not block the repository. The worker acquires the workspace before
@@ -66,9 +80,37 @@ the terminal, and the daemon removes its journal entry and spool. It never repla
 latest completed result or `latest.log`. This rule also covers a queued request at
 shutdown. An active request at shutdown still records INTERRUPTED as the latest result.
 
-The request journal does not record whether a request started. After a daemon crash,
-restart recovery therefore records every unfinished request as INTERRUPTED. A queued
-request that never started can still replace the latest result in this case.
+The request journal records whether a request began. The daemon writes `begun: true`
+before it spawns the worker. After a daemon crash, restart recovery records INTERRUPTED
+only for a request that began. A request that never began is not a result. Recovery
+finishes its journal entry, removes its spool files, and keeps the latest result.
+
+A crash between the journal write and the worker spawn records INTERRUPTED for a worker
+that never ran. This order keeps the safe direction. A journal entry without the `begun`
+key comes from an older daemon. The new daemon reads such an entry as begun.
+
+The daemon writes the registry, the request journal, the terminal records, `latest.json`,
+`status.json`, `latest.log`, and the legacy log copy as durable writes. A durable write
+syncs the temporary file, renames it, and then syncs the parent directory. A sync failure
+fails the write and removes the temporary file. The daemon also syncs the spool log before
+it closes the log. The daemon does not sync `snapshot.json`. It never reads that file, and
+it rewrites the file at each step change. No power-loss test confirms this behavior.
+Nobody verified whether Deno `syncData` on macOS flushes the drive cache or only the
+kernel buffers.
+
+An interrupted atomic write leaves a `.write-*`, `.copy-*`, or `.latest-*` file. At
+startup, before the listener opens, the daemon removes these regular files. It scans the
+service directory for `.write-*`. It scans `.mci/ci/requests` for `.write-*` and
+`.copy-*`. It scans `.mci/ci` for `.write-*` and `.latest-*`. Only the daemon that holds
+`daemon.lock` writes these prefixes, so the cleanup cannot remove a file in use. The
+daemon keeps other names, such as `.status-*` from a direct run. A removal failure in the
+service directory stops the daemon at startup. A removal failure in a repository blocks
+that repository, as other retention failures do.
+
+A signal to a worker that already exited is not a failure. The daemon tracks worker exit
+and skips the signal. At shutdown, only a cancelled result becomes INTERRUPTED. A worker
+that already returned its final result keeps that result. A queued request that the daemon
+settles because its repository is blocked keeps the kind failure at shutdown.
 
 When a repository becomes blocked, the daemon settles every queued request of that
 repository with a failure result. The detail names the block. The daemon starts no queued
@@ -88,6 +130,12 @@ also retain their recovery files.
 
 When a newer request completes, the daemon removes the older spool after its clients
 disconnect. It projects the new result to `latest.json`, `status.json`, and `latest.log`.
+
+The daemon accepts three limits. First, per-path routing keeps the arrival order only for
+one path text. Two texts for one repository can reorder. The CLI sends the real path, so
+the effect is small. Second, an older daemon refuses an 8-key journal entry. A downgrade
+with pending requests fails to start. Third, the accept failure stop interrupts running
+jobs.
 
 ## Workspace lifecycle
 

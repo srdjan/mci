@@ -25,12 +25,12 @@ fix.
 | 6    | D5    | A cancelled queued request replaces the latest completed result       | Medium-low | Confirmed |
 | 7    | P2    | A stray `run-*` entry in `.mci` blocks every later run                | Low        | Confirmed |
 | 8    | P3    | The recorded start time depends on the host time zone                 | Low        | Confirmed |
-| 9    | D6    | Atomic writes rename without `fsync`                                  | Low-medium | Plausible |
-| 10   | D7    | A cancel after worker exit records a false storage failure            | Low        | Plausible |
-| 11   | P4    | A failed `ps` with empty stdout counts as an absent process           | Low        | Plausible |
-| 12   | D8    | A non-reading management client stalls later register calls           | Low        | Plausible |
-| 13   | D9    | Global routing chain, temporary-file orphans, and a wrong busy reason | Low        | Plausible |
-| 14   | T1    | One daemon test name claims more than the test proves                 | Low        | Confirmed |
+| 9    | D6    | Atomic writes rename without `fsync`                                  | Low-medium | Fixed     |
+| 10   | D7    | A cancel after worker exit records a false storage failure            | Low        | Fixed     |
+| 11   | P4    | A failed `ps` with empty stdout counts as an absent process           | Low        | Fixed     |
+| 12   | D8    | A non-reading management client stalls later register calls           | Low        | Fixed     |
+| 13   | D9    | Global routing chain, temporary-file orphans, and a wrong busy reason | Low        | Fixed     |
+| 14   | T1    | One daemon test name claims more than the test proves                 | Low        | Fixed     |
 
 Labels with D come from the daemon review. Labels with P come from the process review.
 
@@ -52,8 +52,35 @@ audit probes after the fixes, and each probe showed the corrected behavior.
 | D1    | `6344db5` | The daemon logs an `accept()` error, waits, and continues to serve |
 
 Commit `73c3c3b` corrected the P1 late-exit test, and commit `1a75652` corrected two
-design sentences. The plausible findings D6 to D9, P4, and the test finding T1 remain
-open.
+design sentences.
+
+On 2026-10-03, the plan in `docs/hardening-followup-plan.md` fixed the plausible findings
+D6 to D9, P4, and the test finding T1. It also fixed the restart limit of the earlier D5
+fix and the retry loop for a permanent `accept()` failure. Each code fix except D6 has a
+test that failed before the change. No test can simulate the power loss that D6 describes.
+D9 has three parts, so it has three rows.
+
+| Label    | Commit    | Result after the fix                                                   |
+| -------- | --------- | ---------------------------------------------------------------------- |
+| P4       | `7787de1` | `ps` failure with a message or an exit code other than 1 is an error   |
+| D6       | `f97de84` | Atomic writes sync the file and the directory, and the spool log syncs |
+| D9 files | `5826c37` | Startup removes `.write-*`, `.copy-*`, and `.latest-*` leftovers       |
+| D5 limit | `163a0be` | A queued request that never began is not recorded after a crash        |
+| D7       | `2edb7dc` | A signal to an exited worker is ignored, and its result survives close |
+| D8       | `69a6da7` | A management response goes out after the management chain step ends    |
+| D9 route | `c93c80e` | Each request path has its own routing chain                            |
+| D9 busy  | `160e517` | Unregister succeeds after a finished client keeps its connection open  |
+| D1 limit | `b15ade4` | The daemon stops and exits with code 1 after 60000 ms of accept errors |
+| T1       | `b03729f` | The test name states that a worker with large output finishes          |
+
+Commit `9423360` fixed a race that the new work exposed. A job result resolved before its
+last snapshot write. A shutdown then returned while that write still ran, and the test
+cleanup failed with "Directory not empty". The daemon now publishes the snapshot before it
+resolves the result.
+
+No power-loss test confirms D6. The fix follows the standard write, sync, rename, and
+directory sync order. Nobody verified whether Deno `syncData` on macOS flushes the drive
+cache or only the kernel buffers.
 
 ## Confirmed findings
 
@@ -175,7 +202,8 @@ recovery once.
 The test "a client that does not read cannot block its worker" in `tests/daemon_test.ts`
 writes worker output to the spool file, not to the socket. The unread frames are smaller
 than 1 KiB, and the socket buffers hold 16 KiB, so the test cannot fail for socket
-backpressure. No test covers D1, D2, D3, or D4.
+backpressure. Commit `b03729f` renamed the test to "a worker with large output finishes
+while its client reads nothing".
 
 ## Plausible findings
 
