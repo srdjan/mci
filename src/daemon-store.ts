@@ -91,6 +91,8 @@ const regularTarget = async (path: string): Promise<Result<void>> => {
   return ok(undefined);
 };
 
+const parent = (path: string): string => path.slice(0, path.lastIndexOf("/"));
+
 const syncPath = async (path: string, kind: "file" | "directory"): Promise<void> => {
   const handle = await Deno.open(
     path,
@@ -113,7 +115,7 @@ const commitTemporary = async (
   await Deno.chmod(temporary, 0o600);
   if (durable) await syncPath(temporary, "file");
   await Deno.rename(temporary, target);
-  if (durable) await syncPath(target.slice(0, target.lastIndexOf("/")), "directory");
+  if (durable) await syncPath(parent(target), "directory");
 };
 
 const atomicBytes = async (
@@ -123,10 +125,8 @@ const atomicBytes = async (
 ): Promise<Result<void>> => {
   const safe = await regularTarget(path);
   if (!safe.ok) return safe;
-  const slash = path.lastIndexOf("/");
-  const directory = path.slice(0, slash);
   const temporary = await attempt(() =>
-    Deno.makeTempFile({ dir: directory, prefix: ".write-" })
+    Deno.makeTempFile({ dir: parent(path), prefix: ".write-" })
   );
   if (!temporary.ok) return temporary;
   const written = await attempt(async () => {
@@ -141,7 +141,7 @@ const atomicBytes = async (
 const atomicJson = (
   path: string,
   value: unknown,
-  durable: boolean,
+  durable = true,
 ): Promise<Result<void>> =>
   atomicBytes(
     path,
@@ -149,21 +149,16 @@ const atomicJson = (
     durable,
   );
 
-const atomicCopy = async (
-  source: string,
-  target: string,
-  durable: boolean,
-): Promise<Result<void>> => {
+const atomicCopy = async (source: string, target: string): Promise<Result<void>> => {
   const safe = await regularTarget(target);
   if (!safe.ok) return safe;
-  const directory = target.slice(0, target.lastIndexOf("/"));
   const temporary = await attempt(() =>
-    Deno.makeTempFile({ dir: directory, prefix: ".copy-" })
+    Deno.makeTempFile({ dir: parent(target), prefix: ".copy-" })
   );
   if (!temporary.ok) return temporary;
   const copied = await attempt(async () => {
     await Deno.copyFile(source, temporary.value);
-    await commitTemporary(temporary.value, target, durable);
+    await commitTemporary(temporary.value, target, true);
   });
   if (copied.ok) return copied;
   await attempt(() => Deno.remove(temporary.value));
@@ -345,19 +340,19 @@ const presentDirectory = async (path: string): Promise<Result<boolean>> => {
   return ok(true);
 };
 
-// An interrupted atomic write leaves its temporary file. Only the daemon that holds the
-// service lock writes these prefixes, and this runs before the listener opens.
-const removeTemporaries = async (
-  directory: string,
-  prefixes: readonly string[],
-): Promise<Result<void>> => {
+// An interrupted atomic write leaves its temporary file. Older daemons used .latest- for
+// the latest.log copy. Only the daemon that holds the service lock writes these prefixes,
+// and the sweep runs before the listener opens.
+const temporary = (name: string): boolean =>
+  [".write-", ".copy-", ".latest-"].some((prefix) => name.startsWith(prefix));
+
+const removeTemporaries = async (directory: string): Promise<Result<void>> => {
   const present = await presentDirectory(directory);
   if (!present.ok) return present;
   if (!present.value) return ok(undefined);
   return await attempt(async () => {
     for await (const entry of Deno.readDir(directory)) {
-      if (!entry.isFile || entry.isSymlink) continue;
-      if (!prefixes.some((prefix) => entry.name.startsWith(prefix))) continue;
+      if (!entry.isFile || entry.isSymlink || !temporary(entry.name)) continue;
       await Deno.remove(`${directory}/${entry.name}`);
     }
   });
@@ -385,7 +380,7 @@ export const openDaemonStore = async (
 ): Promise<Result<DaemonStore>> => {
   const ready = await realDirectory(paths.directory);
   if (!ready.ok) return ready;
-  const swept = await removeTemporaries(paths.directory, [".write-"]);
+  const swept = await removeTemporaries(paths.directory);
   if (!swept.ok) return swept;
   let repositories: readonly Repository[];
   const storedRegistry = await parseFile(paths.registry);
@@ -410,7 +405,7 @@ export const openDaemonStore = async (
       }
     }
     repositories = imported;
-    const recorded = await atomicJson(paths.registry, { version: 1, repositories }, true);
+    const recorded = await atomicJson(paths.registry, { version: 1, repositories });
     if (!recorded.ok) return recorded;
   }
 
@@ -428,11 +423,7 @@ export const openDaemonStore = async (
   ): Promise<Result<void>> => {
     const update = journalChain.then(async () => {
       const next = change(journal);
-      const written = await atomicJson(
-        paths.journal,
-        { version: 1, requests: next },
-        true,
-      );
+      const written = await atomicJson(paths.journal, { version: 1, requests: next });
       if (written.ok) journal = [...next];
       return written;
     });
@@ -450,7 +441,7 @@ export const openDaemonStore = async (
         const written = await atomicJson(paths.registry, {
           version: 1,
           repositories: next.value,
-        }, true);
+        });
         if (!written.ok) return written;
         repositories = [...next.value];
         return ok(repositories);
@@ -556,13 +547,12 @@ export const openDaemonStore = async (
       const allocated = await prepareRequestDirectory(repository.path);
       if (!allocated.ok) return allocated;
       const immutableLog = `${allocated.value}/${decoded.value.id}.log`;
-      const copied = await atomicCopy(decoded.value.log, immutableLog, true);
+      const copied = await atomicCopy(decoded.value.log, immutableLog);
       if (!copied.ok) return copied;
       const terminal = { ...decoded.value, log: immutableLog };
       const recorded = await atomicJson(
         `${repository.path}/.mci/ci/latest.json`,
         terminal,
-        true,
       );
       return recorded.ok ? ok(terminal) : recorded;
     },
@@ -584,29 +574,16 @@ export const openDaemonStore = async (
         const durable = await atomicJson(
           `${directory.value}/${terminal.id}.json`,
           terminal,
-          true,
         );
         if (!durable.ok) return durable;
-        const reference = await atomicJson(`${path}/.mci/ci/latest.json`, terminal, true);
+        const reference = await atomicJson(`${path}/.mci/ci/latest.json`, terminal);
         if (!reference.ok) return reference;
-        const logSafe = await regularTarget(`${path}/.mci/ci/latest.log`);
-        if (!logSafe.ok) return logSafe;
-        const logTemporary = await attempt(() =>
-          Deno.makeTempFile({ dir: `${path}/.mci/ci`, prefix: ".latest-" })
-        );
-        if (!logTemporary.ok) return logTemporary;
-        const projected = await attempt(async () => {
-          await Deno.copyFile(terminal.log, logTemporary.value);
-          await commitTemporary(logTemporary.value, `${path}/.mci/ci/latest.log`, true);
-        });
-        if (!projected.ok) {
-          await attempt(() => Deno.remove(logTemporary.value));
-          return projected;
-        }
+        const projected = await atomicCopy(terminal.log, `${path}/.mci/ci/latest.log`);
+        if (!projected.ok) return projected;
         return await atomicJson(`${path}/.mci/ci/status.json`, {
           version: 2,
           ...terminal,
-        }, true);
+        });
       });
       terminalChains.set(path, update);
       void update.finally(() => {
@@ -625,25 +602,21 @@ export const openDaemonStore = async (
       const mci = await presentDirectory(`${path}/.mci`);
       if (!mci.ok) return mci;
       if (mci.value) {
-        const swept = await removeTemporaries(`${path}/.mci/ci`, [".write-", ".latest-"]);
+        const swept = await removeTemporaries(`${path}/.mci/ci`);
         if (!swept.ok) return swept;
       }
       const directory = requestDirectory(path);
-      const found = await metadata(directory);
+      const found = await presentDirectory(directory);
       if (!found.ok) return found;
-      if (found.value === null) return ok(undefined);
-      if (!found.value.isDirectory || found.value.isSymlink) {
-        return err("request directory must be a real directory");
-      }
+      if (!found.value) return ok(undefined);
       const safe = await prepareRequestDirectory(path);
       if (!safe.ok) return safe;
-      const requests = await removeTemporaries(directory, [".write-", ".copy-"]);
-      if (!requests.ok) return requests;
       return await attempt(async () => {
         for await (const entry of Deno.readDir(directory)) {
-          const match = /^(.*)\.(log|jsonl|json)$/.exec(entry.name);
-          if (match === null || keep.includes(match[1]!)) continue;
           if (!entry.isFile || entry.isSymlink) continue;
+          const match = /^(.*)\.(log|jsonl|json)$/.exec(entry.name);
+          const stale = match !== null && !keep.includes(match[1]!);
+          if (!stale && !temporary(entry.name)) continue;
           await Deno.remove(`${directory}/${entry.name}`);
         }
       });

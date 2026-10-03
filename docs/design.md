@@ -98,14 +98,13 @@ it rewrites the file at each step change. No power-loss test confirms this behav
 Nobody verified whether Deno `syncData` on macOS flushes the drive cache or only the
 kernel buffers.
 
-An interrupted atomic write leaves a `.write-*`, `.copy-*`, or `.latest-*` file. At
-startup, before the listener opens, the daemon removes these regular files. It scans the
-service directory for `.write-*`. It scans `.mci/ci/requests` for `.write-*` and
-`.copy-*`. It scans `.mci/ci` for `.write-*` and `.latest-*`. Only the daemon that holds
-`daemon.lock` writes these prefixes, so the cleanup cannot remove a file in use. The
-daemon keeps other names, such as `.status-*` from a direct run. A removal failure in the
-service directory stops the daemon at startup. A removal failure in a repository blocks
-that repository, as other retention failures do.
+An interrupted atomic write leaves a `.write-*` or `.copy-*` file. Older daemons also left
+`.latest-*` files. At startup, before the listener opens, the daemon removes regular files
+with these three prefixes from the service directory, `.mci/ci`, and `.mci/ci/requests`.
+Only the daemon that holds `daemon.lock` writes these prefixes, so the cleanup cannot
+remove a file in use. The daemon keeps other names, such as `.status-*` from a direct run.
+A removal failure in the service directory stops the daemon at startup. A removal failure
+in a repository blocks that repository, as other retention failures do.
 
 A signal to a worker that already exited is not a failure. The daemon tracks worker exit
 and skips the signal. At shutdown, only a cancelled result becomes INTERRUPTED. A worker

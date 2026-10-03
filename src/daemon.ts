@@ -43,7 +43,6 @@ type Job = {
   readonly stop: AbortController;
   step: string | null;
   child: Deno.ChildProcess | null;
-  exited: boolean;
   cancelReason: "SIGINT" | "SIGTERM" | null;
   storageError: string | null;
 };
@@ -93,7 +92,7 @@ const signalWorker = (
 ): void => {
   if (cancellation) job.cancelReason ??= signal;
   job.stop.abort(signal);
-  if (job.child === null || job.exited) return;
+  if (job.child === null) return;
   try {
     job.child.kill(signal);
   } catch (error) {
@@ -355,10 +354,10 @@ const runWorkerProcess = async (runtime: DaemonRuntime, job: Job): Promise<Termi
   if (!spawned.ok) return failedTerminal(job, `worker launch failed: ${spawned.error}`);
   const child = spawned.value;
   job.child = child;
-  const markExited = () => {
-    job.exited = true;
+  const exited = () => {
+    job.child = null;
   };
-  child.status.then(markExited, markExited);
+  child.status.then(exited, exited);
   if (job.cancelReason !== null) signalWorker(job, job.cancelReason);
   const drains = await drainWorkerOutput(job, child);
   if (!drains.ok) {
@@ -593,7 +592,6 @@ const newJob = (
     stop: new AbortController(),
     step: null,
     child: null,
-    exited: false,
     cancelReason: null,
     storageError: null,
   };
@@ -751,32 +749,30 @@ const submitRequest = async (
   const prepared = repository.acceptance.then(() =>
     prepareSubmission(runtime, connection, request, repository)
   );
-  repository.acceptance = prepared.then(() => {}).catch(() => {});
-  const job = await prepared.catch((error) => {
-    repository.accepting--;
-    throw error;
-  });
-  if (job === null) {
-    repository.accepting--;
-    return;
-  }
+  repository.acceptance = prepared.then(() => {}, () => {});
   // The queue or the active slot blocks unregister until the result. The result frame
-  // follows this callback, so a client that keeps its connection open cannot cause busy.
-  void job.result.then(() => {
+  // follows this decrement, so a client that keeps its connection open cannot cause busy.
+  void prepared.then((job) => job?.result, () => {}).then(() => {
     repository.accepting--;
   });
-  await watchSubmission(runtime, messages, job);
+  const job = await prepared;
+  if (job !== null) await watchSubmission(runtime, messages, job);
 };
+
+const okResponse = (runtime: DaemonRuntime): Response => ({
+  version: 1,
+  type: "ok",
+  snapshot: snapshot(runtime),
+});
 
 const manageRepositories = async (
   runtime: DaemonRuntime,
   request: Extract<Request, { readonly op: "register" | "unregister" }>,
 ): Promise<Response> => {
-  const done = (): Response => ({ version: 1, type: "ok", snapshot: snapshot(runtime) });
   if (request.op === "register") {
     const registered = await runtime.store.register(request.path);
     if (!registered.ok) return responseError("storage", registered.error);
-    if (runtime.repositories.has(registered.value.id)) return done();
+    if (runtime.repositories.has(registered.value.id)) return okResponse(runtime);
     const state: MutableRepository = {
       repository: registered.value,
       queue: [],
@@ -795,7 +791,7 @@ const manageRepositories = async (
     else state.latest = latest.value;
     runtime.repositories.set(registered.value.id, state);
     const published = await publish(runtime);
-    return published.ok ? done() : responseError("storage", published.error);
+    return published.ok ? okResponse(runtime) : responseError("storage", published.error);
   }
   const state = Array.from(runtime.repositories.values()).find((candidate) =>
     candidate.repository.id === request.repository ||
@@ -812,7 +808,7 @@ const manageRepositories = async (
   if (removed.ok) runtime.repositories.delete(state.repository.id);
   else state.removing = false;
   const published = removed.ok ? await publish(runtime) : removed;
-  return published.ok ? done() : responseError("storage", published.error);
+  return published.ok ? okResponse(runtime) : responseError("storage", published.error);
 };
 
 const handleOperation = async (
@@ -831,7 +827,7 @@ const handleOperation = async (
       responseError("invalid", "cancel requires a submission connection"),
     );
   } else {
-    await sendJson(connection, { version: 1, type: "ok", snapshot: snapshot(runtime) });
+    await sendJson(connection, okResponse(runtime));
   }
   closeConnection(connection);
 };
@@ -1140,8 +1136,8 @@ export const startDaemon = async (options: {
     });
   const acceptFailureLimitMs = options.acceptFailureLimitMs ??
     defaultAcceptFailureLimitMs;
-  let acceptFailure: string | null = null;
-  const accepting = (async () => {
+  // The accept loop resolves with a failure only when it stops on its own.
+  const accepting = (async (): Promise<string | null> => {
     let wait = 0;
     let failingSince: number | null = null;
     while (!runtime.value.closed) {
@@ -1153,8 +1149,7 @@ export const startDaemon = async (options: {
         const lasted = Math.round(now - failingSince);
         if (lasted >= acceptFailureLimitMs) {
           console.error(`mci daemon: accept failed for ${lasted} ms; stopping`);
-          acceptFailure = `accept failed for ${lasted} ms: ${accepted.error}`;
-          break;
+          return `accept failed for ${lasted} ms: ${accepted.error}`;
         }
         console.error(`mci daemon: accept failed: ${accepted.error}`);
         wait = wait === 0
@@ -1178,6 +1173,7 @@ export const startDaemon = async (options: {
       });
       handlers.add(handler);
     }
+    return null;
   })();
   let closeResolve = (_result: Result<void>): void => {};
   const closed = new Promise<Result<void>>((resolve) => closeResolve = resolve);
@@ -1197,17 +1193,17 @@ export const startDaemon = async (options: {
       ]);
       await Promise.all(jobs.map((job) => cancelQueued(runtime.value, job, "SIGTERM")));
       await Promise.all(jobs.map((job) => job.result));
-      await accepting;
+      const failure = await accepting;
       await Promise.all(handlers);
       await attempt(() => Deno.remove(paths.socket));
       lock.close();
-      closeResolve(acceptFailure === null ? ok(undefined) : err(acceptFailure));
+      closeResolve(failure === null ? ok(undefined) : err(failure));
     })();
     return closing;
   };
   // close() awaits the accept loop, so only a callback after the loop may call it.
-  void accepting.then(() => {
-    if (acceptFailure !== null) void close();
+  void accepting.then((failure) => {
+    if (failure !== null) void close();
   });
   const abort = () => void close();
   options.signal?.addEventListener("abort", abort, { once: true });
