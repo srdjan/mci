@@ -63,6 +63,11 @@ The request journal does not record whether a request started. After a daemon cr
 restart recovery therefore records every unfinished request as INTERRUPTED. A queued
 request that never started can still replace the latest result in this case.
 
+When a repository becomes blocked, the daemon settles every queued request of that
+repository with a failure result. The detail names the block. The daemon starts no queued
+command for a blocked repository, and it settles a request that arrives later in the same
+way.
+
 Each snapshot carries an active request, queue count, latest completed result, and blocked
 state for every repository. New work does not replace the latest completed result.
 

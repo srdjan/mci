@@ -4,7 +4,7 @@ import { startDaemon } from "../src/daemon.ts";
 import { type ServicePaths, servicePaths } from "../src/paths.ts";
 import type { Terminal } from "../src/protocol.ts";
 import { err, ok, type Result } from "../src/result.ts";
-import { assert, equal, exists, fixture, inWorkspace } from "./helpers.ts";
+import { assert, equal, exists, fixture, inWorkspace, waitFor } from "./helpers.ts";
 
 type Gate = {
   readonly ready: Promise<void>;
@@ -162,6 +162,63 @@ Deno.test("retention failure blocks later submissions without launching commands
       const status = await rpc({ version: 1, op: "status" }, directory);
       assert(status.ok && status.value.repositories[0]?.blocked?.includes("retention"));
       assert(!(await run()).ok);
+    })
+  ));
+
+Deno.test("a repository that becomes blocked settles its queued requests", () =>
+  inWorkspace((workspace) =>
+    withRaceDaemon(async (paths) => {
+      const store = await openDaemonStore(paths);
+      return store.ok
+        ? ok({
+          ...store.value,
+          removeRun: () => Promise.resolve(err("injected retention failure")),
+        })
+        : store;
+    }, async (directory) => {
+      assert((await rpc({ version: 1, op: "register", path: workspace }, directory)).ok);
+      const run = (name: string, command: string) =>
+        submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: `${name}.yml`,
+            job: "check",
+            source: fixture(`      - run: ${command}`),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+      assert((await run("first", '"true"')).ok);
+      const second = run(
+        "second",
+        "touch second-ready; while [ ! -f release ]; do sleep 0.01; done",
+      );
+      try {
+        await waitFor(() => exists(`${workspace}/second-ready`));
+        const third = run("third", "touch forbidden");
+        await waitFor(async () => {
+          const current = await rpc({ version: 1, op: "status" }, directory);
+          return current.ok && current.value.repositories[0]?.queued === 1;
+        });
+        await Deno.writeTextFile(`${workspace}/release`, "release");
+        const timer = Promise.withResolvers<null>();
+        const timeout = setTimeout(() => timer.resolve(null), 2000);
+        const settled = await Promise.race([third, timer.promise]).finally(() =>
+          clearTimeout(timeout)
+        );
+        assert(settled !== null, "the queued request was not settled");
+        assert(settled.ok, settled.ok ? "" : settled.error);
+        equal(settled.value.kind, "failure");
+        assert(settled.value.detail.includes("blocked"), settled.value.detail);
+        assert(settled.value.detail.includes("retention"), settled.value.detail);
+        assert(!await exists(`${workspace}/forbidden`));
+      } finally {
+        await Deno.writeTextFile(`${workspace}/release`, "release");
+        await second;
+      }
     })
   ));
 

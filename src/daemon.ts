@@ -131,13 +131,18 @@ const hold = (runtime: DaemonRuntime, id: string): void => {
   runtime.holds.set(id, (runtime.holds.get(id) ?? 0) + 1);
 };
 
-const blockRetention = (runtime: DaemonRuntime, path: string, detail: string): void => {
+const blockRetention = (
+  runtime: DaemonRuntime,
+  path: string,
+  detail: string,
+): MutableRepository | undefined => {
   const repository = Array.from(runtime.repositories.values()).find((state) =>
     state.repository.path === path
   );
   if (repository !== undefined) {
     repository.blocked ??= `request retention failed: ${detail}`;
   }
+  return repository;
 };
 
 const release = async (runtime: DaemonRuntime, id: string): Promise<void> => {
@@ -153,8 +158,9 @@ const release = async (runtime: DaemonRuntime, id: string): Promise<void> => {
   const removed = await runtime.store.removeRun(obsolete.path, obsolete.id);
   if (removed.ok) runtime.obsolete.delete(id);
   else {
-    blockRetention(runtime, obsolete.path, removed.error);
+    const blocked = blockRetention(runtime, obsolete.path, removed.error);
     await publish(runtime);
+    if (blocked !== undefined) pump(runtime, blocked);
   }
 };
 
@@ -481,8 +487,30 @@ const settleUnstarted = async (
   await publish(runtime);
 };
 
+const settleBlocked = async (
+  runtime: DaemonRuntime,
+  repository: MutableRepository,
+  blocked: string,
+): Promise<void> => {
+  for (
+    let job = repository.queue.shift();
+    job !== undefined;
+    job = repository.queue.shift()
+  ) {
+    await settleUnstarted(runtime, repository, job, {
+      ...failedTerminal(job, `repository is blocked: ${blocked}`),
+      kind: "failure",
+      code: 1,
+    });
+  }
+};
+
 const pump = (runtime: DaemonRuntime, repository: MutableRepository): void => {
-  if (runtime.closed || repository.active !== null || repository.blocked !== null) return;
+  if (runtime.closed || repository.active !== null) return;
+  if (repository.blocked !== null) {
+    void settleBlocked(runtime, repository, repository.blocked);
+    return;
+  }
   const job = repository.queue.shift();
   if (job === undefined) return;
   job.started = new Date().toISOString();
