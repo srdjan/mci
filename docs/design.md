@@ -72,6 +72,11 @@ format version, private directory, and active process record. The runner writes 
 initial journal before it creates a script or launches a process. Journal updates use a
 temporary file and atomic rename.
 
+On each acquisition, the workspace module removes orphan `run-*` directories from earlier
+runs. It skips every other `run-*` entry, such as a file, a symlink, or a directory whose
+name is not a private name. A skipped entry never blocks a run. A conforming directory
+that cannot be removed still fails the acquisition.
+
 The workspace module resolves each step directory when that step starts. A prior step can
 create the directory. Canonical containment checks reject configured directories outside
 the workspace. The workspace module writes each script with private file permissions.

@@ -54,6 +54,27 @@ Deno.test("workspace recovery removes orphan scripts without removing project fi
     }
   }));
 
+Deno.test("workspace recovery skips stray run entries that are not private directories", () =>
+  inWorkspace(async (workspace) => {
+    const outside = await Deno.makeTempDir();
+    try {
+      await Deno.mkdir(`${workspace}/.mci`);
+      await Deno.writeTextFile(`${workspace}/.mci/run-notes.txt`, "notes");
+      await Deno.mkdir(`${workspace}/.mci/run-with space`);
+      await Deno.mkdir(`${workspace}/.mci/run-`);
+      await Deno.writeTextFile(`${outside}/keep`, "outside");
+      await Deno.symlink(outside, `${workspace}/.mci/run-link`);
+      const lease = unwrap(await acquireWorkspace(workspace));
+      unwrap(await lease.close());
+      for (const name of ["run-notes.txt", "run-with space", "run-", "run-link"]) {
+        assert(await exists(`${workspace}/.mci/${name}`), `${name} was removed`);
+      }
+      equal(await Deno.readTextFile(`${outside}/keep`), "outside");
+    } finally {
+      await Deno.remove(outside, { recursive: true });
+    }
+  }));
+
 Deno.test("invalid recovery journals preserve files and release the workspace lock", () =>
   inWorkspace(async (workspace) => {
     await Deno.mkdir(`${workspace}/.mci`);

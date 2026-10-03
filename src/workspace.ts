@@ -127,7 +127,11 @@ const recoverState = async (state: string): Promise<Result<void>> => {
   if (!entries.ok) return entries;
   for (const entry of entries.value) {
     if (entry.name.startsWith("run-")) {
-      const removed = await removePrivateDirectory(state, `${state}/${entry.name}`);
+      const path = `${state}/${entry.name}`;
+      if (!entry.isDirectory || entry.isSymlink || !privateDirectory(state, path)) {
+        continue;
+      }
+      const removed = await removePrivateDirectory(state, path);
       if (!removed.ok) return err(`orphan script cleanup failed: ${removed.error}`);
     } else if (entry.name.startsWith(".journal-") && entry.isFile && !entry.isSymlink) {
       const removed = await attempt(() => Deno.remove(`${state}/${entry.name}`));
