@@ -676,6 +676,7 @@ const prepareSubmission = async (
     started: job.started,
     log: job.log,
     total: job.plan.steps.length,
+    begun: false,
   };
   const accepted = await runtime.store.accept(pending);
   if (!accepted.ok) {
@@ -963,6 +964,13 @@ const prepareRuntime = async (
         }
         state.latest = completed;
       }
+      const finished = await store.finish(pending.id);
+      if (!finished.ok) {
+        state.blocked ??= `request journal cleanup failed: ${finished.error}`;
+      }
+      continue;
+    }
+    if (!pending.begun) {
       const finished = await store.finish(pending.id);
       if (!finished.ok) {
         state.blocked ??= `request journal cleanup failed: ${finished.error}`;

@@ -62,6 +62,7 @@ const prepareRecovery = async (workspace: string, directory: string) => {
         started: terminal.started,
         log: terminal.log,
         total: 1,
+        begun: true,
       })).ok,
     );
     return terminal;

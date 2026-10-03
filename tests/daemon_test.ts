@@ -788,6 +788,147 @@ Deno.test({
     }),
 });
 
+Deno.test({
+  name: "daemon restart does not record a queued request that never started",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+      const daemon = new Deno.Command(Deno.execPath(), {
+        args: cliSourceArgs(["daemon"]),
+        env: { ...Deno.env.toObject(), MCI_HOME: directory },
+        stdin: "null",
+        stdout: "null",
+        stderr: "null",
+      }).spawn();
+      try {
+        const paths = servicePaths(directory);
+        assert(paths.ok, paths.ok ? "" : paths.error);
+        await waitFor(() => exists(paths.value.socket));
+        const registered = await rpc(
+          { version: 1, op: "register", path: workspace },
+          directory,
+        );
+        assert(registered.ok, registered.ok ? "" : registered.error);
+        const first = submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "first.yml",
+            job: "check",
+            source: fixture("      - run: touch started; sleep 30"),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+        await waitFor(() => exists(`${workspace}/started`));
+        const second = submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "second.yml",
+            job: "check",
+            source: fixture("      - run: touch forbidden"),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+        await waitFor(async () => {
+          const status = await rpc({ version: 1, op: "status" }, directory);
+          return status.ok && status.value.repositories[0]?.queued === 1;
+        });
+        const running = await rpc({ version: 1, op: "status" }, directory);
+        assert(running.ok, running.ok ? "" : running.error);
+        const firstId = running.value.repositories[0]?.active?.id;
+        assert(firstId !== undefined);
+        const journal = JSON.parse(
+          await Deno.readTextFile(`${directory}/requests.json`),
+        ) as { requests: { id: string; workflow: string }[] };
+        const secondId = journal.requests.find((entry) => entry.workflow === "second.yml")
+          ?.id;
+        assert(secondId !== undefined);
+        daemon.kill("SIGKILL");
+        await daemon.status;
+        assert(!(await first).ok);
+        assert(!(await second).ok);
+        await waitFor(async () => !await exists(`${workspace}/.mci/run.json`));
+        const restarted = await startDaemon({ directory });
+        assert(restarted.ok, restarted.ok ? "" : restarted.error);
+        try {
+          const current = await rpc({ version: 1, op: "status" }, directory);
+          assert(current.ok, current.ok ? "" : current.error);
+          equal(current.value.repositories[0]?.latest?.id, firstId);
+          equal(current.value.repositories[0]?.latest?.kind, "interrupted");
+          equal(current.value.repositories[0]?.blocked, null);
+          equal(
+            JSON.parse(await Deno.readTextFile(`${directory}/requests.json`)).requests,
+            [],
+          );
+          for await (const entry of Deno.readDir(`${workspace}/.mci/ci/requests`)) {
+            assert(!entry.name.startsWith(secondId), entry.name);
+          }
+          assert(!await exists(`${workspace}/forbidden`));
+        } finally {
+          await restarted.value.close();
+        }
+      } finally {
+        try {
+          daemon.kill("SIGKILL");
+        } catch { /* The daemon already exited. */ }
+        await daemon.status;
+        await Deno.remove(directory, { recursive: true });
+      }
+    }),
+});
+
+Deno.test("daemon restart records a legacy journal entry as interrupted", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+    try {
+      const first = await startDaemon({ directory });
+      assert(first.ok);
+      const registered = await rpc(
+        { version: 1, op: "register", path: workspace },
+        directory,
+      );
+      assert(registered.ok, registered.ok ? "" : registered.error);
+      await first.value.close();
+      const log = `${workspace}/.mci/ci/requests/legacy.log`;
+      await Deno.mkdir(`${workspace}/.mci/ci/requests`, { recursive: true });
+      await Deno.writeTextFile(log, "");
+      await Deno.writeTextFile(
+        `${directory}/requests.json`,
+        JSON.stringify({
+          version: 1,
+          requests: [{
+            id: "legacy",
+            repositoryId: registered.value.repositories[0]?.id,
+            workflow: "legacy.yml",
+            job: "check",
+            started: "2026-10-03T18:00:00.000Z",
+            log,
+            total: 1,
+          }],
+        }),
+      );
+      const second = await startDaemon({ directory });
+      assert(second.ok, second.ok ? "" : second.error);
+      try {
+        const repository = second.value.snapshot().repositories[0];
+        equal(repository?.latest?.id, "legacy");
+        equal(repository?.latest?.kind, "interrupted");
+      } finally {
+        await second.value.close();
+      }
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
 const failingListener = (failures: number) => (path: string): DaemonListener => {
   const real = Deno.listen({ transport: "unix", path });
   let remaining = failures;

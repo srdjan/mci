@@ -15,6 +15,7 @@ export type PendingRequest = {
   readonly started: string;
   readonly log: string;
   readonly total: number;
+  readonly begun: boolean;
 };
 
 export type RunFiles = {
@@ -226,10 +227,14 @@ const decodeLegacyRegistry = (value: unknown): Result<readonly string[]> => {
   return ok(value.workspaces);
 };
 
+const pendingKeys = ["id", "repositoryId", "workflow", "job", "started", "log", "total"];
+
+// A journal from an older daemon has no begun key. It decodes as begun.
 const decodePending = (value: unknown): Result<PendingRequest> => {
   if (
     !object(value) ||
-    !exact(value, ["id", "repositoryId", "workflow", "job", "started", "log", "total"]) ||
+    !(exact(value, pendingKeys) ||
+      (exact(value, [...pendingKeys, "begun"]) && typeof value.begun === "boolean")) ||
     !nonempty(value.id) || !nonempty(value.repositoryId) || !nonempty(value.workflow) ||
     !nonempty(value.job) || !timestamp(value.started) || !absolute(value.log) ||
     typeof value.total !== "number" || !Number.isSafeInteger(value.total) ||
@@ -243,6 +248,7 @@ const decodePending = (value: unknown): Result<PendingRequest> => {
     started: value.started,
     log: value.log,
     total: value.total,
+    begun: value.begun !== false,
   });
 };
 
@@ -505,7 +511,9 @@ export const openDaemonStore = async (
     accept: (request) => mutateJournal((current) => [...current, request]),
     begin: (id, started) =>
       mutateJournal((current) =>
-        current.map((request) => request.id === id ? { ...request, started } : request)
+        current.map((request) =>
+          request.id === id ? { ...request, started, begun: true } : request
+        )
       ),
     finish: (id) =>
       mutateJournal((current) => current.filter((request) => request.id !== id)),
