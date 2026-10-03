@@ -929,6 +929,54 @@ Deno.test("daemon restart records a legacy journal entry as interrupted", () =>
     }
   }));
 
+Deno.test("a management client that does not read cannot stall later registrations", async () => {
+  const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+  const base = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-many-" });
+  const daemon = await startDaemon({ directory });
+  assert(daemon.ok, daemon.ok ? "" : daemon.error);
+  const paths = servicePaths(directory);
+  assert(paths.ok, paths.ok ? "" : paths.error);
+  let stalled: Deno.UnixConn | null = null;
+  try {
+    // Long names keep the count low. The socket buffers hold 16 KiB, so a snapshot
+    // above 24 KiB cannot fit.
+    const make = async (index: number): Promise<string> => {
+      const name = index.toString().padStart(3, "0");
+      const path = [name, "a", "b"].map((part) => part.padEnd(240, "x")).reduce(
+        (parent, part) => `${parent}/${part}`,
+        base,
+      );
+      await Deno.mkdir(path, { recursive: true });
+      return path;
+    };
+    for (let index = 0; index < 40; index++) {
+      const registered = await rpc(
+        { version: 1, op: "register", path: await make(index) },
+        directory,
+      );
+      assert(registered.ok, registered.ok ? "" : registered.error);
+    }
+    stalled = await Deno.connect({ transport: "unix", path: paths.value.socket });
+    assert(
+      (await sendJson(stalled, { version: 1, op: "register", path: await make(40) })).ok,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const timer = Promise.withResolvers<null>();
+    const timeout = setTimeout(() => timer.resolve(null), 2000);
+    const second = await Promise.race([
+      rpc({ version: 1, op: "register", path: await make(41) }, directory),
+      timer.promise,
+    ]).finally(() => clearTimeout(timeout));
+    assert(second !== null, "a non-reading client stalled a later registration");
+    assert(second.ok, second.ok ? "" : second.error);
+  } finally {
+    stalled?.close();
+    await daemon.value.close();
+    await Deno.remove(directory, { recursive: true });
+    await Deno.remove(base, { recursive: true });
+  }
+});
+
 const failingListener = (failures: number) => (path: string): DaemonListener => {
   const real = Deno.listen({ transport: "unix", path });
   let remaining = failures;

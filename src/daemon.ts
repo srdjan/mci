@@ -753,6 +753,53 @@ const submitRequest = async (
   }
 };
 
+const manageRepositories = async (
+  runtime: DaemonRuntime,
+  request: Extract<Request, { readonly op: "register" | "unregister" }>,
+): Promise<Response> => {
+  const done = (): Response => ({ version: 1, type: "ok", snapshot: snapshot(runtime) });
+  if (request.op === "register") {
+    const registered = await runtime.store.register(request.path);
+    if (!registered.ok) return responseError("storage", registered.error);
+    if (runtime.repositories.has(registered.value.id)) return done();
+    const state: MutableRepository = {
+      repository: registered.value,
+      queue: [],
+      active: null,
+      latest: null,
+      blocked: null,
+      accepting: 0,
+      acceptance: Promise.resolve(),
+      removing: false,
+    };
+    const recovered = await recoverWorkspace(registered.value.path);
+    // A busy lock is not a block: the worker recovers the workspace before each job.
+    if (!recovered.ok) state.blocked = recovered.error;
+    const latest = await runtime.store.readLatest(registered.value);
+    if (!latest.ok) state.blocked ??= latest.error;
+    else state.latest = latest.value;
+    runtime.repositories.set(registered.value.id, state);
+    const published = await publish(runtime);
+    return published.ok ? done() : responseError("storage", published.error);
+  }
+  const state = Array.from(runtime.repositories.values()).find((candidate) =>
+    candidate.repository.id === request.repository ||
+    candidate.repository.path === request.repository
+  );
+  if (state === undefined) {
+    return responseError("unregistered", "repository is not registered");
+  }
+  if (state.active !== null || state.queue.length > 0 || state.accepting > 0) {
+    return responseError("busy", "repository has accepted requests");
+  }
+  state.removing = true;
+  const removed = await runtime.store.unregister(state.repository.id);
+  if (removed.ok) runtime.repositories.delete(state.repository.id);
+  else state.removing = false;
+  const published = removed.ok ? await publish(runtime) : removed;
+  return published.ok ? done() : responseError("storage", published.error);
+};
+
 const handleOperation = async (
   runtime: DaemonRuntime,
   connection: Deno.UnixConn,
@@ -761,80 +808,6 @@ const handleOperation = async (
 ): Promise<void> => {
   if (request.op === "submit") {
     await submitRequest(runtime, connection, messages, request);
-    return;
-  }
-  if (request.op === "register") {
-    const registered = await runtime.store.register(request.path);
-    if (!registered.ok) {
-      await sendJson(connection, responseError("storage", registered.error));
-    } else {
-      const existing = runtime.repositories.get(registered.value.id);
-      if (existing !== undefined) {
-        await sendJson(connection, {
-          version: 1,
-          type: "ok",
-          snapshot: snapshot(runtime),
-        });
-        closeConnection(connection);
-        return;
-      }
-      const state: MutableRepository = {
-        repository: registered.value,
-        queue: [],
-        active: null,
-        latest: null,
-        blocked: null,
-        accepting: 0,
-        acceptance: Promise.resolve(),
-        removing: false,
-      };
-      const recovered = await recoverWorkspace(registered.value.path);
-      // A busy lock is not a block: the worker recovers the workspace before each job.
-      if (!recovered.ok) state.blocked = recovered.error;
-      const latest = await runtime.store.readLatest(registered.value);
-      if (!latest.ok) state.blocked ??= latest.error;
-      else state.latest = latest.value;
-      runtime.repositories.set(registered.value.id, state);
-      const published = await publish(runtime);
-      await sendJson(
-        connection,
-        published.ok
-          ? { version: 1, type: "ok", snapshot: snapshot(runtime) }
-          : responseError("storage", published.error),
-      );
-    }
-    closeConnection(connection);
-    return;
-  }
-  if (request.op === "unregister") {
-    const state = Array.from(runtime.repositories.values()).find((candidate) =>
-      candidate.repository.id === request.repository ||
-      candidate.repository.path === request.repository
-    );
-    if (state === undefined) {
-      await sendJson(
-        connection,
-        responseError("unregistered", "repository is not registered"),
-      );
-    } else if (state.active !== null || state.queue.length > 0 || state.accepting > 0) {
-      await sendJson(
-        connection,
-        responseError("busy", "repository has accepted requests"),
-      );
-    } else {
-      state.removing = true;
-      const removed = await runtime.store.unregister(state.repository.id);
-      if (removed.ok) runtime.repositories.delete(state.repository.id);
-      else state.removing = false;
-      const published = removed.ok ? await publish(runtime) : removed;
-      await sendJson(
-        connection,
-        published.ok
-          ? { version: 1, type: "ok", snapshot: snapshot(runtime) }
-          : responseError("storage", published.error),
-      );
-    }
-    closeConnection(connection);
     return;
   }
   if (request.op === "cancel") {
@@ -857,15 +830,15 @@ const handleRequest = (
   if (request.op !== "register" && request.op !== "unregister") {
     return handleOperation(runtime, connection, messages, request);
   }
-  const operation = runtime.management.then(() => {
-    if (runtime.closed) {
-      closeConnection(connection);
-      return;
-    }
-    return handleOperation(runtime, connection, messages, request);
+  const operation = runtime.management.then(() =>
+    runtime.closed ? null : manageRepositories(runtime, request)
+  );
+  runtime.management = operation.then(() => {}, () => {});
+  // The chain ends before the send, so a client that does not read cannot stall it.
+  return operation.then(async (response) => {
+    if (response !== null) await sendJson(connection, response);
+    closeConnection(connection);
   });
-  runtime.management = operation.catch(() => {});
-  return operation;
 };
 
 const firstMessage = async (
