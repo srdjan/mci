@@ -2,6 +2,7 @@ import { rpc, submit } from "../src/client.ts";
 import { type DaemonListener, startDaemon } from "../src/daemon.ts";
 import { readJson, sendJson } from "../src/ipc.ts";
 import { servicePaths } from "../src/paths.ts";
+import { attempt } from "../src/result.ts";
 import { cliSourceArgs } from "../src/runtime.ts";
 import { assert, equal, exists, fixture, inWorkspace, waitFor } from "./helpers.ts";
 import { withDaemon } from "./daemon_helpers.ts";
@@ -976,6 +977,58 @@ Deno.test("a management client that does not read cannot stall later registratio
     await Deno.remove(base, { recursive: true });
   }
 });
+
+Deno.test("a stalled path resolution does not delay a submission for another path", () =>
+  inWorkspace((slow) =>
+    inWorkspace(async (fast) => {
+      const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+      const release = Promise.withResolvers<void>();
+      const daemon = await startDaemon({
+        directory,
+        resolvePath: async (path) => {
+          if (path === slow) await release.promise;
+          return await attempt(() => Deno.realPath(path));
+        },
+      });
+      assert(daemon.ok, daemon.ok ? "" : daemon.error);
+      const run = (path: string) =>
+        submit(
+          {
+            version: 1,
+            op: "submit",
+            path,
+            workflow: "routing.yml",
+            job: "check",
+            source: fixture("      - run: printf done"),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+      try {
+        for (const path of [slow, fast]) {
+          assert((await rpc({ version: 1, op: "register", path }, directory)).ok);
+        }
+        const stalled = run(slow);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const timer = Promise.withResolvers<null>();
+        const timeout = setTimeout(() => timer.resolve(null), 3000);
+        const other = await Promise.race([run(fast), timer.promise]).finally(() =>
+          clearTimeout(timeout)
+        );
+        assert(other !== null, "a stalled path delayed another path");
+        assert(other.ok, other.ok ? "" : other.error);
+        equal(other.value.kind, "success");
+        release.resolve();
+        const first = await stalled;
+        assert(first.ok, first.ok ? "" : first.error);
+      } finally {
+        release.resolve();
+        await daemon.value.close();
+        await Deno.remove(directory, { recursive: true });
+      }
+    })
+  ));
 
 const failingListener = (failures: number) => (path: string): DaemonListener => {
   const real = Deno.listen({ transport: "unix", path });

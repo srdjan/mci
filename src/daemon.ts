@@ -66,7 +66,7 @@ type DaemonRuntime = {
   readonly holds: Map<string, number>;
   readonly obsolete: Map<string, { readonly path: string; readonly id: string }>;
   management: Promise<void>;
-  routing: Promise<void>;
+  readonly routing: Map<string, Promise<void>>;
   readonly resolvePath: (path: string) => Promise<Result<string>>;
   readonly requestDeadlineMs: number;
   closed: boolean;
@@ -730,10 +730,17 @@ const submitRequest = async (
   messages: AsyncGenerator<Result<unknown>>,
   request: Extract<Request, { readonly op: "submit" }>,
 ): Promise<void> => {
-  const reservation = runtime.routing.then(() =>
+  // Requests for one path text keep their arrival order. Other paths do not wait.
+  const reservation = (runtime.routing.get(request.path) ?? Promise.resolve()).then(() =>
     registeredRepository(runtime, request.path)
   );
-  runtime.routing = reservation.then(() => {}).catch(() => {});
+  const settled = reservation.then(() => {}, () => {});
+  runtime.routing.set(request.path, settled);
+  void settled.then(() => {
+    if (runtime.routing.get(request.path) === settled) {
+      runtime.routing.delete(request.path);
+    }
+  });
   const reserved = await reservation;
   if (!reserved.ok) {
     await sendJson(connection, responseError("unregistered", reserved.error));
@@ -894,7 +901,7 @@ const prepareRuntime = async (
     holds: new Map(),
     obsolete: new Map(),
     management: Promise.resolve(),
-    routing: Promise.resolve(),
+    routing: new Map(),
     resolvePath,
     requestDeadlineMs,
     closed: false,
