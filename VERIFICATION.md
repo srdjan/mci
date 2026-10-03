@@ -115,6 +115,22 @@ does not start, and the registry rules. An installation into temporary folders w
 real `swift`, `codesign`, and `plutil` produced a bundle that passed
 `codesign --verify --strict`, and a second run replaced it.
 
+On 2026-10-03, `deno task monitor:install` installed `~/Applications/mci Monitor.app` for
+this repository. The bundle passed `codesign --verify --strict`, and the registry held the
+repository path. A screenshot showed the PASS icon in the menu bar. The first icon was a
+plain green disc, because a one-color symbol palette filled the checkmark; a tinted
+monochrome symbol fixed it. During a pre-commit run, the icon showed the RUNNING arrows,
+and it returned to PASS. Reinstalling over the running app quit, replaced, and restarted
+it.
+
+The user checked the panel, the log window with colors, Reload, Show in Finder, copy,
+window reuse, Add repository, and Remove. All worked. "Launch at login" first appeared
+disabled. `SMAppService.mainApp` reports `notFound` for an app that was never registered.
+A probe showed that `register()` works for an ad-hoc signed bundle: the status changed
+from `notFound` to `enabled`, and `unregister()` changed it to `notRegistered`. After the
+fix, the user turned the option on, and the box stayed checked. A start at the next login
+is not yet confirmed.
+
 macOS accepted the app as a notarized developer application. Application startup was
 requested, but native inspection did not confirm completed startup or menu display. The
 installed plugin and app configuration are checked. Visual menu confirmation remains
