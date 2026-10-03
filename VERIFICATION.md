@@ -133,9 +133,9 @@ The "Launch at login" checkbox first appeared disabled. `SMAppService.mainApp` r
 for an ad-hoc signed bundle: the status changed from `notFound` to `enabled`, and
 `unregister()` changed it to `notRegistered`. After commit `c78b2a5` kept the checkbox
 enabled for `notFound`, the user turned on "Launch at login", and the checkbox stayed
-checked. This record does not include plan step 5: a status read after a rebuild and
-reinstall, which can change the ad-hoc signature. A start at the next login is not yet
-confirmed.
+checked. For plan step 5, the installer then rebuilt and reinstalled the app with commit
+`469ee32`, which gave the bundle a new ad-hoc signature. The user read the panel again,
+and "Launch at login" was still checked. A start at the next login is not yet confirmed.
 
 ## Evidence limits
 
