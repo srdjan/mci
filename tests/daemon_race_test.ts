@@ -131,6 +131,48 @@ Deno.test("restart restores a durable completion after latest projection fails",
     }
   }));
 
+Deno.test("restart recovers a pending request whose spool log is missing", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-missing-log-" });
+    try {
+      const recovery = await prepareRecovery(workspace, directory);
+      const pending = await recovery.save("pending", "2026-10-03T18:00:01.000Z");
+      await Deno.remove(`${workspace}/.mci`, { recursive: true });
+      const daemon = await startDaemon({ directory });
+      assert(daemon.ok, daemon.ok ? "" : daemon.error);
+      try {
+        const repository = daemon.value.snapshot().repositories[0];
+        equal(repository?.blocked, null);
+        equal(repository?.latest?.kind, "interrupted");
+        equal(repository?.latest?.id, pending.id);
+        equal(
+          JSON.parse(await Deno.readTextFile(`${directory}/requests.json`)).requests,
+          [],
+        );
+        equal(await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`), "");
+        const result = await submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "after-recovery.yml",
+            job: "check",
+            source: fixture("      - run: touch after-recovery"),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+        assert(result.ok, result.ok ? "" : result.error);
+        equal(result.value.kind, "success");
+      } finally {
+        await daemon.value.close();
+      }
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
 Deno.test("retention failure blocks later submissions without launching commands", () =>
   inWorkspace((workspace) =>
     withRaceDaemon(async (paths) => {

@@ -489,6 +489,16 @@ export const openDaemonStore = async (
       const update = prior.then(async () => {
         const directory = await prepareRequestDirectory(path);
         if (!directory.ok) return directory;
+        // A missing spool log counts as an empty log, so recovery can finish the entry.
+        const logFound = await metadata(terminal.log);
+        if (!logFound.ok) return logFound;
+        if (
+          logFound.value === null &&
+          terminal.log === `${directory.value}/${terminal.id}.log`
+        ) {
+          const created = await createPrivateFile(terminal.log);
+          if (!created.ok) return created;
+        }
         const durable = await atomicJson(
           `${directory.value}/${terminal.id}.json`,
           terminal,

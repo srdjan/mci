@@ -68,6 +68,10 @@ repository with a failure result. The detail names the block. The daemon starts 
 command for a blocked repository, and it settles a request that arrives later in the same
 way.
 
+When a pending request has no spool log on restart, the daemon treats the log as empty. It
+creates an empty log in the request directory and finishes the journal entry. A log path
+outside that directory keeps the failure.
+
 Each snapshot carries an active request, queue count, latest completed result, and blocked
 state for every repository. New work does not replace the latest completed result.
 
