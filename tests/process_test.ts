@@ -554,9 +554,10 @@ Deno.test("recoverProcess escalates to SIGKILL after its own SIGTERM", async () 
 });
 
 Deno.test("recoverProcess escalates when the leader exits late in the grace period", async () => {
+  // The first check, every grace poll, and the final grace check see the leader.
   const graceChecks = policy.graceMs / policy.pollMs;
   const fake = escalationCapabilities((inspections) =>
-    inspections <= 1 + graceChecks ? matchingIdentity : null
+    inspections <= 2 + graceChecks ? matchingIdentity : null
   );
   equal(
     await recoverProcess(recoveryRecord, {
@@ -565,7 +566,7 @@ Deno.test("recoverProcess escalates when the leader exits late in the grace peri
     }),
     ok(undefined),
   );
-  assert(fake.groupSignals.includes("SIGKILL"));
+  equal(fake.groupSignals, ["SIGTERM", "SIGKILL", 0]);
 });
 
 const recoveryRecord = {
