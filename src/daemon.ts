@@ -470,8 +470,8 @@ const complete = async (
   }
   if (repository.active === job) repository.active = null;
   job.child = null;
-  job.resolve(result);
   await publish(runtime);
+  job.resolve(result);
   pump(runtime, repository);
 };
 
@@ -490,8 +490,8 @@ const settleUnstarted = async (
   }
   await retire(runtime, repository.repository.path, result);
   job.child = null;
-  job.resolve(result);
   await publish(runtime);
+  job.resolve(result);
 };
 
 const settleBlocked = async (
