@@ -455,6 +455,32 @@ const complete = async (
   pump(runtime, repository);
 };
 
+// A job that left the queue before it started is not a result: it never replaces
+// the latest result, and only its own client receives its terminal.
+const settleUnstarted = async (
+  runtime: DaemonRuntime,
+  repository: MutableRepository,
+  job: Job,
+  terminal: Terminal,
+): Promise<void> => {
+  const result: Terminal = runtime.closed
+    ? {
+      ...terminal,
+      kind: "interrupted",
+      code: 143,
+      detail: "The daemon stopped before completion.",
+    }
+    : terminal;
+  const finished = await runtime.store.finish(job.id);
+  if (!finished.ok) {
+    repository.blocked ??= `request journal cleanup failed: ${finished.error}`;
+  }
+  await retire(runtime, repository.repository.path, result);
+  job.child = null;
+  job.resolve(result);
+  await publish(runtime);
+};
+
 const pump = (runtime: DaemonRuntime, repository: MutableRepository): void => {
   if (runtime.closed || repository.active !== null || repository.blocked !== null) return;
   const job = repository.queue.shift();
@@ -486,7 +512,7 @@ const cancelQueued = async (
   }
   job.repository.queue.splice(index, 1);
   job.cancelReason = reason;
-  await complete(runtime, job.repository, job, failedTerminal(job, reason));
+  await settleUnstarted(runtime, job.repository, job, failedTerminal(job, reason));
 };
 
 const registeredRepository = async (

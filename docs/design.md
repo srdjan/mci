@@ -54,6 +54,15 @@ Registration and daemon startup recover each workspace. A held workspace lock, s
 direct `mci run`, does not block the repository. The worker acquires the workspace before
 each job, so recovery still precedes the next command.
 
+A request that leaves the queue before it starts is not a result. Its own client receives
+the terminal, and the daemon removes its journal entry and spool. It never replaces the
+latest completed result or `latest.log`. This rule also covers a queued request at
+shutdown. An active request at shutdown still records INTERRUPTED as the latest result.
+
+The request journal does not record whether a request started. After a daemon crash,
+restart recovery therefore records every unfinished request as INTERRUPTED. A queued
+request that never started can still replace the latest result in this case.
+
 Each snapshot carries an active request, queue count, latest completed result, and blocked
 state for every repository. New work does not replace the latest completed result.
 

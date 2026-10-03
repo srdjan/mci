@@ -474,6 +474,83 @@ Deno.test("a queued cancellation does not cancel the active owner", () =>
     })
   ));
 
+Deno.test("a cancelled queued request does not replace the latest completed result", () =>
+  inWorkspace((workspace) =>
+    withDaemon(workspace, async (directory) => {
+      const first = await submit(
+        {
+          version: 1,
+          op: "submit",
+          path: workspace,
+          workflow: "first.yml",
+          job: "check",
+          source: fixture("      - run: printf known-output"),
+          env: capturedEnv(),
+        },
+        new AbortController().signal,
+        directory,
+      );
+      assert(first.ok && first.value.kind === "success");
+      const second = submit(
+        {
+          version: 1,
+          op: "submit",
+          path: workspace,
+          workflow: "second.yml",
+          job: "check",
+          source: fixture(
+            "      - run: touch active-ready; while [ ! -f release ]; do sleep 0.01; done",
+          ),
+          env: capturedEnv(),
+        },
+        new AbortController().signal,
+        directory,
+      );
+      try {
+        await waitFor(() => exists(`${workspace}/active-ready`));
+        const controller = new AbortController();
+        const third = submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "third.yml",
+            job: "check",
+            source: fixture("      - run: touch forbidden"),
+            env: capturedEnv(),
+          },
+          controller.signal,
+          directory,
+        );
+        await waitFor(async () => {
+          const current = await rpc({ version: 1, op: "status" }, directory);
+          return current.ok && current.value.repositories[0]?.queued === 1;
+        });
+        controller.abort("SIGINT");
+        const cancelled = await third;
+        assert(cancelled.ok, cancelled.ok ? "" : cancelled.error);
+        equal(cancelled.value.kind, "cancelled");
+        const current = await rpc({ version: 1, op: "status" }, directory);
+        assert(current.ok, current.ok ? "" : current.error);
+        equal(current.value.repositories[0]?.latest?.id, first.value.id);
+        const latest = JSON.parse(
+          await Deno.readTextFile(`${workspace}/.mci/ci/latest.json`),
+        );
+        equal(latest.id, first.value.id);
+        assert(
+          (await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`)).includes(
+            "known-output",
+          ),
+        );
+        assert(await exists(first.value.log));
+        assert(!await exists(`${workspace}/forbidden`));
+      } finally {
+        await Deno.writeTextFile(`${workspace}/release`, "release");
+        await second;
+      }
+    })
+  ));
+
 Deno.test("an active cancellation cleans its process before the next request", () =>
   inWorkspace((workspace) =>
     withDaemon(workspace, async (directory) => {
