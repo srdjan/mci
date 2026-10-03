@@ -2,3 +2,4 @@ dist/
 .mci/
 demos/
 .DS_Store
+monitor/.build/

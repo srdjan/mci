@@ -1,0 +1,6 @@
+{
+  "text": "{not json",
+  "expected": {
+    "error": "json"
+  }
+}

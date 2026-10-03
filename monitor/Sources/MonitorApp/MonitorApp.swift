@@ -1,0 +1,42 @@
+import AppKit
+import MonitorCore
+import SwiftUI
+
+@main
+struct MonitorApp: App {
+    // The command line tools ship no SwiftUIMacros plugin, so the app avoids `@State`.
+    // `App` is created once, so plain stored properties keep these objects alive.
+    // MCI_MONITOR_REGISTRY_DIR points a test run at a temporary registry folder.
+    private let model = MonitorModel(
+        registry: ProcessInfo.processInfo.environment["MCI_MONITOR_REGISTRY_DIR"]
+            .map { Registry(directory: $0) } ?? Registry())
+    private let loginItem = LoginItem()
+    private let presenter = AddRepositoryPresenter()
+
+    init() {
+        NSApplication.shared.setActivationPolicy(.accessory)
+        model.start()
+    }
+
+    var body: some Scene {
+        MenuBarExtra {
+            PanelView(model: model, loginItem: loginItem, presenter: presenter)
+        } label: {
+            MenuBarLabel(combined: model.combined)
+        }
+        .menuBarExtraStyle(.window)
+    }
+}
+
+struct MenuBarLabel: View {
+    let combined: CombinedState
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Image(nsImage: coloredSymbol(combined.kind))
+            if combined.attention > 0 {
+                Text("\(combined.attention)")
+            }
+        }
+    }
+}

@@ -1,0 +1,14 @@
+{
+  "text": "{\"version\":1,\"state\":\"cancelled\",\"pid\":4242,\"started\":\"2026-10-03T10:00:00.000Z\",\"finished\":\"2026-10-03T10:00:12.400Z\",\"code\":130}",
+  "expected": {
+    "ok": {
+      "version": 1,
+      "logger": null,
+      "state": "cancelled",
+      "pid": 4242,
+      "started": "2026-10-03T10:00:00.000Z",
+      "finished": "2026-10-03T10:00:12.400Z",
+      "code": 130
+    }
+  }
+}

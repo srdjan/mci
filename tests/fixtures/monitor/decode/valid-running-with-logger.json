@@ -1,0 +1,17 @@
+{
+  "text": "{\"version\":1,\"state\":\"running\",\"pid\":4242,\"started\":\"2026-10-03T10:00:00.000Z\",\"finished\":null,\"code\":null,\"logger\":{\"started\":\"Sat Oct  3 10:00:00 2026\",\"command\":\"deno run src/main.ts ci\"}}",
+  "expected": {
+    "ok": {
+      "version": 1,
+      "logger": {
+        "started": "Sat Oct  3 10:00:00 2026",
+        "command": "deno run src/main.ts ci"
+      },
+      "state": "running",
+      "pid": 4242,
+      "started": "2026-10-03T10:00:00.000Z",
+      "finished": null,
+      "code": null
+    }
+  }
+}
