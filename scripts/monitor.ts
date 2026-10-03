@@ -36,6 +36,11 @@ const safeText = (value: string): string =>
     .replace(/\s+/g, " ")
     .trim();
 
+const basename = (path: string): string => {
+  const trimmed = path.replace(/\/+$/, "");
+  return trimmed.slice(trimmed.lastIndexOf("/") + 1);
+};
+
 const fileUrl = (path: string): string => {
   const absolute = path.startsWith("/") ? path : `${Deno.cwd()}/${path}`;
   const encoded = absolute.split("/").map(encodeURIComponent).join("/");
@@ -151,14 +156,17 @@ const menuLines = (
   hasLog: Result<boolean>,
 ): readonly string[] => {
   const lines = [
-    `mci: ${state.label} | sfimage=${state.symbol} color=${state.color}`,
+    `${
+      safeText(basename(workspace)) || "mci"
+    }: ${state.label} | sfimage=${state.symbol} color=${state.color}`,
     "---",
+    `Repository: ${safeText(workspace)}`,
   ];
   if (state.lastRun !== null) lines.push(`Last run: ${state.lastRun}`);
   if (state.code !== null) lines.push(`Exit code: ${state.code}`);
   if (state.detail !== null) lines.push(`Detail: ${safeText(state.detail)}`);
   if (!hasLog.ok) lines.push(`Log unavailable: ${safeText(hasLog.error)}`);
-  if ((state.lastRun !== null || state.detail !== null || !hasLog.ok)) lines.push("---");
+  lines.push("---");
 
   if (hasLog.ok && hasLog.value) {
     lines.push(

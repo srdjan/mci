@@ -4,7 +4,7 @@ The architecture hardening and CI monitor checks passed on Apple Silicon macOS o
 2026-10-02. The host uses macOS 26.6.2, build 25G83, and Darwin kernel 25.6.0. Deno
 reports `aarch64-apple-darwin`, version 2.9.7, V8 15.0.245.2-rusty, and TypeScript 6.0.3.
 
-The current suite passes **86 tests**, with no failures and one Linux-only test ignored.
+The current suite passes **90 tests**, with no failures and one Linux-only test ignored.
 Formatting, linting, and type checking pass. The local workflow passes against the current
 checkout.
 
@@ -51,7 +51,7 @@ Two runner regressions failed before the corresponding changes. A competing run 
 the same workspace. A directory cleanup failure hid the original exit code 23. Both
 regressions pass after workspace integration.
 
-The installed pre-commit hook passes all 86 active tests and the other verification
+The installed pre-commit hook passes all 90 active tests and the other verification
 checks. A temporary local repository with spaces exercises the Git commit boundary. A
 failed check blocks the commit without creating a revision. A passing check permits the
 commit. The hook resolves the correct repository root in both cases.
@@ -86,11 +86,19 @@ workspaces. Both probes confirmed active workflow cancellation and removal of th
 workspace journal. Logger death left running status for the monitor to identify as
 interrupted.
 
-Thirteen public monitor tests cover display states, malformed records, changed identities,
-legacy records, paths with commas and shell punctuation, missing logs, executable plugin
-generation, collisions, owned reinstall, and internal cache refusal. The generated plugin
-executes against copied sources in a temporary repository. Each new test completed in less
-than one second during the full verification run.
+Seventeen public monitor tests cover display states, malformed records, changed
+identities, legacy records, paths with commas and shell punctuation, missing logs,
+executable plugin generation, collisions, owned reinstall, and internal cache refusal.
+Further tests cover two workspaces in one plugin directory, removal of a legacy plugin
+with the same marker, retention of a legacy plugin with another marker, and installer
+argument errors. One generated plugin executes copied sources against a separate
+workspace; both paths contain commas and shell punctuation.
+
+On 2026-10-03, the installer wrote two plugins into one temporary directory, for meeci and
+for a temporary repository. Each executed plugin showed its own repository name, state,
+and path. The documented `deno task --config ... monitor:install "$PWD"` command, run from
+the temporary repository, replaced that repository's plugin in place. Each new test
+completed in less than one second during the full verification run.
 
 SwiftBar 2.1.1 is installed at `/Applications/SwiftBar.app`. The configured plugin folder
 is `~/Library/Application Support/meeci/SwiftBar`. The installer generated

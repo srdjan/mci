@@ -197,6 +197,18 @@ deno task monitor:install
 open -a SwiftBar
 ```
 
+To monitor another repository, run this command from that repository:
+
+```sh
+deno task --config /path/to/meeci/deno.json monitor:install "$PWD"
+```
+
+The shell expands `$PWD` before `deno task` changes to the meeci directory, so the
+argument names the other repository. The workspace argument must be an absolute path. A
+second optional argument selects the plugin directory. Each repository gets its own
+plugin, and the menu bar title shows the repository name, for example `meeci: PASS`.
+Reinstalling for meeci removes the older `mci-meeci.5s.sh` plugin of the same repository.
+
 The monitor shows the latest CI status and run time. Its menu opens the log or repository
 and refreshes the display. The monitor reads saved results; it does not start CI. If a
 logger exits without writing its final status, the monitor displays interrupted.

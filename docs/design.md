@@ -139,12 +139,22 @@ Completed legacy records remain readable. A live legacy running record displays 
 identity error. The menu opens the fixed log path or repository and refreshes its display.
 The monitor provides no CI trigger.
 
-The installer creates an executable plugin with absolute Deno and repository paths. It
-uses the configured SwiftBar plugin directory when available. Otherwise it selects a
-dedicated directory outside SwiftBar's internal cache. Plugin installation leaves
-unrelated plugins in place. The plugin enters the quoted repository path before using
-`--allow-read=.`. Its process permission permits only `/bin/ps`. Logs and status remain
-local and gitignored.
+The installer creates one executable plugin for each monitored workspace. The plugin uses
+absolute paths for Deno, the workspace, and the meeci source that supplies `deno.json` and
+`scripts/monitor.ts`. The workspace can be any repository. The plugin name is
+`mci-<slug>-<hash>.5s.sh`, from the workspace name and the first eight hex digits of the
+SHA-256 of its canonical path. The marker line with the workspace URL identifies the
+owner. The installer replaces only a plugin that carries the same marker.
+
+The installer uses the configured SwiftBar plugin directory when available. Otherwise it
+selects a dedicated directory outside SwiftBar's internal cache. Plugin installation
+leaves unrelated plugins in place. After a successful install, the installer removes the
+legacy `mci-meeci.5s.sh` only when it carries the same workspace marker. Installers do not
+lock each other. Another writer can replace the legacy file after the ownership check and
+before the removal. The plugin enters the quoted workspace path before using
+`--allow-read=.`. Its process permission permits only `/bin/ps`. The menu title shows the
+workspace name, and the menu lists the workspace path. Logs and status remain local and
+gitignored.
 
 ## Release responsibility
 

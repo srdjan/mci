@@ -3,9 +3,15 @@ import { captureCommand } from "../src/command.ts";
 import { attempt, err, ok, type Result } from "../src/result.ts";
 
 export type InstallMonitorOptions = {
-  readonly repository: string;
+  readonly workspace: string;
+  readonly source?: string;
   readonly pluginDirectory?: string;
   readonly denoPath?: string;
+};
+
+export type InstalledMonitor = {
+  readonly path: string;
+  readonly removedLegacy: boolean;
 };
 
 type PluginDirectory = {
@@ -14,7 +20,7 @@ type PluginDirectory = {
 };
 
 const commandPolicy = { timeoutMs: 500, reapMs: 500 };
-const pluginName = "mci-meeci.5s.sh";
+const legacyPluginName = "mci-meeci.5s.sh";
 
 const fileUrl = (path: string): string => {
   const absolute = path.startsWith("/") ? path : `${Deno.cwd()}/${path}`;
@@ -23,6 +29,26 @@ const fileUrl = (path: string): string => {
 };
 
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
+
+const baseName = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
+
+const workspaceSlug = (workspace: string): string => {
+  const trim = (value: string): string => value.replace(/^-+|-+$/g, "");
+  const slug = trim(
+    trim(baseName(workspace).toLowerCase().replace(/[^a-z0-9]+/g, "-")).slice(0, 32),
+  );
+  return slug.length === 0 ? "workspace" : slug;
+};
+
+const pathDigest = async (path: string): Promise<string> => {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(path));
+  return [...new Uint8Array(digest).slice(0, 4)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+};
+
+const pluginNameFor = async (workspace: string): Promise<string> =>
+  `mci-${workspaceSlug(workspace)}-${await pathDigest(workspace)}.5s.sh`;
 
 const metadata = async (path: string): Promise<Result<Deno.FileInfo | null>> => {
   try {
@@ -77,38 +103,39 @@ const resolveInputs = async (
   options: InstallMonitorOptions,
 ): Promise<
   Result<{
-    readonly repository: string;
+    readonly workspace: string;
     readonly denoPath: string;
     readonly configPath: string;
     readonly monitorPath: string;
   }>
 > => {
   const resolved = await attempt(async () => {
-    const repository = await Deno.realPath(options.repository);
+    const workspace = await Deno.realPath(options.workspace);
+    const source = await Deno.realPath(options.source ?? defaultSource());
     const [denoPath, configPath, monitorPath] = await Promise.all([
       Deno.realPath(options.denoPath ?? Deno.execPath()),
-      Deno.realPath(`${repository}/deno.json`),
-      Deno.realPath(`${repository}/scripts/monitor.ts`),
+      Deno.realPath(`${source}/deno.json`),
+      Deno.realPath(`${source}/scripts/monitor.ts`),
     ]);
-    return { repository, denoPath, configPath, monitorPath };
+    return { workspace, denoPath, configPath, monitorPath };
   });
   if (!resolved.ok) return resolved;
-  const repositoryInfo = await metadata(resolved.value.repository);
-  if (!repositoryInfo.ok) return repositoryInfo;
+  const workspaceInfo = await metadata(resolved.value.workspace);
+  if (!workspaceInfo.ok) return workspaceInfo;
   if (
-    repositoryInfo.value === null || !repositoryInfo.value.isDirectory ||
-    repositoryInfo.value.isSymlink
-  ) return err("repository must be a real directory");
+    workspaceInfo.value === null || !workspaceInfo.value.isDirectory ||
+    workspaceInfo.value.isSymlink
+  ) return err("workspace must be a real directory");
   return resolved;
 };
 
 const pluginSource = (
-  repository: string,
+  workspace: string,
   denoPath: string,
   configPath: string,
   monitorPath: string,
 ): { readonly marker: string; readonly source: string } => {
-  const marker = `# mci-meeci-workspace: ${fileUrl(repository)}`;
+  const marker = `# mci-meeci-workspace: ${fileUrl(workspace)}`;
   const args = [
     denoPath,
     "run",
@@ -118,7 +145,7 @@ const pluginSource = (
     "--allow-read=.",
     "--allow-run=/bin/ps",
     monitorPath,
-    repository,
+    workspace,
   ];
   return {
     marker,
@@ -128,26 +155,30 @@ const pluginSource = (
       marker,
       "# <swiftbar.refreshOnOpen>true</swiftbar.refreshOnOpen>",
       "# <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>",
-      `cd ${shellQuote(repository)} || exit 1`,
+      `cd ${shellQuote(workspace)} || exit 1`,
       `exec ${args.map(shellQuote).join(" ")}`,
       "",
     ].join("\n"),
   };
 };
 
-const ownedPlugin = async (path: string, marker: string): Promise<Result<boolean>> => {
+const ownedPlugin = async (
+  path: string,
+  name: string,
+  marker: string,
+): Promise<Result<boolean>> => {
   const found = await metadata(path);
   if (!found.ok) return found;
   if (found.value === null) return ok(false);
   if (!found.value.isFile || found.value.isSymlink) {
-    return err(`${pluginName} exists and is not a generated plugin file`);
+    return err(`${name} exists and is not a generated plugin file`);
   }
   const content = await attempt(() => Deno.readTextFile(path));
   if (!content.ok) return content;
   const signature = `#!/bin/sh\n# Generated by the meeci monitor installer.\n${marker}\n`;
   return content.value.startsWith(signature)
     ? ok(true)
-    : err(`${pluginName} exists and belongs to another source`);
+    : err(`${name} exists and belongs to another source`);
 };
 
 const removeTemporary = async (path: string, detail: string): Promise<Result<never>> => {
@@ -159,11 +190,12 @@ const removeTemporary = async (path: string, detail: string): Promise<Result<nev
 
 const writePlugin = async (
   directory: string,
+  name: string,
   marker: string,
   source: string,
 ): Promise<Result<string>> => {
-  const target = `${directory}/${pluginName}`;
-  const prior = await ownedPlugin(target, marker);
+  const target = `${directory}/${name}`;
+  const prior = await ownedPlugin(target, name, marker);
   if (!prior.ok) return prior;
   const temporary = await attempt(() =>
     Deno.makeTempFile({ dir: directory, prefix: ".mci-meeci-", suffix: ".tmp" })
@@ -175,16 +207,33 @@ const writePlugin = async (
   });
   if (!prepared.ok) return await removeTemporary(temporary.value, prepared.error);
 
-  const current = await ownedPlugin(target, marker);
+  const current = await ownedPlugin(target, name, marker);
   if (!current.ok) return await removeTemporary(temporary.value, current.error);
   if (current.value !== prior.value) {
     return await removeTemporary(
       temporary.value,
-      `${pluginName} changed during installation`,
+      `${name} changed during installation`,
     );
   }
   const renamed = await attempt(() => Deno.rename(temporary.value, target));
   return renamed.ok ? ok(target) : await removeTemporary(temporary.value, renamed.error);
+};
+
+const removeLegacyPlugin = async (
+  directory: string,
+  marker: string,
+): Promise<Result<boolean>> => {
+  const legacy = `${directory}/${legacyPluginName}`;
+  const owned = await ownedPlugin(legacy, legacyPluginName, marker);
+  if (!owned.ok || !owned.value) return ok(false);
+  try {
+    await Deno.remove(legacy);
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) {
+      return err(`unable to remove legacy plugin ${legacyPluginName}: ${String(error)}`);
+    }
+  }
+  return ok(true);
 };
 
 const setPluginDirectory = async (path: string): Promise<Result<void>> => {
@@ -201,7 +250,7 @@ const setPluginDirectory = async (path: string): Promise<Result<void>> => {
 
 export const installMonitor = async (
   options: InstallMonitorOptions,
-): Promise<Result<string>> => {
+): Promise<Result<InstalledMonitor>> => {
   const inputs = await resolveInputs(options);
   if (!inputs.ok) return inputs;
   const selected = await selectPluginDirectory(options.pluginDirectory);
@@ -224,39 +273,50 @@ export const installMonitor = async (
   }
 
   const generated = pluginSource(
-    inputs.value.repository,
+    inputs.value.workspace,
     inputs.value.denoPath,
     inputs.value.configPath,
     inputs.value.monitorPath,
   );
   const installed = await writePlugin(
     directory.value,
+    await pluginNameFor(inputs.value.workspace),
     generated.marker,
     generated.source,
   );
   if (!installed.ok) return installed;
-  if (!selected.value.setPreference) return installed;
-  const preference = await setPluginDirectory(directory.value);
-  return preference.ok ? installed : preference;
+  if (selected.value.setPreference) {
+    const preference = await setPluginDirectory(directory.value);
+    if (!preference.ok) return preference;
+  }
+  const legacy = await removeLegacyPlugin(directory.value, generated.marker);
+  return legacy.ok
+    ? ok({ path: installed.value, removedLegacy: legacy.value })
+    : err(`installed ${installed.value}; ${legacy.error}`);
 };
 
-const defaultRepository = (): string =>
+const defaultSource = (): string =>
   decodeURIComponent(new URL("../", import.meta.url).pathname).replace(/\/$/, "");
 
 const main = async (args: readonly string[]): Promise<number> => {
-  if (args.length > 1) {
-    console.error("Usage: install-monitor.ts [plugin-directory]");
+  if (args.length > 2) {
+    console.error("Usage: install-monitor.ts [workspace [plugin-directory]]");
     return 2;
   }
-  const installed = await installMonitor({
-    repository: defaultRepository(),
-    pluginDirectory: args[0],
-  });
+  const workspace = args[0] ?? defaultSource();
+  if (!workspace.startsWith("/")) {
+    console.error("workspace must be an absolute path");
+    return 2;
+  }
+  const installed = await installMonitor({ workspace, pluginDirectory: args[1] });
   if (!installed.ok) {
     console.error(installed.error);
     return 1;
   }
-  console.log(installed.value);
+  console.log(installed.value.path);
+  if (installed.value.removedLegacy) {
+    console.log(`Removed legacy plugin ${legacyPluginName}`);
+  }
   return 0;
 };
 
