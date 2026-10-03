@@ -28,6 +28,8 @@ struct PanelView: View {
             footer
         }
         .frame(width: 320)
+        // The default panel material lets a dark desktop show through, even in light mode.
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { loginItem.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) {
             _ in loginItem.refresh()
