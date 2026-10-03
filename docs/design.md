@@ -18,6 +18,14 @@ the authority of the invoking user.
 | `runtime.ts`   | Version, source arguments, and self-invocation for source and compiled modes            |
 | `result.ts`    | Expected failures and exception conversion at library and OS boundaries                 |
 
+The menu bar app lives in the Swift package `monitor/`. `MonitorCore` holds the status
+decoder, display states, the combined state, the registry, and process inspection.
+`MonitorApp` holds the SwiftUI panel and the file watches. `MonitorChecks` runs plain
+checks, because Swift Testing macros fail intermittently with only the Command Line Tools.
+`scripts/install-monitor.ts` builds, signs, and installs the app. `scripts/registry.ts`
+writes the registry. `scripts/app-check.ts` builds the package and runs `MonitorChecks`
+inside `deno task verify` on macOS.
+
 The YAML package version and integrity value reside in `deno.lock`. The parser checks the
 entire document before selected-job validation. An invalid unselected job can therefore
 prevent execution when its YAML syntax is invalid. Unsupported semantics in an unselected
@@ -139,6 +147,34 @@ The status record includes the logger's PID, native process start text, and comm
 reader can compare that identity through bounded `/bin/ps` inspection. An absent or
 changed identity with running status means that the logger was interrupted. Completed
 legacy records remain readable. Logs and status remain local and gitignored.
+
+## Menu bar monitor
+
+The status decoder in `MonitorCore` accepts exactly what `readCiStatus` accepts. Shared
+fixtures in `tests/fixtures/monitor/decode/` hold raw status text and the expected value
+or error category. Both `MonitorChecks` and `tests/monitor_fixtures_test.ts` check every
+fixture, so the two decoders cannot drift apart unnoticed.
+
+A running record is checked with bounded `/bin/ps` inspection, as before. A matching
+logger shows RUNNING; an absent or changed logger shows INTERRUPTED. A registered folder
+that no longer exists shows MISSING. The combined icon shows the most urgent state in this
+order: ERROR, MISSING, INTERRUPTED, FAIL, RUNNING, CANCELLED, PASS, NO RUNS.
+
+The registry `~/Library/Application Support/meeci/monitor.json` holds exactly
+`{ "version": 1, "workspaces": [...] }`. Every writer holds an exclusive lock on
+`monitor.json.lock` around read, validation, write, and rename. Deno `FsFile.lock` and
+Swift `flock(2)` exclude each other; a probe confirmed this on macOS 26.6.2. A writer
+stores canonical directory paths without duplicates and leaves a malformed registry
+unchanged.
+
+The app watches the registry folder and each `.mci/ci/` folder. It recreates a watch after
+its folder is deleted or renamed. A 5 s timer re-checks running loggers, retries missing
+watches, and updates relative times.
+
+The installer stages the bundle next to the destination, signs it ad hoc, and verifies the
+signature. It replaces `~/Applications/mci Monitor.app` only when the destination is a
+real folder whose `Info.plist` carries `MCIInstaller = meeci`. It moves the old bundle
+aside, moves the new one into place, and restores the old one if that move fails.
 
 ## Release responsibility
 

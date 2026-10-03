@@ -4,7 +4,7 @@ The architecture hardening and CI monitor checks passed on Apple Silicon macOS o
 2026-10-02. The host uses macOS 26.6.2, build 25G83, and Darwin kernel 25.6.0. Deno
 reports `aarch64-apple-darwin`, version 2.9.7, V8 15.0.245.2-rusty, and TypeScript 6.0.3.
 
-The current suite passes **76 tests**, with no failures and one Linux-only test ignored.
+The current suite passes **96 tests**, with no failures and one Linux-only test ignored.
 Formatting, linting, and type checking pass. The local workflow passes against the current
 checkout.
 
@@ -60,7 +60,7 @@ Two runner regressions failed before the corresponding changes. A competing run 
 the same workspace. A directory cleanup failure hid the original exit code 23. Both
 regressions pass after workspace integration.
 
-The installed pre-commit hook passes all 76 active tests and the other verification
+The installed pre-commit hook passes all 96 active tests and the other verification
 checks. A temporary local repository with spaces exercises the Git commit boundary. A
 failed check blocks the commit without creating a revision. A passing check permits the
 commit. The hook resolves the correct repository root in both cases.
@@ -98,6 +98,22 @@ interrupted.
 On 2026-10-03, SwiftBar was uninstalled with `brew uninstall --zap --cask swiftbar`. Its
 plugin, its support folder, and the SwiftBar plugin code and tests were removed. A native
 menu bar app replaces them; see `docs/monitor-app-plan.md`.
+
+## Menu bar app
+
+On 2026-10-03 with the Command Line Tools only (Swift 6.4), `deno task verify` ran the
+Deno suite and `app:check` in 11 s wall time with a warm Swift build. `MonitorChecks`
+passed 342 checks in 10 of 10 runs. A cold release build of the package took 22-44 s.
+Swift Testing `@Test` macros failed in 10 of 22 runs, and SwiftUI `@State` does not build
+because the Command Line Tools ship no SwiftUIMacros plugin.
+
+A changed fixture expectation made both `MonitorChecks` and the Deno fixture test fail,
+and both passed after the restore. Nineteen installer tests use fake capabilities and
+temporary folders. They cover a fresh install, an owned reinstall, foreign and symlinked
+destinations, signing and verification failures, rollback, a missing `swift`, an app that
+does not start, and the registry rules. An installation into temporary folders with the
+real `swift`, `codesign`, and `plutil` produced a bundle that passed
+`codesign --verify --strict`, and a second run replaced it.
 
 macOS accepted the app as a notarized developer application. Application startup was
 requested, but native inspection did not confirm completed startup or menu display. The

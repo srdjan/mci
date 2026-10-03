@@ -188,9 +188,28 @@ To read the latest saved output:
 less .mci/ci/latest.log
 ```
 
-A native macOS menu bar app for the saved results is planned in
-[docs/monitor-app-plan.md](docs/monitor-app-plan.md). It replaces the earlier SwiftBar
-plugin.
+The menu bar app `mci Monitor` shows the saved results of one or more repositories. It
+needs the Xcode Command Line Tools (`xcode-select --install`) and no other app. Install it
+for this repository:
+
+```sh
+deno task monitor:install
+```
+
+To add another repository, run this command from that repository, or use "Add repository…"
+in the app:
+
+```sh
+deno task --config /path/to/meeci/deno.json monitor:install "$PWD"
+```
+
+The installer builds the Swift package in `monitor/`, signs the app ad hoc, and installs
+it as `~/Applications/mci Monitor.app`. It replaces only an app that it installed itself.
+It adds the repository to `~/Library/Application Support/meeci/monitor.json` and opens the
+app. One menu bar icon shows the most urgent state of all repositories, with a count of
+the repositories that need attention. The panel lists each repository with its state,
+time, exit code, and duration. The app watches each `.mci/ci/` folder, so a new result
+shows within one second. It reads saved results only and never starts CI.
 
 For a manual check:
 
