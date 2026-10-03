@@ -4,7 +4,7 @@ The architecture hardening and CI monitor checks passed on Apple Silicon macOS o
 2026-10-02. The host uses macOS 26.6.2, build 25G83, and Darwin kernel 25.6.0. Deno
 reports `aarch64-apple-darwin`, version 2.9.7, V8 15.0.245.2-rusty, and TypeScript 6.0.3.
 
-The current suite passes **82 tests**, with no failures and one Linux-only test ignored.
+The current suite passes **86 tests**, with no failures and one Linux-only test ignored.
 Formatting, linting, and type checking pass. The local workflow passes against the current
 checkout.
 
@@ -51,7 +51,7 @@ Two runner regressions failed before the corresponding changes. A competing run 
 the same workspace. A directory cleanup failure hid the original exit code 23. Both
 regressions pass after workspace integration.
 
-The installed pre-commit hook passes all 82 active tests and the other verification
+The installed pre-commit hook passes all 86 active tests and the other verification
 checks. A temporary local repository with spaces exercises the Git commit boundary. A
 failed check blocks the commit without creating a revision. A passing check permits the
 commit. The hook resolves the correct repository root in both cases.
@@ -67,9 +67,19 @@ failure. Two tests start a detached background process that holds the output pip
 the command exits. One test confirms that the adapter cuts the held streams after the
 output grace period and reports failure. The other test cancels after the command exits
 and confirms that the adapter returns at once with cancelled status. Both tests confirm
-that the lock is released. The adapter lifecycle test kills a disposable task parent. It
-confirms workflow cancellation, journal cleanup, cancelled status, and successful writer
-reuse.
+that the lock is released. The adapter lifecycle test runs `mci ci` without the task
+marker and kills its disposable parent. It confirms workflow cancellation, journal
+cleanup, cancelled status, and successful writer reuse.
+
+CLI tests run `mci ci` from source. A passing job saves pass status and its output. A
+failing step returns the same code as `mci run`. A validation error saves fail status with
+code 2. A missing `--job` returns 2 and saves nothing.
+
+On 2026-10-03, `deno task compile` built `dist/mci`. A temporary Git repository with
+spaces and a comma in its path used the documented hook. A passing workflow created the
+commit and saved pass status. A failing step blocked the commit and saved fail status with
+code 1, the same code as `dist/mci run`. SIGINT during `dist/mci ci` returned 130 within
+0.08 s and saved cancelled status. No step process remained.
 
 Native probes killed the Deno task parent and the CI logger in separate temporary
 workspaces. Both probes confirmed active workflow cancellation and removal of the

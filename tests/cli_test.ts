@@ -1,4 +1,5 @@
 import { assert, equal, exists, fixture, inWorkspace, waitFor } from "./helpers.ts";
+import { readCiStatus } from "../src/ci.ts";
 import { cliSourceArgs } from "../src/runtime.ts";
 import denoConfig from "../deno.json" with { type: "json" };
 
@@ -42,6 +43,7 @@ Deno.test("CLI help and version use the public configuration", () =>
     const help = await command(workspace, ["--help"]).output();
     equal(help.code, 0);
     assert(text(help.stdout).includes(`mci ${denoConfig.version}`));
+    assert(text(help.stdout).includes("<check|run|ci>"));
     equal(text(help.stderr), "");
 
     const version = await command(workspace, ["--version"]).output();
@@ -98,6 +100,80 @@ Deno.test({
         .output();
       equal(result.code, 2);
       assert(text(result.stderr).includes("macOS only"));
+      const logged = await command(workspace, ["ci", "any.yml", "--job", "check"])
+        .output();
+      equal(logged.code, 2);
+      assert(text(logged.stderr).includes("macOS only"));
+      assert(!await exists(`${workspace}/.mci/ci`));
+    }),
+});
+
+Deno.test("CLI ci without a job returns 2 and saves nothing", () =>
+  inWorkspace(async (workspace) => {
+    await Deno.writeTextFile(`${workspace}/ci.yml`, fixture("      - run: echo hello"));
+    const result = await command(workspace, ["ci", "ci.yml"]).output();
+    equal(result.code, 2);
+    assert(text(result.stderr).includes("Usage: mci <check|run|ci>"));
+    assert(!await exists(`${workspace}/.mci/ci`));
+  }));
+
+Deno.test({
+  name: "macOS CLI ci saves a passing job",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      await Deno.writeTextFile(`${workspace}/ci.yml`, fixture("      - run: echo hello"));
+      const result = await command(workspace, ["ci", "ci.yml", "--job", "check"])
+        .output();
+      equal(result.code, 0);
+      assert(text(result.stdout).includes("hello"), text(result.stderr));
+      const status = await readCiStatus(workspace);
+      assert(status.ok && status.value !== null, "status was not saved");
+      equal(status.value.state, "pass");
+      equal(status.value.code, 0);
+      const log = await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`);
+      assert(log.includes("hello"));
+      assert(log.includes("[mci] exit 0"));
+    }),
+});
+
+Deno.test({
+  name: "macOS CLI ci returns the exit code of run for a failing step",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      await Deno.writeTextFile(`${workspace}/ci.yml`, fixture("      - run: exit 3"));
+      const direct = await command(workspace, ["run", "ci.yml", "--job", "check"])
+        .output();
+      equal(direct.code, 1);
+      const result = await command(workspace, ["ci", "ci.yml", "--job", "check"])
+        .output();
+      equal(result.code, direct.code);
+      const status = await readCiStatus(workspace);
+      assert(status.ok && status.value !== null, "status was not saved");
+      equal(status.value.state, "fail");
+      equal(status.value.code, 1);
+    }),
+});
+
+Deno.test({
+  name: "macOS CLI ci saves a workflow validation error",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      await Deno.writeTextFile(
+        `${workspace}/ci.yml`,
+        fixture("      - run: echo hello\n        unsupported-field: true"),
+      );
+      const result = await command(workspace, ["ci", "ci.yml", "--job", "check"])
+        .output();
+      equal(result.code, 2);
+      const status = await readCiStatus(workspace);
+      assert(status.ok && status.value !== null, "status was not saved");
+      equal(status.value.state, "fail");
+      equal(status.value.code, 2);
+      const log = await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`);
+      assert(log.includes("unsupported-field"), log);
     }),
 });
 

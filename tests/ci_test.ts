@@ -64,13 +64,17 @@ jobs:
         "--permission-set=mci",
         "--config",
         `${Deno.cwd()}/deno.json`,
-        `${Deno.cwd()}/scripts/ci.ts`,
+        `${Deno.cwd()}/src/main.ts`,
+        "ci",
+        "ci/local-ci.yml",
+        "--job",
+        "check",
       ];
       const parentSource = `const child = new Deno.Command(${
         JSON.stringify(Deno.execPath())
       }, {
       args: ${JSON.stringify(childArgs)}, cwd: ${JSON.stringify(workspace)},
-      env: { MCI_TASK_PARENT: "true" }, stdin: "null", stdout: "null", stderr: "null",
+      stdin: "null", stdout: "null", stderr: "null",
     }).spawn();
     await Deno.writeTextFile("logger.pid", String(child.pid));
     await child.status;`;

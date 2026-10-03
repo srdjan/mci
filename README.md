@@ -31,7 +31,24 @@ deno task compile
 cd /path/to/your/repository
 /path/to/mci/dist/mci check ci/local-ci.yml --job check
 /path/to/mci/dist/mci run ci/local-ci.yml --job check
+/path/to/mci/dist/mci ci ci/local-ci.yml --job check
 ```
+
+`mci ci` runs the selected job through `mci run` and saves the output and status under
+`.mci/ci/`. It returns the nonzero exit code of `mci run`. A logging failure turns a
+passing run into exit 1. Add `.mci/` to the repository's `.gitignore`.
+
+To run the job before each commit, put this hook in `.git/hooks/pre-commit` or in a
+tracked hooks directory, and make it executable:
+
+```sh
+#!/bin/sh
+exec /path/to/mci/dist/mci ci ci/local-ci.yml --job check
+```
+
+Git runs the pre-commit hook from the repository root, which becomes the workspace. A
+nonzero exit blocks the commit. `mci ci` cancels the job when its parent process (Git)
+exits. mci does not write hooks or Git configuration in other repositories.
 
 Compilation may download Deno's compilation runtime. The compiled binary uses the same
 permissions and version source as the source CLI. The `mci` permission set in `deno.json`
@@ -153,9 +170,10 @@ deno task hooks:install
 ```
 
 Git runs `.githooks/pre-commit` before each commit. The hook calls `deno task ci` from the
-repository root. The CI adapter executes `ci/local-ci.yml`, which calls `deno task verify`
-directly. A failed check blocks the commit. The checks cover the current working tree.
-Each clone needs its own hook installation because Git configuration stays local.
+repository root. That task runs `mci ci`, which executes `ci/local-ci.yml`, which calls
+`deno task verify` directly. A failed check blocks the commit. The checks cover the
+current working tree. Each clone needs its own hook installation because Git configuration
+stays local.
 
 CI saves its latest output at `.mci/ci/latest.log`. The status file at
 `.mci/ci/status.json` records the state, start time, finish time, and exit code. Those

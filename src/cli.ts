@@ -1,14 +1,74 @@
+import { runLoggedCi } from "./ci.ts";
 import { attempt } from "./result.ts";
 import { resolveBash, runPlan } from "./runner.ts";
-import { cliVersion } from "./runtime.ts";
+import { cliSelfArgs, cliVersion } from "./runtime.ts";
 import { planWorkflow } from "./workflow.ts";
 
 const usage = `mci ${cliVersion}: local macOS CI
-Usage: mci <check|run> <workflow.yml> --job <id>
+Usage: mci <check|run|ci> <workflow.yml> --job <id>
        mci --help | --version
 
 Run from the workspace root. check executes no workflow commands.
+ci runs the job through run and saves .mci/ci/latest.log and status.json.
 Only run steps with an explicit effective shell: bash are supported.`;
+
+type Writer = { readonly write: (chunk: Uint8Array) => Promise<number> };
+
+const write = async (file: Writer, chunk: Uint8Array): Promise<void> => {
+  let offset = 0;
+  while (offset < chunk.length) {
+    const written = await file.write(chunk.subarray(offset));
+    if (written === 0) {
+      return Promise.reject(new Error("terminal write returned zero bytes"));
+    }
+    offset += written;
+  }
+};
+
+// Aborts the controller when the original parent process exits. Returns the stop function.
+const watchParent = (controller: AbortController, parent: number): () => void => {
+  const check = () => {
+    if (parent <= 1 || Deno.ppid !== parent) controller.abort("SIGTERM");
+  };
+  const timer = setInterval(check, 25);
+  check();
+  return () => clearInterval(timer);
+};
+
+const runCi = async (file: string, job: string, parent: number): Promise<number> => {
+  const workspace = await attempt(() => Deno.realPath(Deno.cwd()));
+  if (!workspace.ok) {
+    console.error(`workspace: ${workspace.error}`);
+    return 2;
+  }
+  const controller = new AbortController();
+  const interrupt = () => controller.abort("SIGINT");
+  const terminate = () => controller.abort("SIGTERM");
+  Deno.addSignalListener("SIGINT", interrupt);
+  Deno.addSignalListener("SIGTERM", terminate);
+  const stopWatching = watchParent(controller, parent);
+  try {
+    const result = await runLoggedCi({
+      workspace: workspace.value,
+      command: Deno.execPath(),
+      args: cliSelfArgs(["run", file, "--job", job]),
+      env: { MCI_TASK_PARENT: "true" },
+      signal: controller.signal,
+      stdout: (chunk) => write(Deno.stdout, chunk),
+      stderr: (chunk) => write(Deno.stderr, chunk),
+    });
+    if (!result.ok) {
+      console.error(result.error);
+      return 1;
+    }
+    for (const diagnostic of result.value.diagnostics) console.error(diagnostic);
+    return result.value.code;
+  } finally {
+    stopWatching();
+    Deno.removeSignalListener("SIGINT", interrupt);
+    Deno.removeSignalListener("SIGTERM", terminate);
+  }
+};
 
 export const main = async (args: readonly string[]): Promise<number> => {
   const parent = Deno.ppid;
@@ -22,16 +82,17 @@ export const main = async (args: readonly string[]): Promise<number> => {
   }
   const [command, file, flag, job] = args;
   if (
-    args.length !== 4 || !["check", "run"].includes(command ?? "") || !file ||
+    args.length !== 4 || !["check", "run", "ci"].includes(command ?? "") || !file ||
     flag !== "--job" || !job
   ) {
     console.error(usage);
     return 2;
   }
-  if (command === "run" && Deno.build.os !== "darwin") {
-    console.error("mci run supports macOS only. check is portable.");
+  if (command !== "check" && Deno.build.os !== "darwin") {
+    console.error(`mci ${command} supports macOS only. check is portable.`);
     return 2;
   }
+  if (command === "ci") return await runCi(file, job, parent);
   const loaded = await attempt(async () => ({
     source: await Deno.readTextFile(file),
     workspace: await Deno.realPath(Deno.cwd()),
@@ -77,12 +138,8 @@ export const main = async (args: readonly string[]): Promise<number> => {
   const terminate = () => controller.abort("SIGTERM");
   Deno.addSignalListener("SIGINT", interrupt);
   Deno.addSignalListener("SIGTERM", terminate);
-  const checkParent = () => {
-    if (parent <= 1 || Deno.ppid !== parent) controller.abort("SIGTERM");
-  };
   const supervised = loaded.value.inherited.MCI_TASK_PARENT === "true";
-  const parentTimer = supervised ? setInterval(checkParent, 25) : undefined;
-  if (supervised) checkParent();
+  const stopWatching = supervised ? watchParent(controller, parent) : () => {};
   try {
     const outcome = await runPlan(plan, {
       workspace: loaded.value.workspace,
@@ -97,7 +154,7 @@ export const main = async (args: readonly string[]): Promise<number> => {
     );
     return outcome.code;
   } finally {
-    if (parentTimer !== undefined) clearInterval(parentTimer);
+    stopWatching();
     Deno.removeSignalListener("SIGINT", interrupt);
     Deno.removeSignalListener("SIGTERM", terminate);
   }

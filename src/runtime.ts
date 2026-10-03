@@ -14,3 +14,7 @@ export const cliSourceArgs = (args: readonly string[]): string[] => [
   pathFrom("main.ts"),
   ...args,
 ];
+
+// A compiled binary re-invokes itself; a source run goes through the Deno executable.
+export const cliSelfArgs = (args: readonly string[]): string[] =>
+  Deno.build.standalone ? [...args] : cliSourceArgs(args);

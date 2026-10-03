@@ -13,11 +13,11 @@ the authority of the invoking user.
 | `command.ts`         | Bounded command capture, pipe closure, and command reaping                              |
 | `workspace.ts`       | Workspace exclusion, contained step preparation, private scripts, and recovery journals |
 | `runner.ts`          | Step order, environment filtering, job deadlines, and final results                     |
-| `cli.ts`             | Arguments, platform policy, diagnostics, and OS signal listeners                        |
+| `cli.ts`             | Arguments, platform policy, diagnostics, OS signal listeners, and the `ci` command      |
 | `ci.ts`              | Saved CI output, writer exclusion, cancellation, and atomic status records              |
 | `monitor.ts`         | SwiftBar menu rendering and logger inspection                                           |
 | `install-monitor.ts` | Plugin generation and safe installation                                                 |
-| `runtime.ts`         | Version and source arguments that select shared configuration                           |
+| `runtime.ts`         | Version, source arguments, and self-invocation for source and compiled modes            |
 | `result.ts`          | Expected failures and exception conversion at library and OS boundaries                 |
 
 The YAML package version and integrity value reside in `deno.lock`. The parser checks the
@@ -125,9 +125,11 @@ The diagnostic converts a zero child exit to failure. Cancellation after the chi
 cuts open streams at once and keeps the cancelled state. The adapter never signals the
 detached holder. The holder receives EPIPE or SIGPIPE on its next write.
 
-The adapter launches the source CLI directly with parent supervision enabled. It forwards
-OS cancellation and observes its own Deno task parent. The existing CLI handles workflow
-process cleanup if the logging adapter dies.
+The `mci ci` command runs the adapter. The adapter launches `mci run` from the same
+program with parent supervision enabled. A source run starts Deno with the source
+arguments. A compiled binary starts itself. `mci ci` always watches its own parent, so the
+death of Git or `deno task` cancels the job. It forwards OS cancellation. The existing CLI
+handles workflow process cleanup if the logging adapter dies.
 
 The status record includes the logger's PID, native process start text, and command. The
 SwiftBar plugin compares that identity through bounded `/bin/ps` inspection. An absent or
