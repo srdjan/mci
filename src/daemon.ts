@@ -726,6 +726,7 @@ const handleOperation = async (
         removing: false,
       };
       const recovered = await recoverWorkspace(registered.value.path);
+      // A busy lock is not a block: the worker recovers the workspace before each job.
       if (!recovered.ok) state.blocked = recovered.error;
       const latest = await runtime.store.readLatest(registered.value);
       if (!latest.ok) state.blocked ??= latest.error;

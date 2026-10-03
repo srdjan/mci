@@ -50,6 +50,10 @@ The daemon journals every accepted request before it confirms acceptance. On res
 records each unfinished request as INTERRUPTED and does not retry it. A durable terminal
 record preserves completed work if projection or journal cleanup fails.
 
+Registration and daemon startup recover each workspace. A held workspace lock, such as a
+direct `mci run`, does not block the repository. The worker acquires the workspace before
+each job, so recovery still precedes the next command.
+
 Each snapshot carries an active request, queue count, latest completed result, and blocked
 state for every repository. New work does not replace the latest completed result.
 

@@ -230,6 +230,53 @@ Deno.test("daemon runs a submitted job through its public socket", () =>
     })
   ));
 
+Deno.test("registration during a held workspace lock does not block the repository", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+    const started = await startDaemon({ directory });
+    assert(started.ok, started.ok ? "" : started.error);
+    await Deno.mkdir(`${workspace}/.mci`, { recursive: true });
+    const lock = await Deno.open(`${workspace}/.mci/lock`, {
+      create: true,
+      read: true,
+      write: true,
+    });
+    let held = await lock.tryLock(true);
+    try {
+      assert(held);
+      const registered = await rpc(
+        { version: 1, op: "register", path: workspace },
+        directory,
+      );
+      assert(registered.ok, registered.ok ? "" : registered.error);
+      equal(registered.value.repositories[0]?.blocked, null);
+      await lock.unlock();
+      held = false;
+      const result = await submit(
+        {
+          version: 1,
+          op: "submit",
+          path: workspace,
+          workflow: "after-lock.yml",
+          job: "check",
+          source: fixture("      - run: touch after-lock"),
+          env: capturedEnv(),
+        },
+        new AbortController().signal,
+        directory,
+      );
+      assert(result.ok, result.ok ? "" : result.error);
+      equal(result.value.kind, "success");
+      assert(await exists(`${workspace}/after-lock`));
+    } finally {
+      if (held) await lock.unlock();
+      lock.close();
+      await started.value.close();
+      await started.value.closed;
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
 Deno.test("daemon validates before acceptance and does not create a spool", () =>
   inWorkspace((workspace) =>
     withDaemon(workspace, async (directory) => {

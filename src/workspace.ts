@@ -141,7 +141,7 @@ const recoverState = async (state: string): Promise<Result<void>> => {
   return ok(undefined);
 };
 
-export const acquireWorkspace = async (workspace: string): Promise<Result<RunLease>> => {
+const openWorkspace = async (workspace: string): Promise<Result<RunLease | "busy">> => {
   const resolved = await attempt(async () => {
     const root = await Deno.realPath(workspace);
     if (!(await Deno.stat(root)).isDirectory) return err("workspace is not a directory");
@@ -166,14 +166,15 @@ export const acquireWorkspace = async (workspace: string): Promise<Result<RunLea
   );
   if (!opened.ok) return opened;
   const lock = opened.value;
-  const fail = async (detail: string): Promise<Result<RunLease>> => {
+  const fail = async (detail: string): Promise<Result<RunLease | "busy">> => {
     const closed = await attempt(() => lock.close());
     return err(`${detail}${closed.ok ? "" : `; lock cleanup failed: ${closed.error}`}`);
   };
   const locked = await attempt(() => lock.tryLock(true));
   if (!locked.ok) return await fail(locked.error);
   if (!locked.value) {
-    return await fail("another job is already running in this workspace");
+    const released = await attempt(() => lock.close());
+    return released.ok ? ok("busy") : err(`lock cleanup failed: ${released.error}`);
   }
   const recovered = await recoverState(state);
   if (!recovered.ok) return await fail(recovered.error);
@@ -237,8 +238,20 @@ export const acquireWorkspace = async (workspace: string): Promise<Result<RunLea
   return ok({ directory: journal.runDir, prepare, record, close });
 };
 
-export const recoverWorkspace = async (workspace: string): Promise<Result<void>> => {
-  const acquired = await acquireWorkspace(workspace);
-  if (!acquired.ok) return acquired;
-  return await acquired.value.close();
+export const acquireWorkspace = async (workspace: string): Promise<Result<RunLease>> => {
+  const opened = await openWorkspace(workspace);
+  if (!opened.ok) return opened;
+  return opened.value === "busy"
+    ? err("another job is already running in this workspace")
+    : ok(opened.value);
+};
+
+export const recoverWorkspace = async (
+  workspace: string,
+): Promise<Result<"recovered" | "busy">> => {
+  const opened = await openWorkspace(workspace);
+  if (!opened.ok) return opened;
+  if (opened.value === "busy") return ok("busy");
+  const closed = await opened.value.close();
+  return closed.ok ? ok("recovered") : closed;
 };
