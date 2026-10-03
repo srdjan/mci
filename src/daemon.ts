@@ -752,12 +752,20 @@ const submitRequest = async (
     prepareSubmission(runtime, connection, request, repository)
   );
   repository.acceptance = prepared.then(() => {}).catch(() => {});
-  try {
-    const job = await prepared;
-    if (job !== null) await watchSubmission(runtime, messages, job);
-  } finally {
+  const job = await prepared.catch((error) => {
     repository.accepting--;
+    throw error;
+  });
+  if (job === null) {
+    repository.accepting--;
+    return;
   }
+  // The queue or the active slot blocks unregister until the result. The result frame
+  // follows this callback, so a client that keeps its connection open cannot cause busy.
+  void job.result.then(() => {
+    repository.accepting--;
+  });
+  await watchSubmission(runtime, messages, job);
 };
 
 const manageRepositories = async (

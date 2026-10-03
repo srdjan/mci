@@ -67,6 +67,43 @@ Deno.test("socket disconnection cancels only its active owner and releases queue
     })
   ));
 
+Deno.test("unregister succeeds after a finished client keeps its connection open", () =>
+  inWorkspace((workspace) =>
+    withDaemon(workspace, async (directory) => {
+      const paths = servicePaths(directory);
+      assert(paths.ok);
+      const connection = await Deno.connect({
+        transport: "unix",
+        path: paths.value.socket,
+      });
+      try {
+        assert(
+          (await sendJson(connection, {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "finished.yml",
+            job: "check",
+            source: fixture("      - run: printf finished"),
+            env: capturedEnv(),
+          })).ok,
+        );
+        const frames = readJson(connection);
+        const accepted = await frames.next();
+        assert(!accepted.done && accepted.value.ok);
+        const final = await frames.next();
+        assert(!final.done && final.value.ok);
+        const removed = await rpc(
+          { version: 1, op: "unregister", repository: workspace },
+          directory,
+        );
+        assert(removed.ok, removed.ok ? "" : removed.error);
+      } finally {
+        connection.close();
+      }
+    })
+  ));
+
 Deno.test("daemon retains a connected client's old log and removes it after disconnect", () =>
   inWorkspace((workspace) =>
     withDaemon(workspace, async (directory) => {
