@@ -599,3 +599,91 @@ Deno.test("unregister rejects a submission waiting for allocation", () =>
       assert(snapshot.includes(terminal.value.id));
     });
   }));
+
+// A detached process holds the worker output open after the worker exits. This opens a
+// window between worker exit and job completion.
+const lingeringStep = `      - run: |
+          perl -MPOSIX -e 'POSIX::setsid(); open(my $f, ">", "detached"); close $f; sleep 1' &
+          while [ ! -f detached ]; do sleep 0.01; done
+          touch done`;
+
+const settle = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+Deno.test({
+  name: "a cancel after the worker exits keeps the worker result",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-late-" });
+      const daemon = await startDaemon({ directory });
+      assert(daemon.ok, daemon.ok ? "" : daemon.error);
+      try {
+        assert(
+          (await rpc({ version: 1, op: "register", path: workspace }, directory)).ok,
+        );
+        const controller = new AbortController();
+        const request = submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "late-cancel.yml",
+            job: "check",
+            source: fixture(lingeringStep),
+            env: capturedEnv(),
+          },
+          controller.signal,
+          directory,
+        );
+        await waitFor(() => exists(`${workspace}/done`));
+        await settle(300);
+        controller.abort("SIGINT");
+        const result = await request;
+        assert(result.ok, result.ok ? "" : result.error);
+        equal(result.value.kind, "success");
+      } finally {
+        await daemon.value.close();
+        await Deno.remove(directory, { recursive: true });
+      }
+    }),
+});
+
+Deno.test({
+  name: "shutdown after the worker exits keeps the worker result",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-late-" });
+      const daemon = await startDaemon({ directory });
+      assert(daemon.ok, daemon.ok ? "" : daemon.error);
+      try {
+        assert(
+          (await rpc({ version: 1, op: "register", path: workspace }, directory)).ok,
+        );
+        const request = submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "late-close.yml",
+            job: "check",
+            source: fixture(lingeringStep),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+        await waitFor(() => exists(`${workspace}/done`));
+        await settle(300);
+        await daemon.value.close();
+        await request;
+        const latest = JSON.parse(
+          await Deno.readTextFile(`${workspace}/.mci/ci/latest.json`),
+        );
+        equal(latest.kind, "success");
+      } finally {
+        await daemon.value.close();
+        await Deno.remove(directory, { recursive: true });
+      }
+    }),
+});

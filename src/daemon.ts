@@ -43,6 +43,7 @@ type Job = {
   readonly stop: AbortController;
   step: string | null;
   child: Deno.ChildProcess | null;
+  exited: boolean;
   cancelReason: "SIGINT" | "SIGTERM" | null;
   storageError: string | null;
 };
@@ -92,11 +93,12 @@ const signalWorker = (
 ): void => {
   if (cancellation) job.cancelReason ??= signal;
   job.stop.abort(signal);
-  if (job.child === null) return;
+  if (job.child === null || job.exited) return;
   try {
     job.child.kill(signal);
   } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) {
+    // For the fixed signal names, Deno throws TypeError only for a terminated child.
+    if (!(error instanceof Deno.errors.NotFound || error instanceof TypeError)) {
       job.storageError ??= `worker signal failed: ${message(error)}`;
     }
   }
@@ -353,6 +355,10 @@ const runWorkerProcess = async (runtime: DaemonRuntime, job: Job): Promise<Termi
   if (!spawned.ok) return failedTerminal(job, `worker launch failed: ${spawned.error}`);
   const child = spawned.value;
   job.child = child;
+  const markExited = () => {
+    job.exited = true;
+  };
+  child.status.then(markExited, markExited);
   if (job.cancelReason !== null) signalWorker(job, job.cancelReason);
   const drains = await drainWorkerOutput(job, child);
   if (!drains.ok) {
@@ -422,13 +428,10 @@ const runWorkerProcess = async (runtime: DaemonRuntime, job: Job): Promise<Termi
   return workerTerminal(job, final);
 };
 
-const complete = async (
-  runtime: DaemonRuntime,
-  repository: MutableRepository,
-  job: Job,
-  terminal: Terminal,
-): Promise<void> => {
-  let result: Terminal = runtime.closed
+// During shutdown only a cancelled job becomes interrupted. A worker that already
+// returned its final result keeps that result.
+const shutdownTerminal = (runtime: DaemonRuntime, terminal: Terminal): Terminal =>
+  runtime.closed && terminal.kind === "cancelled"
     ? {
       ...terminal,
       kind: "interrupted",
@@ -436,6 +439,14 @@ const complete = async (
       detail: "The daemon stopped before completion.",
     }
     : terminal;
+
+const complete = async (
+  runtime: DaemonRuntime,
+  repository: MutableRepository,
+  job: Job,
+  terminal: Terminal,
+): Promise<void> => {
+  let result = shutdownTerminal(runtime, terminal);
   let stored = await runtime.store.writeTerminal(repository.repository.path, result);
   if (!stored.ok) {
     result = {
@@ -472,14 +483,7 @@ const settleUnstarted = async (
   job: Job,
   terminal: Terminal,
 ): Promise<void> => {
-  const result: Terminal = runtime.closed
-    ? {
-      ...terminal,
-      kind: "interrupted",
-      code: 143,
-      detail: "The daemon stopped before completion.",
-    }
-    : terminal;
+  const result = shutdownTerminal(runtime, terminal);
   const finished = await runtime.store.finish(job.id);
   if (!finished.ok) {
     repository.blocked ??= `request journal cleanup failed: ${finished.error}`;
@@ -589,6 +593,7 @@ const newJob = (
     stop: new AbortController(),
     step: null,
     child: null,
+    exited: false,
     cancelReason: null,
     storageError: null,
   };
