@@ -112,6 +112,18 @@ jobs:
         const status = unwrap(await readCiStatus(workspace));
         assert(status !== null);
         equal(status.code, 143);
+        // The logger writes cancelled status before it releases the CI lock.
+        const logger = Number(await Deno.readTextFile(`${workspace}/logger.pid`));
+        await waitFor(() =>
+          Promise.resolve().then(() => {
+            try {
+              Deno.kill(logger, 0);
+              return false;
+            } catch (error) {
+              return error instanceof Deno.errors.NotFound;
+            }
+          })
+        );
         equal(unwrap(await runShell(workspace, "true")).code, 0);
       } finally {
         if (!parentSettled) {
