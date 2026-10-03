@@ -1,6 +1,9 @@
 import Observation
 import ServiceManagement
 
+/// The toggle is always enabled. An app that was never registered reports `.notFound`, and
+/// `register()` still works for the installed, ad-hoc signed bundle. A failed registration
+/// shows its error.
 @MainActor @Observable
 final class LoginItem {
     private(set) var status: SMAppService.Status = SMAppService.mainApp.status
@@ -9,33 +12,31 @@ final class LoginItem {
     var isOn: Bool { status == .enabled }
 
     var note: String? {
-        switch status {
-        case .requiresApproval: "Approve in System Settings > General > Login Items"
-        case .enabled, .notRegistered, .notFound: nil
-        @unknown default: nil
-        }
+        status == .requiresApproval ? "Approve in System Settings > General > Login Items" : nil
     }
 
-    /// An app that was never registered reports `.notFound`, and `register()` still works
-    /// for the installed, ad-hoc signed bundle. A failed registration shows its error.
-    var canToggle: Bool { true }
-
+    /// A status change removes an earlier error, for example after an approval in System
+    /// Settings.
     func refresh() {
-        status = SMAppService.mainApp.status
+        let current = SMAppService.mainApp.status
+        if current != status { error = nil }
+        status = current
     }
 
-    /// Changes the registration. Only the toggle calls this.
+    /// Changes the registration. Only the toggle calls this. The error of this attempt stays
+    /// visible even when the status changes.
     func set(_ on: Bool) {
+        var failure: String?
         do {
             if on {
                 try SMAppService.mainApp.register()
             } else {
                 try SMAppService.mainApp.unregister()
             }
-            error = nil
         } catch {
-            self.error = error.localizedDescription
+            failure = error.localizedDescription
         }
-        refresh()
+        status = SMAppService.mainApp.status
+        error = failure
     }
 }

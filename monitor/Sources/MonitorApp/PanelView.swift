@@ -81,7 +81,6 @@ struct PanelView: View {
                 isOn: Binding(get: { loginItem.isOn }, set: { loginItem.set($0) })
             )
             .toggleStyle(.checkbox)
-            .disabled(!loginItem.canToggle)
             if let note = loginItem.note {
                 Text(note).font(.caption).foregroundStyle(.secondary)
             }
