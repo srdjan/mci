@@ -15,22 +15,22 @@ fix.
 
 ## Ranked findings
 
-| Rank | Label | Finding                                                               | Severity   | Status    |
-| ---- | ----- | --------------------------------------------------------------------- | ---------- | --------- |
-| 1    | D1    | One `accept()` error stops the daemon and interrupts every job        | High       | Confirmed |
-| 2    | P1    | Recovery does not escalate to SIGKILL after its own SIGTERM           | Medium     | Confirmed |
-| 3    | D3    | A pending request without its spool log blocks a repository           | Medium     | Confirmed |
-| 4    | D4    | Registration during a direct run blocks a repository until restart    | Medium     | Confirmed |
-| 5    | D2    | A queued request behind a blocked repository waits without limit      | Medium     | Confirmed |
-| 6    | D5    | A cancelled queued request replaces the latest completed result       | Medium-low | Confirmed |
-| 7    | P2    | A stray `run-*` entry in `.mci` blocks every later run                | Low        | Confirmed |
-| 8    | P3    | The recorded start time depends on the host time zone                 | Low        | Confirmed |
-| 9    | D6    | Atomic writes rename without `fsync`                                  | Low-medium | Fixed     |
-| 10   | D7    | A cancel after worker exit records a false storage failure            | Low        | Fixed     |
-| 11   | P4    | A failed `ps` with empty stdout counts as an absent process           | Low        | Fixed     |
-| 12   | D8    | A non-reading management client stalls later register calls           | Low        | Fixed     |
-| 13   | D9    | Global routing chain, temporary-file orphans, and a wrong busy reason | Low        | Fixed     |
-| 14   | T1    | One daemon test name claims more than the test proves                 | Low        | Fixed     |
+| Rank | Label | Finding                                                               | Severity   | Status |
+| ---- | ----- | --------------------------------------------------------------------- | ---------- | ------ |
+| 1    | D1    | One `accept()` error stops the daemon and interrupts every job        | High       | Fixed  |
+| 2    | P1    | Recovery does not escalate to SIGKILL after its own SIGTERM           | Medium     | Fixed  |
+| 3    | D3    | A pending request without its spool log blocks a repository           | Medium     | Fixed  |
+| 4    | D4    | Registration during a direct run blocks a repository until restart    | Medium     | Fixed  |
+| 5    | D2    | A queued request behind a blocked repository waits without limit      | Medium     | Fixed  |
+| 6    | D5    | A cancelled queued request replaces the latest completed result       | Medium-low | Fixed  |
+| 7    | P2    | A stray `run-*` entry in `.mci` blocks every later run                | Low        | Fixed  |
+| 8    | P3    | The recorded start time depends on the host time zone                 | Low        | Fixed  |
+| 9    | D6    | Atomic writes rename without `fsync`                                  | Low-medium | Fixed  |
+| 10   | D7    | A cancel after worker exit records a false storage failure            | Low        | Fixed  |
+| 11   | P4    | A failed `ps` with empty stdout counts as an absent process           | Low        | Fixed  |
+| 12   | D8    | A non-reading management client stalls later register calls           | Low        | Fixed  |
+| 13   | D9    | Global routing chain, temporary-file orphans, and a wrong busy reason | Low        | Fixed  |
+| 14   | T1    | One daemon test name claims more than the test proves                 | Low        | Fixed  |
 
 Labels with D come from the daemon review. Labels with P come from the process review.
 
