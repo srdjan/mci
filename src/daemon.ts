@@ -297,10 +297,12 @@ const drainWorkerOutput = async (
     }
     const results = await draining;
     const queued = await chain;
+    const synced = await attempt(() => file.syncData());
     const closed = await attempt(() => file.close());
     const failure = results.find((result) => !result.ok);
     if (failure !== undefined && !failure.ok) return failure;
     if (!queued.ok) return queued;
+    if (!synced.ok) return synced;
     if (!closed.ok) return closed;
     return completed || job.cancelReason !== null
       ? ok(undefined)

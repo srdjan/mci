@@ -90,7 +90,36 @@ const regularTarget = async (path: string): Promise<Result<void>> => {
   return ok(undefined);
 };
 
-const atomicBytes = async (path: string, bytes: Uint8Array): Promise<Result<void>> => {
+const syncPath = async (path: string, kind: "file" | "directory"): Promise<void> => {
+  const handle = await Deno.open(
+    path,
+    kind === "file" ? { write: true } : { read: true },
+  );
+  try {
+    if (kind === "file") await handle.syncData();
+    else await handle.sync();
+  } finally {
+    handle.close();
+  }
+};
+
+// A durable commit syncs the file before the rename and the directory after it.
+const commitTemporary = async (
+  temporary: string,
+  target: string,
+  durable: boolean,
+): Promise<void> => {
+  await Deno.chmod(temporary, 0o600);
+  if (durable) await syncPath(temporary, "file");
+  await Deno.rename(temporary, target);
+  if (durable) await syncPath(target.slice(0, target.lastIndexOf("/")), "directory");
+};
+
+const atomicBytes = async (
+  path: string,
+  bytes: Uint8Array,
+  durable: boolean,
+): Promise<Result<void>> => {
   const safe = await regularTarget(path);
   if (!safe.ok) return safe;
   const slash = path.lastIndexOf("/");
@@ -101,18 +130,29 @@ const atomicBytes = async (path: string, bytes: Uint8Array): Promise<Result<void
   if (!temporary.ok) return temporary;
   const written = await attempt(async () => {
     await Deno.writeFile(temporary.value, bytes);
-    await Deno.chmod(temporary.value, 0o600);
-    await Deno.rename(temporary.value, path);
+    await commitTemporary(temporary.value, path, durable);
   });
   if (written.ok) return written;
   await attempt(() => Deno.remove(temporary.value));
   return written;
 };
 
-const atomicJson = (path: string, value: unknown): Promise<Result<void>> =>
-  atomicBytes(path, new TextEncoder().encode(`${JSON.stringify(value, null, 2)}\n`));
+const atomicJson = (
+  path: string,
+  value: unknown,
+  durable: boolean,
+): Promise<Result<void>> =>
+  atomicBytes(
+    path,
+    new TextEncoder().encode(`${JSON.stringify(value, null, 2)}\n`),
+    durable,
+  );
 
-const atomicCopy = async (source: string, target: string): Promise<Result<void>> => {
+const atomicCopy = async (
+  source: string,
+  target: string,
+  durable: boolean,
+): Promise<Result<void>> => {
   const safe = await regularTarget(target);
   if (!safe.ok) return safe;
   const directory = target.slice(0, target.lastIndexOf("/"));
@@ -122,8 +162,7 @@ const atomicCopy = async (source: string, target: string): Promise<Result<void>>
   if (!temporary.ok) return temporary;
   const copied = await attempt(async () => {
     await Deno.copyFile(source, temporary.value);
-    await Deno.chmod(temporary.value, 0o600);
-    await Deno.rename(temporary.value, target);
+    await commitTemporary(temporary.value, target, durable);
   });
   if (copied.ok) return copied;
   await attempt(() => Deno.remove(temporary.value));
@@ -335,7 +374,7 @@ export const openDaemonStore = async (
       }
     }
     repositories = imported;
-    const recorded = await atomicJson(paths.registry, { version: 1, repositories });
+    const recorded = await atomicJson(paths.registry, { version: 1, repositories }, true);
     if (!recorded.ok) return recorded;
   }
 
@@ -353,7 +392,11 @@ export const openDaemonStore = async (
   ): Promise<Result<void>> => {
     const update = journalChain.then(async () => {
       const next = change(journal);
-      const written = await atomicJson(paths.journal, { version: 1, requests: next });
+      const written = await atomicJson(
+        paths.journal,
+        { version: 1, requests: next },
+        true,
+      );
       if (written.ok) journal = [...next];
       return written;
     });
@@ -371,7 +414,7 @@ export const openDaemonStore = async (
         const written = await atomicJson(paths.registry, {
           version: 1,
           repositories: next.value,
-        });
+        }, true);
         if (!written.ok) return written;
         repositories = [...next.value];
         return ok(repositories);
@@ -475,12 +518,13 @@ export const openDaemonStore = async (
       const allocated = await prepareRequestDirectory(repository.path);
       if (!allocated.ok) return allocated;
       const immutableLog = `${allocated.value}/${decoded.value.id}.log`;
-      const copied = await atomicCopy(decoded.value.log, immutableLog);
+      const copied = await atomicCopy(decoded.value.log, immutableLog, true);
       if (!copied.ok) return copied;
       const terminal = { ...decoded.value, log: immutableLog };
       const recorded = await atomicJson(
         `${repository.path}/.mci/ci/latest.json`,
         terminal,
+        true,
       );
       return recorded.ok ? ok(terminal) : recorded;
     },
@@ -502,9 +546,10 @@ export const openDaemonStore = async (
         const durable = await atomicJson(
           `${directory.value}/${terminal.id}.json`,
           terminal,
+          true,
         );
         if (!durable.ok) return durable;
-        const reference = await atomicJson(`${path}/.mci/ci/latest.json`, terminal);
+        const reference = await atomicJson(`${path}/.mci/ci/latest.json`, terminal, true);
         if (!reference.ok) return reference;
         const logSafe = await regularTarget(`${path}/.mci/ci/latest.log`);
         if (!logSafe.ok) return logSafe;
@@ -514,8 +559,7 @@ export const openDaemonStore = async (
         if (!logTemporary.ok) return logTemporary;
         const projected = await attempt(async () => {
           await Deno.copyFile(terminal.log, logTemporary.value);
-          await Deno.chmod(logTemporary.value, 0o600);
-          await Deno.rename(logTemporary.value, `${path}/.mci/ci/latest.log`);
+          await commitTemporary(logTemporary.value, `${path}/.mci/ci/latest.log`, true);
         });
         if (!projected.ok) {
           await attempt(() => Deno.remove(logTemporary.value));
@@ -524,7 +568,7 @@ export const openDaemonStore = async (
         return await atomicJson(`${path}/.mci/ci/status.json`, {
           version: 2,
           ...terminal,
-        });
+        }, true);
       });
       terminalChains.set(path, update);
       void update.finally(() => {
@@ -533,7 +577,9 @@ export const openDaemonStore = async (
       return update;
     },
     writeSnapshot: (snapshot) => {
-      const update = snapshotChain.then(() => atomicJson(paths.snapshot, snapshot));
+      const update = snapshotChain.then(() =>
+        atomicJson(paths.snapshot, snapshot, false)
+      );
       snapshotChain = update;
       return update;
     },
