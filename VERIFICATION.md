@@ -42,12 +42,13 @@ identities, failed registration cleanup, rejected finish registration, and comma
 identity refusal without signals.
 
 On 2026-10-03, a probe confirmed that macOS returns EPERM for `killpg` on a group whose
-only member is an unreaped zombie, and ESRCH after reaping. Before the cleanup change, a
-native probe that cancelled a step with a background child failed in 12 of 60 rounds with
-a group inspection EPERM. After the change, the same probe passed 60 of 60 rounds, and a
-faster-policy probe passed 200 of 200. Three capability tests cover a vanished group after
-an EPERM, an EPERM during the grace poll, and an EPERM that remains while the group
-exists.
+only member is an unreaped zombie, and ESRCH after reaping. A native probe cancelled a
+step with a background child. With the old cleanup code, it failed in 4 of 180 rounds with
+a group EPERM. An intermediate version that waited only for the direct child failed in 12
+of 60 rounds, because launchd reaps the orphan later. With the final change, the probe
+passed 240 of 240 rounds, and a faster-policy probe passed 200 of 200. Three capability
+tests cover a vanished group after an EPERM, an EPERM during the grace poll, and an EPERM
+that remains while the group exists.
 
 Workspace tests cover competing runs, lock release, private scripts, abandoned
 directories, invalid journals, and symlink rejection. A native macOS test kills the owning
