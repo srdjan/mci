@@ -226,6 +226,26 @@ const waitForStatus = async (
   return status.current();
 };
 
+// macOS returns EPERM for a group whose remaining members are all unreaped zombies.
+// Deno reaps the direct child and launchd reaps orphans, so the group vanishes soon.
+// After an error, poll with signal 0 only, because a reaped PID can be reused.
+const signalSettledGroup = async (
+  pid: number,
+  signal: Deno.Signal | 0,
+  capabilities: ProcessCapabilities,
+  policy: ProcessPolicy,
+): Promise<Result<boolean>> => {
+  const sent = await capabilities.signalGroup(pid, signal);
+  if (sent.ok) return sent;
+  const deadline = capabilities.now() + policy.reapMs;
+  while (capabilities.now() < deadline) {
+    await capabilities.delay(Math.min(policy.pollMs, deadline - capabilities.now()));
+    const probed = await capabilities.signalGroup(pid, 0);
+    if (probed.ok && !probed.value) return probed;
+  }
+  return sent;
+};
+
 const cleanProcess = async (
   pid: number,
   firstSignal: Deno.Signal,
@@ -235,20 +255,8 @@ const cleanProcess = async (
 ): Promise<Cleanup> => {
   const diagnostics: string[] = [];
   let groupClean = false;
-  // macOS returns EPERM for a group whose remaining members are all unreaped zombies.
-  // Deno reaps the direct child and launchd reaps orphans, so the group vanishes soon.
-  // After an error, poll with signal 0 only, because a reaped PID can be reused.
-  const signalGroup = async (signal: Deno.Signal | 0): Promise<Result<boolean>> => {
-    const sent = await capabilities.signalGroup(pid, signal);
-    if (sent.ok) return sent;
-    const deadline = capabilities.now() + policy.reapMs;
-    while (capabilities.now() < deadline) {
-      await capabilities.delay(Math.min(policy.pollMs, deadline - capabilities.now()));
-      const probed = await capabilities.signalGroup(pid, 0);
-      if (probed.ok && !probed.value) return probed;
-    }
-    return sent;
-  };
+  const signalGroup = (signal: Deno.Signal | 0) =>
+    signalSettledGroup(pid, signal, capabilities, policy);
   const first = await signalGroup(firstSignal);
   if (!first.ok) diagnostics.push(`Process group cleanup failed: ${first.error}`);
   else if (!first.value) groupClean = true;
@@ -436,11 +444,12 @@ export const runProcess = async (
 const recoveryState = async (
   record: ProcessRecord,
   capabilities: ProcessCapabilities,
+  policy: ProcessPolicy,
 ): Promise<Result<"gone" | "matched" | "orphaned">> => {
   const inspected = await capabilities.inspect(record.pid);
   if (!inspected.ok) return inspected;
   if (inspected.value === null) {
-    const group = await capabilities.signalGroup(record.pid, 0);
+    const group = await signalSettledGroup(record.pid, 0, capabilities, policy);
     if (!group.ok) return group;
     return ok(group.value ? "orphaned" : "gone");
   }
@@ -452,29 +461,30 @@ const signalRecoveryGroup = async (
   record: ProcessRecord,
   signal: Deno.Signal | 0,
   capabilities: ProcessCapabilities,
+  policy: ProcessPolicy,
 ): Promise<Result<boolean>> => {
-  const state = await recoveryState(record, capabilities);
+  const state = await recoveryState(record, capabilities, policy);
   if (!state.ok) return state;
   if (state.value === "gone") return ok(false);
   if (state.value === "orphaned") {
     return err(`Process ${record.pid} leader is absent while its group still exists`);
   }
-  return await capabilities.signalGroup(record.pid, signal);
+  return await signalSettledGroup(record.pid, signal, capabilities, policy);
 };
 
 const waitForRecovery = async (
   record: ProcessRecord,
   capabilities: ProcessCapabilities,
+  policy: ProcessPolicy,
   timeoutMs: number,
-  pollMs: number,
 ): Promise<Result<"gone" | "matched" | "orphaned">> => {
   const deadline = capabilities.now() + timeoutMs;
   while (capabilities.now() < deadline) {
-    await capabilities.delay(Math.min(pollMs, deadline - capabilities.now()));
-    const state = await recoveryState(record, capabilities);
+    await capabilities.delay(Math.min(policy.pollMs, deadline - capabilities.now()));
+    const state = await recoveryState(record, capabilities, policy);
     if (!state.ok || state.value === "gone") return state;
   }
-  return await recoveryState(record, capabilities);
+  return await recoveryState(record, capabilities, policy);
 };
 
 /** Best-effort recovery checks process identity before every signal. */
@@ -484,30 +494,20 @@ export const recoverProcess = async (
 ): Promise<Result<void>> => {
   const capabilities = supervision.capabilities ?? nativeCapabilities;
   const policy = supervision.policy ?? nativePolicy;
-  const terminated = await signalRecoveryGroup(record, "SIGTERM", capabilities);
+  const terminated = await signalRecoveryGroup(record, "SIGTERM", capabilities, policy);
   if (!terminated.ok) return terminated;
   if (!terminated.value) return ok(undefined);
 
-  const graceful = await waitForRecovery(
-    record,
-    capabilities,
-    policy.graceMs,
-    policy.pollMs,
-  );
+  const graceful = await waitForRecovery(record, capabilities, policy, policy.graceMs);
   if (!graceful.ok) return graceful;
   if (graceful.value === "gone") return ok(undefined);
   if (graceful.value === "orphaned") {
     return err(`Process ${record.pid} leader is absent while its group still exists`);
   }
-  const killed = await signalRecoveryGroup(record, "SIGKILL", capabilities);
+  const killed = await signalRecoveryGroup(record, "SIGKILL", capabilities, policy);
   if (!killed.ok) return killed;
   if (!killed.value) return ok(undefined);
-  const forced = await waitForRecovery(
-    record,
-    capabilities,
-    policy.reapMs,
-    policy.pollMs,
-  );
+  const forced = await waitForRecovery(record, capabilities, policy, policy.reapMs);
   if (!forced.ok) return forced;
   if (forced.value === "gone") return ok(undefined);
   return err(`Process group ${record.pid} cleanup remains uncertain after SIGKILL`);

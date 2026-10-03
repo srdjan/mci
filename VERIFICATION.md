@@ -88,7 +88,11 @@ a group EPERM. An intermediate version that waited only for the direct child fai
 of 60 rounds, because launchd reaps the orphan later. With the final change, the probe
 passed 240 of 240 rounds, and a faster-policy probe passed 200 of 200. Three capability
 tests cover a vanished group after an EPERM, an EPERM during the grace poll, and an EPERM
-that remains while the group exists.
+that remains while the group exists. Recovery used to send its group signals without that
+poll. Four recovery capability tests failed before the change and pass after it. The tests
+cover an EPERM probe for a missing leader, an EPERM on SIGTERM, and an EPERM probe during
+the grace wait. The fourth test keeps the error while EPERM continues, and it sends only
+signal 0.
 
 Workspace tests cover competing runs, lock release, private scripts, abandoned
 directories, invalid journals, and symlink rejection. A native macOS test kills the owning

@@ -481,6 +481,87 @@ Deno.test("recoverProcess waits for group disappearance after SIGKILL", async ()
   equal(orphanChecks, 2);
 });
 
+const recoveryRecord = {
+  pid: 321,
+  started: "Fri Oct  2 11:09:09 2026",
+  script: "/private/step.sh",
+};
+
+Deno.test("recoverProcess treats a group error as gone when the group then vanishes", async () => {
+  let probes = 0;
+  const fake = fakeCapabilities({
+    identity: ok(null),
+    group: () => {
+      probes++;
+      return probes === 1 ? err("EPERM") : ok(false);
+    },
+  });
+  equal(
+    await recoverProcess(recoveryRecord, { capabilities: fake.capabilities, policy }),
+    ok(undefined),
+  );
+  equal(fake.groupSignals, [0, 0]);
+});
+
+Deno.test("recoverProcess treats a signal error as gone when the group then vanishes", async () => {
+  const fake = fakeCapabilities({
+    group: (signal) => signal === 0 ? ok(false) : err("EPERM"),
+  });
+  equal(
+    await recoverProcess(recoveryRecord, { capabilities: fake.capabilities, policy }),
+    ok(undefined),
+  );
+  equal(fake.groupSignals, ["SIGTERM", 0]);
+  equal(fake.directSignals, []);
+});
+
+Deno.test("recoverProcess treats a wait-time group error as gone when the group vanishes", async () => {
+  const groupSignals: Array<Deno.Signal | 0> = [];
+  let now = 0;
+  let terminated = false;
+  let probes = 0;
+  const capabilities: ProcessCapabilities = {
+    launch: () => Promise.resolve(err("unused")),
+    inspect: () =>
+      Promise.resolve(
+        terminated ? ok(null) : ok({
+          pid: 321,
+          pgid: 321,
+          started: "Fri Oct  2 11:09:09 2026",
+          command: "/bin/bash /private/step.sh",
+        }),
+      ),
+    signalGroup: (_pid, signal) => {
+      groupSignals.push(signal);
+      if (signal === "SIGTERM") terminated = true;
+      if (signal !== 0) return Promise.resolve(ok(true));
+      probes++;
+      return Promise.resolve(probes === 1 ? err("EPERM") : ok(false));
+    },
+    signalProcess: () => Promise.resolve(ok(false)),
+    now: () => now,
+    delay: (ms) => {
+      now += ms;
+      return Promise.resolve();
+    },
+  };
+  equal(await recoverProcess(recoveryRecord, { capabilities, policy }), ok(undefined));
+  equal(groupSignals, ["SIGTERM", 0, 0]);
+});
+
+Deno.test("recoverProcess keeps a group error while the group remains", async () => {
+  const fake = fakeCapabilities({ identity: ok(null), group: () => err("EPERM") });
+  const result = await recoverProcess(recoveryRecord, {
+    capabilities: fake.capabilities,
+    policy,
+  });
+  assert(!result.ok);
+  assert(result.error.includes("EPERM"), result.error);
+  assert(fake.groupSignals.length > 1);
+  assert(fake.groupSignals.every((signal) => signal === 0));
+  equal(fake.directSignals, []);
+});
+
 const cancelOnStart = (fake: ReturnType<typeof fakeCapabilities>) => {
   const controller = new AbortController();
   return runProcess({

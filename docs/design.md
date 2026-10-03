@@ -100,7 +100,8 @@ On macOS, a group signal returns EPERM when the remaining group members are all 
 zombies. Deno reaps the direct child and launchd reaps orphans, so such a group soon
 disappears. After a group signal error, the process module polls the group with signal 0
 for at most the reap period. A group that disappears counts as clean. Otherwise the
-original error remains. The module sends no other signal to a reaped PID.
+original error remains. The module sends no other signal to a reaped PID. Run cleanup and
+recovery use the same rule.
 
 Native process inspection uses bounded command capture. If inspection times out, the
 capture module kills its subprocess, bounds reaping, and closes its output pipe.
