@@ -94,6 +94,15 @@ cover an EPERM probe for a missing leader, an EPERM on SIGTERM, and an EPERM pro
 the grace wait. The fourth test keeps the error while EPERM continues, and it sends only
 signal 0.
 
+On 2026-10-03, a native probe measured whether recovery meets a zombie leader. `ps` shows
+a zombie as `<defunct>` with an unchanged PID, group, and start time. Recovery would then
+report a command mismatch and keep the journal. In each round, a short-lived parent
+started a detached Bash group leader and exited, so launchd adopted the leader. Then
+`recoverProcess` recovered the recorded identity. Recovery succeeded in 1,800 of 1,800
+rounds and never inspected a `<defunct>` leader. The rounds were 500 with one sleep, 500
+with an added background sleep, 500 with native capabilities, and 300 with 14 busy CPU
+cores. The probe does not cover other hosts or heavier load.
+
 Workspace tests cover competing runs, lock release, private scripts, abandoned
 directories, invalid journals, and symlink rejection. A native macOS test kills the owning
 runner with SIGKILL. The next run recovers its recorded process before executing the next
