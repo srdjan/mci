@@ -6,19 +6,17 @@ the authority of the invoking user.
 
 ## Module responsibilities
 
-| Module               | Responsibility                                                                          |
-| -------------------- | --------------------------------------------------------------------------------------- |
-| `workflow.ts`        | YAML parsing, supported-field validation, environment precedence, and plan construction |
-| `process.ts`         | Process groups, cancellation, bounded termination, and process identity checks          |
-| `command.ts`         | Bounded command capture, pipe closure, and command reaping                              |
-| `workspace.ts`       | Workspace exclusion, contained step preparation, private scripts, and recovery journals |
-| `runner.ts`          | Step order, environment filtering, job deadlines, and final results                     |
-| `cli.ts`             | Arguments, platform policy, diagnostics, OS signal listeners, and the `ci` command      |
-| `ci.ts`              | Saved CI output, writer exclusion, cancellation, and atomic status records              |
-| `monitor.ts`         | SwiftBar menu rendering and logger inspection                                           |
-| `install-monitor.ts` | Plugin generation and safe installation                                                 |
-| `runtime.ts`         | Version, source arguments, and self-invocation for source and compiled modes            |
-| `result.ts`          | Expected failures and exception conversion at library and OS boundaries                 |
+| Module         | Responsibility                                                                          |
+| -------------- | --------------------------------------------------------------------------------------- |
+| `workflow.ts`  | YAML parsing, supported-field validation, environment precedence, and plan construction |
+| `process.ts`   | Process groups, cancellation, bounded termination, and process identity checks          |
+| `command.ts`   | Bounded command capture, pipe closure, and command reaping                              |
+| `workspace.ts` | Workspace exclusion, contained step preparation, private scripts, and recovery journals |
+| `runner.ts`    | Step order, environment filtering, job deadlines, and final results                     |
+| `cli.ts`       | Arguments, platform policy, diagnostics, OS signal listeners, and the `ci` command      |
+| `ci.ts`        | Saved CI output, writer exclusion, cancellation, and atomic status records              |
+| `runtime.ts`   | Version, source arguments, and self-invocation for source and compiled modes            |
+| `result.ts`    | Expected failures and exception conversion at library and OS boundaries                 |
 
 The YAML package version and integrity value reside in `deno.lock`. The parser checks the
 entire document before selected-job validation. An invalid unselected job can therefore
@@ -137,30 +135,10 @@ arguments. A compiled binary starts itself. `mci ci` always watches its own pare
 death of Git or `deno task` cancels the job. It forwards OS cancellation. The existing CLI
 handles workflow process cleanup if the logging adapter dies.
 
-The status record includes the logger's PID, native process start text, and command. The
-SwiftBar plugin compares that identity through bounded `/bin/ps` inspection. An absent or
-changed identity with running status displays interrupted.
-
-Completed legacy records remain readable. A live legacy running record displays an
-identity error. The menu opens the fixed log path or repository and refreshes its display.
-The monitor provides no CI trigger.
-
-The installer creates one executable plugin for each monitored workspace. The plugin uses
-absolute paths for Deno, the workspace, and the meeci source that supplies `deno.json` and
-`scripts/monitor.ts`. The workspace can be any repository. The plugin name is
-`mci-<slug>-<hash>.5s.sh`, from the workspace name and the first eight hex digits of the
-SHA-256 of its canonical path. The marker line with the workspace URL identifies the
-owner. The installer replaces only a plugin that carries the same marker.
-
-The installer uses the configured SwiftBar plugin directory when available. Otherwise it
-selects a dedicated directory outside SwiftBar's internal cache. Plugin installation
-leaves unrelated plugins in place. After a successful install, the installer removes the
-legacy `mci-meeci.5s.sh` only when it carries the same workspace marker. Installers do not
-lock each other. Another writer can replace the legacy file after the ownership check and
-before the removal. The plugin enters the quoted workspace path before using
-`--allow-read=.`. Its process permission permits only `/bin/ps`. The menu title shows the
-workspace name, and the menu lists the workspace path. Logs and status remain local and
-gitignored.
+The status record includes the logger's PID, native process start text, and command. A
+reader can compare that identity through bounded `/bin/ps` inspection. An absent or
+changed identity with running status means that the logger was interrupted. Completed
+legacy records remain readable. Logs and status remain local and gitignored.
 
 ## Release responsibility
 

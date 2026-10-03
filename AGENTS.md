@@ -8,8 +8,8 @@ The tracked hook lives at `.githooks/pre-commit` and calls `deno task ci`.
 checks remain available for diagnosis and release evidence.
 
 CI YAML calls Deno tasks directly. Saved CI logs and status remain gitignored under
-`.mci/ci/`. The SwiftBar monitor reads those results and opens logs. The monitor must not
-start CI or add another automatic trigger.
+`.mci/ci/`. The menu bar monitor app reads those results and opens logs. The monitor must
+not start CI or add another automatic trigger.
 
 Work directly on local main. Commit each complete unit locally. Never push; the user owns
 repository backups.

@@ -15,8 +15,6 @@
     "check": "deno check src/main.ts scripts/*.ts tests/*.ts",
     "test": "deno test --permission-set=mci",
     "verify": "deno fmt --check && deno lint && deno task check && deno task test",
-    "monitor": "deno run --quiet --allow-read --allow-run=/bin/ps scripts/monitor.ts",
-    "monitor:install": "deno run --quiet --allow-read --allow-write --allow-env=HOME --allow-run=/usr/bin/defaults scripts/install-monitor.ts",
     "hooks:install": "git config --local core.hooksPath .githooks",
     "demo": "deno task mci run examples/basic.yml --job check",
     "compile": "deno compile --permission-set=mci --output dist/mci src/main.ts",
