@@ -480,3 +480,79 @@ Deno.test("recoverProcess waits for group disappearance after SIGKILL", async ()
   assert(groupSignals.includes("SIGKILL"));
   equal(orphanChecks, 2);
 });
+
+const cancelOnStart = (fake: ReturnType<typeof fakeCapabilities>) => {
+  const controller = new AbortController();
+  return runProcess({
+    shell: "/bin/bash",
+    script: "/private/step.sh",
+    cwd: "/private",
+    env: {},
+    signal: controller.signal,
+    onStart: () => {
+      controller.abort("SIGTERM");
+      return Promise.resolve(ok(undefined));
+    },
+  }, { capabilities: fake.capabilities, policy });
+};
+
+Deno.test("runProcess treats a group error as clean when the group then vanishes", async () => {
+  let reap = (_status: Deno.CommandStatus) => {};
+  const status = new Promise<Deno.CommandStatus>((resolve) => reap = resolve);
+  let probes = 0;
+  const fake = fakeCapabilities({
+    status,
+    group: (signal) => {
+      if (signal !== 0) {
+        reap({ success: false, code: 143, signal: null });
+        return err("EPERM");
+      }
+      probes++;
+      return probes === 1 ? err("EPERM") : ok(false);
+    },
+  });
+  const result = await cancelOnStart(fake);
+  equal(result, ok({ kind: "stopped", reason: "SIGTERM" }));
+  equal(fake.groupSignals, ["SIGTERM", 0, 0]);
+  equal(fake.directSignals, []);
+});
+
+Deno.test("runProcess treats a grace-poll group error as clean when the group vanishes", async () => {
+  let reap = (_status: Deno.CommandStatus) => {};
+  const status = new Promise<Deno.CommandStatus>((resolve) => reap = resolve);
+  let probes = 0;
+  const fake = fakeCapabilities({
+    status,
+    group: (signal) => {
+      if (signal !== 0) {
+        reap({ success: false, code: 143, signal: null });
+        return ok(true);
+      }
+      probes++;
+      return probes === 1 ? err("EPERM") : ok(false);
+    },
+  });
+  const result = await cancelOnStart(fake);
+  equal(result, ok({ kind: "stopped", reason: "SIGTERM" }));
+  equal(fake.groupSignals, ["SIGTERM", 0, 0]);
+  equal(fake.directSignals, []);
+});
+
+Deno.test("runProcess keeps a group error while the group remains", async () => {
+  let reap = (_status: Deno.CommandStatus) => {};
+  const status = new Promise<Deno.CommandStatus>((resolve) => reap = resolve);
+  const fake = fakeCapabilities({
+    status,
+    group: (signal) => {
+      if (signal === 0) return ok(true);
+      reap({ success: false, code: 143, signal: null });
+      return err("EPERM");
+    },
+  });
+  const result = await cancelOnStart(fake);
+  assert(!result.ok);
+  assert(result.error.includes("Process group cleanup failed: EPERM"), result.error);
+  assert(result.error.includes("cleanup remains uncertain"), result.error);
+  assert(!fake.groupSignals.includes("SIGKILL"));
+  equal(fake.directSignals, []);
+});

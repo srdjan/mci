@@ -235,7 +235,21 @@ const cleanProcess = async (
 ): Promise<Cleanup> => {
   const diagnostics: string[] = [];
   let groupClean = false;
-  const first = await capabilities.signalGroup(pid, firstSignal);
+  // macOS returns EPERM for a group whose remaining members are all unreaped zombies.
+  // Deno reaps the direct child and launchd reaps orphans, so the group vanishes soon.
+  // After an error, poll with signal 0 only, because a reaped PID can be reused.
+  const signalGroup = async (signal: Deno.Signal | 0): Promise<Result<boolean>> => {
+    const sent = await capabilities.signalGroup(pid, signal);
+    if (sent.ok) return sent;
+    const deadline = capabilities.now() + policy.reapMs;
+    while (capabilities.now() < deadline) {
+      await capabilities.delay(Math.min(policy.pollMs, deadline - capabilities.now()));
+      const probed = await capabilities.signalGroup(pid, 0);
+      if (probed.ok && !probed.value) return probed;
+    }
+    return sent;
+  };
+  const first = await signalGroup(firstSignal);
   if (!first.ok) diagnostics.push(`Process group cleanup failed: ${first.error}`);
   else if (!first.value) groupClean = true;
 
@@ -243,7 +257,7 @@ const cleanProcess = async (
     const deadline = capabilities.now() + policy.graceMs;
     while (capabilities.now() < deadline) {
       await capabilities.delay(policy.pollMs);
-      const present = await capabilities.signalGroup(pid, 0);
+      const present = await signalGroup(0);
       if (!present.ok) {
         diagnostics.push(`Process group inspection failed: ${present.error}`);
         break;
@@ -254,13 +268,14 @@ const cleanProcess = async (
       }
     }
     if (!groupClean) {
-      const killed = await capabilities.signalGroup(pid, "SIGKILL");
+      const killed = await signalGroup("SIGKILL");
       if (!killed.ok) diagnostics.push(`Process group kill failed: ${killed.error}`);
       else if (!killed.value) groupClean = true;
     }
   }
 
-  if (!groupClean) {
+  // A reaped direct child has no process left to kill, and its PID can be reused.
+  if (!groupClean && status.current()?.ok !== true) {
     const killed = await capabilities.signalProcess(pid, "SIGKILL");
     if (!killed.ok) diagnostics.push(`Direct process kill failed: ${killed.error}`);
   }
@@ -283,7 +298,7 @@ const cleanProcess = async (
   if (!groupClean) {
     const deadline = capabilities.now() + policy.reapMs;
     while (capabilities.now() <= deadline) {
-      const present = await capabilities.signalGroup(pid, 0);
+      const present = await signalGroup(0);
       if (!present.ok) {
         diagnostics.push(`Final process group inspection failed: ${present.error}`);
         break;

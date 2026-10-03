@@ -61,6 +61,12 @@ subsequent wait for the direct child. Cleanup errors make the run fail and prese
 original execution detail. OS scheduling and filesystem operations prevent a hard
 real-time completion guarantee.
 
+On macOS, a group signal returns EPERM when the remaining group members are all unreaped
+zombies. Deno reaps the direct child and launchd reaps orphans, so such a group soon
+disappears. After a group signal error, the process module polls the group with signal 0
+for at most the reap period. A group that disappears counts as clean. Otherwise the
+original error remains. The module sends no other signal to a reaped PID.
+
 Native process inspection uses bounded command capture. If inspection times out, the
 capture module kills its subprocess, bounds reaping, and closes its output pipe.
 Registration failure keeps its original diagnostic. Confirmed group cleanup and reaping
