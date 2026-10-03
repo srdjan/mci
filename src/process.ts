@@ -118,9 +118,13 @@ export const inspectProcessIdentity = async (
   if (!inspected.ok) return err(`Unable to inspect process ${pid}: ${inspected.error}`);
   const output = new TextDecoder().decode(inspected.value.stdout);
   if (!inspected.value.status.success) {
-    return output.trim().length === 0
+    const stderr = new TextDecoder().decode(inspected.value.stderr).trim();
+    return inspected.value.status.code === 1 && output.trim().length === 0 &&
+        stderr.length === 0
       ? ok(null)
-      : err(`Unable to inspect process ${pid}: ps exited ${inspected.value.status.code}`);
+      : err(
+        `Unable to inspect process ${pid}: ps exited ${inspected.value.status.code}: ${stderr}`,
+      );
   }
   return parseIdentity(pid, output);
 };

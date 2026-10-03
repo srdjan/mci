@@ -436,10 +436,18 @@ Deno.test("recoverProcess rejects a wrong command without any signal", async () 
   equal(fake.directSignals, []);
 });
 
+Deno.test("inspectProcessIdentity reports a ps failure for an invalid PID", async () => {
+  const inspected = await inspectProcessIdentity(2_147_483_647);
+  assert(!inspected.ok);
+  assert(inspected.error.includes("too large"));
+});
+
 Deno.test("recoverProcess accepts an already-gone process", async () => {
+  const child = new Deno.Command("/usr/bin/true").spawn();
+  await child.status;
   equal(
     await recoverProcess({
-      pid: 2_147_483_647,
+      pid: child.pid,
       started: "Mon Jan  1 00:00:00 1900",
       script: "/private/gone.sh",
     }),
