@@ -6,10 +6,12 @@ import SwiftUI
 struct MonitorApp: App {
     // The command line tools ship no SwiftUIMacros plugin, so the app avoids `@State`.
     // `App` is created once, so plain stored properties keep these objects alive.
-    // MCI_MONITOR_REGISTRY_DIR points a test run at a temporary registry folder.
+    // MCI_MONITOR_DAEMON_DIR points a test run at a temporary daemon folder.
     private let model = MonitorModel(
-        registry: ProcessInfo.processInfo.environment["MCI_MONITOR_REGISTRY_DIR"]
-            .map { Registry(directory: $0) } ?? Registry())
+        client: DaemonClient(
+            directory: ProcessInfo.processInfo.environment["MCI_MONITOR_DAEMON_DIR"]
+                ?? ProcessInfo.processInfo.environment["MCI_MONITOR_REGISTRY_DIR"]
+                ?? DaemonClient.defaultDirectory))
     private let loginItem = LoginItem()
     private let presenter = AddRepositoryPresenter()
     private let logPresenter = LogWindowPresenter()

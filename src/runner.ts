@@ -11,6 +11,13 @@ export type RunResult = {
   readonly detail: string;
 };
 
+export type RunEvent = {
+  readonly type: "step";
+  readonly index: number;
+  readonly total: number;
+  readonly name: string;
+};
+
 export const stepEnvironment = (
   inherited: Env,
   overlay: Env,
@@ -50,6 +57,7 @@ export const runPlan = async (plan: Plan, options: {
   readonly inherited: Env;
   readonly signal?: AbortSignal;
   readonly log?: (text: string) => void;
+  readonly event?: (event: RunEvent) => Promise<Result<void>>;
 }): Promise<RunResult> => {
   const log = options.log ?? console.log;
   let completed = 0;
@@ -94,6 +102,21 @@ export const runPlan = async (plan: Plan, options: {
       }
       if (performance.now() >= deadline) controller.abort("timeout");
       if (controller.signal.aborted) return stopped(controller.signal.reason);
+      if (options.event !== undefined) {
+        const recorded = await options.event({
+          type: "step",
+          index,
+          total: plan.steps.length,
+          name: step.name,
+        });
+        if (!recorded.ok) {
+          return result(
+            "failure",
+            1,
+            `${step.name}: event write failed: ${recorded.error}`,
+          );
+        }
+      }
       log(`[${index + 1}/${plan.steps.length}] ${step.name}`);
       const start = performance.now();
       const outcome = await runProcess({

@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "instance": "daemon-a",
+  "pid": 4242,
+  "updated": "2026-10-03T18:00:00.000Z",
+  "repositories": [
+    {
+      "id": "repo-a",
+      "path": "/tmp/repo-a",
+      "queued": 0,
+      "active": null,
+      "latest": null,
+      "blocked": null
+    },
+    {
+      "id": "repo-a",
+      "path": "/tmp/repo-b",
+      "queued": 0,
+      "active": null,
+      "latest": null,
+      "blocked": null
+    }
+  ]
+}

@@ -6,30 +6,59 @@ the authority of the invoking user.
 
 ## Module responsibilities
 
-| Module         | Responsibility                                                                          |
-| -------------- | --------------------------------------------------------------------------------------- |
-| `workflow.ts`  | YAML parsing, supported-field validation, environment precedence, and plan construction |
-| `process.ts`   | Process groups, cancellation, bounded termination, and process identity checks          |
-| `command.ts`   | Bounded command capture, pipe closure, and command reaping                              |
-| `workspace.ts` | Workspace exclusion, contained step preparation, private scripts, and recovery journals |
-| `runner.ts`    | Step order, environment filtering, job deadlines, and final results                     |
-| `cli.ts`       | Arguments, platform policy, diagnostics, OS signal listeners, and the `ci` command      |
-| `ci.ts`        | Saved CI output, writer exclusion, cancellation, and atomic status records              |
-| `runtime.ts`   | Version, source arguments, and self-invocation for source and compiled modes            |
-| `result.ts`    | Expected failures and exception conversion at library and OS boundaries                 |
+| Module            | Responsibility                                                                 |
+| ----------------- | ------------------------------------------------------------------------------ |
+| `workflow.ts`     | YAML validation, environment precedence, and plan construction                 |
+| `process.ts`      | Process groups, cancellation, bounded termination, and identity checks         |
+| `workspace.ts`    | Workspace exclusion, private scripts, and worker recovery journals             |
+| `runner.ts`       | Step order, environment filtering, deadlines, and final results                |
+| `protocol.ts`     | Exact daemon request, response, snapshot, and terminal record shapes           |
+| `ipc.ts`          | Bounded newline-delimited JSON transport                                       |
+| `client.ts`       | Daemon requests, request-log streaming, and caller cancellation                |
+| `daemon.ts`       | Registration, queues, worker ownership, snapshots, and shutdown                |
+| `daemon-store.ts` | Registry, request journal, result projection, and spool retention              |
+| `worker.ts`       | Isolated execution of one accepted plan                                        |
+| `install.ts`      | Homebrew service startup and packaged monitor installation                     |
+| `hooks.ts`        | Managed pre-commit hooks, stable tasks, and installation diagnosis             |
+| `cli.ts`          | Command routing, direct runs, daemon submission, and signal handling           |
+| `runtime.ts`      | Version, source arguments, and self-invocation                                 |
+| `result.ts`       | Expected failures and exception conversion at library and operating boundaries |
 
-The menu bar app lives in the Swift package `monitor/`. `MonitorCore` holds the status
-decoder, display states, the combined state, the registry, and process inspection.
-`MonitorApp` holds the SwiftUI panel and the file watches. `MonitorChecks` runs plain
-checks, because Swift Testing macros fail intermittently with only the Command Line Tools.
-`scripts/install-monitor.ts` builds, signs, and installs the app. `scripts/registry.ts`
-writes the registry. `scripts/app-check.ts` builds the package and runs `MonitorChecks`
-inside `deno task verify` on macOS.
+The menu bar app lives in the Swift package `monitor/`. `MonitorCore` decodes daemon
+snapshots and maps repository states to display states.
+
+`MonitorApp` owns the SwiftUI panel, daemon client, snapshot watch, and log window.
+`MonitorChecks` runs plain checks without Swift Testing macros.
 
 The YAML package version and integrity value reside in `deno.lock`. The parser checks the
 entire document before selected-job validation. An invalid unselected job can therefore
 prevent execution when its YAML syntax is invalid. Unsupported semantics in an unselected
 job do not prevent selected-job execution.
+
+## Shared daemon lifecycle
+
+One daemon serves one user through a private Unix socket. The daemon holds one FIFO queue
+for each registered repository.
+
+The daemon starts one worker per active repository. Different repositories can run at the
+same time, while each repository runs one request at a time.
+
+The submitting connection owns its request. A cancel message or connection loss cancels
+only that request.
+
+The daemon journals every accepted request before it confirms acceptance. On restart, it
+records each unfinished request as INTERRUPTED and does not retry it. A durable terminal
+record preserves completed work if projection or journal cleanup fails.
+
+Each snapshot carries an active request, queue count, latest completed result, and blocked
+state for every repository. New work does not replace the latest completed result.
+
+Each request writes an immutable spool under `.mci/ci/requests/`. The daemon retains the
+latest completed spool and every spool held by a connected client. Pending journal entries
+also retain their recovery files.
+
+When a newer request completes, the daemon removes the older spool after its clients
+disconnect. It projects the new result to `latest.json`, `status.json`, and `latest.log`.
 
 ## Workspace lifecycle
 
@@ -109,67 +138,60 @@ compilation, and test tasks select that set. The runtime module supplies source 
 with absolute source and configuration paths. The CLI reports the host, Deno version, and
 resolved Bash path.
 
-`ci/local-ci.yml` contains the supported local workflow. GitHub serves only as a
-repository backup service. Automatic CI runs only through `.githooks/pre-commit`. The hook
-resolves the repository root and calls `deno task ci`. The logging adapter executes the
-local YAML, which calls `deno task verify` directly. Failed checks block the commit.
+`ci/local-ci.yml` contains the supported local workflow. Its shell steps call Deno tasks
+directly.
+
+GitHub serves only as a repository backup service. The repository has no GitHub Actions
+workflow or remote test trigger.
+
+Automatic CI runs only through `.githooks/pre-commit`. The hook resolves the repository
+root and calls `deno task ci`.
 
 `deno task hooks:install` sets the local Git hook path to `.githooks`. Each clone needs
 its own installation because Git does not copy local configuration. The checks cover the
 working tree, including unstaged changes. Manual verification and compilation remain
 available. `VERIFICATION.md` records observed coverage and keeps evidence limits explicit.
 
-## Saved CI results and monitor
+## Homebrew package and managed hooks
 
-The CI adapter holds a separate file lock beneath `.mci/ci/` before replacing saved
-output. It publishes running status before replacing the log with a private new file. The
-adapter rejects log symlinks and preserves other hard links. It streams both output
-channels to the terminal and `.mci/ci/latest.log`.
+`scripts/package.ts` compiles the CLI and builds the signed monitor bundle. It writes a
+local archive and `dist/tap/Formula/mci.rb`.
 
-Atomic status updates record running, pass, fail, or cancelled. A nonzero child exit keeps
-its exit code when logging also fails. Cancellation converts a zero child exit to the
-interruption code.
+The formula installs the CLI, stores the monitor under `libexec`, and defines `mci daemon`
+as a Homebrew service.
 
-After the child process exits, the adapter waits for stdout and stderr to close for an
-output grace period of 2000 ms. A detached process, for example one started with `setsid`,
-can hold a pipe open. The adapter then cancels the stream reader and records a diagnostic.
-The diagnostic converts a zero child exit to failure. Cancellation after the child exits
-cuts open streams at once and keeps the cancelled state. The adapter never signals the
-detached holder. The holder receives EPIPE or SIGPIPE on its next write.
+`mci setup` installs the packaged monitor and starts the service when necessary. The
+daemon imports the earlier registry only when its own registry does not exist.
 
-The `mci ci` command runs the adapter. The adapter launches `mci run` from the same
-program with parent supervision enabled. A source run starts Deno with the source
-arguments. A compiled binary starts itself. `mci ci` always watches its own parent, so the
-death of Git or `deno task` cancels the job. It forwards OS cancellation. The existing CLI
-handles workflow process cleanup if the logging adapter dies.
+`mci hooks install` validates one job and rejects recursive CI calls. It adds a stable
+`mci:ci` Deno task and selects the packaged hook through an absolute Homebrew path. Git
+configuration applies to the current worktree.
 
-The status record includes the logger's PID, native process start text, and command. A
-reader can compare that identity through bounded `/bin/ps` inspection. An absent or
-changed identity with running status means that the logger was interrupted. Completed
-legacy records remain readable. Logs and status remain local and gitignored.
+A future worktree can inherit this hook path. Without the required task, the inherited
+hook blocks commits. Hook installation rejects unsafe shared Git settings.
+
+The managed hook is the only automatic trigger. Manual CLI commands remain available for
+diagnosis and release evidence.
 
 ## Menu bar monitor
 
-The status decoder in `MonitorCore` accepts exactly what `readCiStatus` accepts. Shared
-fixtures in `tests/fixtures/monitor/decode/` hold raw status text and the expected value
-or error category. Both `MonitorChecks` and `tests/monitor_fixtures_test.ts` check every
-fixture, so the two decoders cannot drift apart unnoticed.
+The app requests status from the daemon. It reads `snapshot.json` only when the daemon is
+unavailable, and treats active data in that snapshot as stale.
 
-A running record is checked with bounded `/bin/ps` inspection, as before. A matching
-logger shows RUNNING; an absent or changed logger shows INTERRUPTED. A registered folder
-that no longer exists shows MISSING. The combined icon shows the most urgent state in this
-order: ERROR, MISSING, INTERRUPTED, FAIL, RUNNING, CANCELLED, PASS, NO RUNS.
+The app watches the daemon state directory and refreshes on changes. A five-second timer
+repairs the watch and refreshes relative times.
 
-The registry `~/Library/Application Support/meeci/monitor.json` holds exactly
-`{ "version": 1, "workspaces": [...] }`. Every writer holds an exclusive lock on
-`monitor.json.lock` around read, validation, write, and rename. Deno `FsFile.lock` and
-Swift `flock(2)` exclude each other; a probe confirmed this on macOS 26.6.2. A writer
-stores canonical directory paths without duplicates and leaves a malformed registry
-unchanged.
+The app can register or unregister a repository through daemon requests. Unregistration
+fails while that repository has accepted requests.
 
-The app watches the registry folder and each `.mci/ci/` folder. It recreates a watch after
-its folder is deleted or renamed. A 5 s timer re-checks running loggers, retries missing
-watches, and updates relative times.
+The monitor does not submit or cancel CI. It opens repositories and reads selected spool
+logs without changing them.
+
+Each row shows the active request, queued count, and latest completed result. A separate
+button opens the last completed log during an active request.
+
+The combined icon uses the most urgent repository state. The states include unavailable,
+error, missing, interrupted, failure, running, queued, cancelled, pass, and no runs.
 
 The installer stages the bundle next to the destination, signs it ad hoc, and verifies the
 signature. It replaces `~/Applications/mci Monitor.app` only when the destination is a

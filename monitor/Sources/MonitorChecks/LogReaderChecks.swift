@@ -44,6 +44,10 @@ private func tail(_ result: Result<LogTail, LogError>) -> LogTail? {
         .success(LogTail(text: "line one\nline two\n", truncated: false, size: 18)),
         "small file is read whole")
     equal(
+        readLogTail(path: logDirectory(small) + "/latest.log"),
+        .success(LogTail(text: "line one\nline two\n", truncated: false, size: 18)),
+        "an immutable log path is read")
+    equal(
         readLogTail(workspace: small, maxBytes: 18),
         .success(LogTail(text: "line one\nline two\n", truncated: false, size: 18)),
         "file of exactly the limit is not truncated")

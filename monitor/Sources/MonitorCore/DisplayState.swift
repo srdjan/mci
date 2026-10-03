@@ -5,7 +5,7 @@ public enum DisplayColor: String, Equatable, Sendable {
 }
 
 public enum DisplayKind: String, CaseIterable, Equatable, Sendable {
-    case noRuns, pass, fail, cancelled, running, interrupted, error, missing
+    case noRuns, pass, fail, cancelled, queued, running, interrupted, error, missing, unavailable
 
     public var label: String {
         switch self {
@@ -13,10 +13,12 @@ public enum DisplayKind: String, CaseIterable, Equatable, Sendable {
         case .pass: "PASS"
         case .fail: "FAIL"
         case .cancelled: "CANCELLED"
+        case .queued: "QUEUED"
         case .running: "RUNNING"
         case .interrupted: "INTERRUPTED"
         case .error: "ERROR"
         case .missing: "MISSING"
+        case .unavailable: "DAEMON UNAVAILABLE"
         }
     }
 
@@ -26,10 +28,12 @@ public enum DisplayKind: String, CaseIterable, Equatable, Sendable {
         case .pass: "checkmark.circle.fill"
         case .fail: "xmark.circle.fill"
         case .cancelled: "stop.circle.fill"
+        case .queued: "clock.fill"
         case .running: "arrow.triangle.2.circlepath"
         case .interrupted: "exclamationmark.triangle.fill"
         case .error: "exclamationmark.triangle.fill"
         case .missing: "folder.badge.questionmark"
+        case .unavailable: "bolt.slash.fill"
         }
     }
 
@@ -39,36 +43,41 @@ public enum DisplayKind: String, CaseIterable, Equatable, Sendable {
         case .pass: .green
         case .fail: .red
         case .cancelled: .orange
+        case .queued: .blue
         case .running: .blue
         case .interrupted: .orange
         case .error: .red
         case .missing: .red
+        case .unavailable: .red
         }
     }
 
     /// Lower values are more urgent.
     public var urgency: Int {
         switch self {
-        case .error: 0
-        case .missing: 1
-        case .interrupted: 2
-        case .fail: 3
-        case .running: 4
-        case .cancelled: 5
-        case .pass: 6
-        case .noRuns: 7
+        case .unavailable: 0
+        case .error: 1
+        case .missing: 2
+        case .interrupted: 3
+        case .fail: 4
+        case .running: 5
+        case .queued: 6
+        case .cancelled: 7
+        case .pass: 8
+        case .noRuns: 9
         }
     }
 
     public var needsAttention: Bool {
         switch self {
-        case .error, .missing, .interrupted, .fail: true
-        case .running, .cancelled, .pass, .noRuns: false
+        case .unavailable, .error, .missing, .interrupted, .fail: true
+        case .running, .queued, .cancelled, .pass, .noRuns: false
         }
     }
 }
 
 public struct RowState: Equatable, Sendable {
+    public let repositoryID: String
     public let workspace: String
     public let name: String
     public let kind: DisplayKind
@@ -76,11 +85,15 @@ public struct RowState: Equatable, Sendable {
     public let code: Int?
     public let duration: TimeInterval?
     public let detail: String?
+    public let queued: Int
+    public let active: DaemonActive?
+    public let latest: DaemonTerminal?
 
     public init(
         workspace: String, kind: DisplayKind, lastRun: Date? = nil, code: Int? = nil,
         duration: TimeInterval? = nil, detail: String? = nil
     ) {
+        self.repositoryID = workspace
         self.workspace = workspace
         self.name = repositoryName(workspace)
         self.kind = kind
@@ -88,59 +101,34 @@ public struct RowState: Equatable, Sendable {
         self.code = code
         self.duration = duration
         self.detail = detail
+        self.queued = 0
+        self.active = nil
+        self.latest = nil
     }
+
+    public init(
+        repository: DaemonRepository, kind: DisplayKind, lastRun: Date?,
+        duration: TimeInterval?, detail: String?
+    ) {
+        self.repositoryID = repository.id
+        self.workspace = repository.path
+        self.name = repositoryName(repository.path)
+        self.kind = kind
+        self.lastRun = lastRun
+        self.code = repository.latest?.code
+        self.duration = duration
+        self.detail = detail
+        self.queued = repository.queued
+        self.active = repository.active
+        self.latest = repository.latest
+    }
+
+    public var selectedLog: String? { active?.log ?? latest?.log }
 }
 
 public func repositoryName(_ workspace: String) -> String {
     let name = workspace.split(separator: "/").last.map(String.init) ?? ""
     return name.isEmpty ? "mci" : name
-}
-
-private func completedRow(workspace: String, status: CiStatus) -> RowState {
-    let started = parseTimestamp(status.started)
-    let finished = status.finished.flatMap(parseTimestamp)
-    let duration = started.flatMap { start in finished.map { $0.timeIntervalSince(start) } }
-    let length = duration.map(durationText)
-    let kind: DisplayKind
-    let detail: String?
-    switch status.state {
-    case .pass:
-        kind = .pass
-        detail = length
-    case .fail, .cancelled:
-        kind = status.state == .fail ? .fail : .cancelled
-        detail = [status.code.map { "exit \($0)" }, length].compactMap { $0 }
-            .joined(separator: " \u{00B7} ")
-    case .running:
-        kind = .running
-        detail = nil
-    }
-    return RowState(
-        workspace: workspace, kind: kind, lastRun: finished ?? started, code: status.code,
-        duration: duration, detail: detail)
-}
-
-private func runningRow(
-    workspace: String, status: CiStatus, inspection: Result<ProcessIdentity?, MonitorError>
-) -> RowState {
-    let started = parseTimestamp(status.started)
-    func row(_ kind: DisplayKind, _ detail: String) -> RowState {
-        RowState(workspace: workspace, kind: kind, lastRun: started, detail: detail)
-    }
-    switch inspection {
-    case .failure(let error):
-        return row(.error, "Logger inspection failed: \(error.message)")
-    case .success(let identity):
-        if identity != nil && status.logger == nil {
-            return row(.error, "Logger identity is unavailable")
-        }
-        if let identity, let logger = status.logger, identity.pid == status.pid,
-            identity.started == logger.started, identity.command == logger.command
-        {
-            return RowState(workspace: workspace, kind: .running, lastRun: started)
-        }
-        return row(.interrupted, "The recorded CI logger is no longer running.")
-    }
 }
 
 private func isDirectory(_ path: String) -> Bool {
@@ -149,34 +137,104 @@ private func isDirectory(_ path: String) -> Bool {
         && directory.boolValue
 }
 
-/// Port of the display rules of `scripts/monitor.ts`, plus the missing-workspace rule.
-public func rowState(workspace: String, inspector: any ProcessInspector) async -> RowState {
-    guard isDirectory(workspace) else {
-        return RowState(
-            workspace: workspace, kind: .missing,
-            detail: "The repository folder is missing or is not a folder.")
-    }
-    switch readCiStatus(workspace: workspace) {
-    case .failure(let error):
-        return RowState(
-            workspace: workspace, kind: .error, detail: "\(error.category): \(error.message)")
-    case .success(nil):
-        return RowState(workspace: workspace, kind: .noRuns)
-    case .success(let status?):
-        guard status.state == .running else {
-            return completedRow(workspace: workspace, status: status)
-        }
-        let inspection = await inspector.inspect(pid: status.pid)
-        return runningRow(workspace: workspace, status: status, inspection: inspection)
-    }
-}
-
 public struct CombinedState: Equatable, Sendable {
     public let kind: DisplayKind
     public let attention: Int
 }
 
-public func combinedState(_ rows: [RowState]) -> CombinedState {
-    let kind = rows.map(\.kind).min { $0.urgency < $1.urgency } ?? .noRuns
+public func combinedState(_ rows: [RowState], daemonAvailable: Bool = true) -> CombinedState {
+    let kind = daemonAvailable
+        ? rows.map(\.kind).min { $0.urgency < $1.urgency } ?? .noRuns : .unavailable
     return CombinedState(kind: kind, attention: rows.filter { $0.kind.needsAttention }.count)
+}
+
+private func terminalDisplayKind(_ kind: TerminalKind) -> DisplayKind {
+    switch kind {
+    case .success: .pass
+    case .failure: .fail
+    case .timeout, .interrupted: .interrupted
+    case .cancelled: .cancelled
+    }
+}
+
+private func terminalDuration(_ terminal: DaemonTerminal) -> TimeInterval? {
+    guard let started = parseTimestamp(terminal.started),
+        let finished = parseTimestamp(terminal.finished)
+    else { return nil }
+    return finished.timeIntervalSince(started)
+}
+
+private func terminalDetail(_ terminal: DaemonTerminal, duration: TimeInterval?) -> String? {
+    var parts: [String] = []
+    if !terminal.detail.isEmpty { parts.append(terminal.detail) }
+    if terminal.kind != .success { parts.append("exit \(terminal.code)") }
+    if let duration { parts.append(durationText(duration)) }
+    return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
+}
+
+/// Builds a row from daemon authority. A stale snapshot contributes completed history only.
+public func rowState(repository: DaemonRepository, daemonAvailable: Bool) -> RowState {
+    let repository = daemonAvailable
+        ? repository
+        : DaemonRepository(
+            id: repository.id, path: repository.path, queued: 0, active: nil,
+            latest: repository.latest, blocked: nil)
+    let latest = repository.latest
+    let finished = latest.flatMap { parseTimestamp($0.finished) }
+    let duration = latest.flatMap(terminalDuration)
+    let latestDetail = latest.flatMap { terminalDetail($0, duration: duration) }
+
+    if !isDirectory(repository.path) {
+        return RowState(
+            repository: repository, kind: .missing, lastRun: finished, duration: duration,
+            detail: "The repository folder is missing or is not a folder.")
+    }
+    if !daemonAvailable {
+        let kind = latest.map { terminalDisplayKind($0.kind) } ?? .unavailable
+        return RowState(
+            repository: repository, kind: kind, lastRun: finished, duration: duration,
+            detail: latestDetail)
+    }
+    if let blocked = repository.blocked {
+        return RowState(
+            repository: repository, kind: .error, lastRun: finished, duration: duration,
+            detail: blocked)
+    }
+    if let active = repository.active {
+        return RowState(
+            repository: repository, kind: .running, lastRun: parseTimestamp(active.started),
+            duration: duration, detail: active.step)
+    }
+    if repository.queued > 0 {
+        let noun = repository.queued == 1 ? "job" : "jobs"
+        return RowState(
+            repository: repository, kind: .queued, lastRun: finished, duration: duration,
+            detail: "\(repository.queued) \(noun) queued")
+    }
+    if let latest {
+        return RowState(
+            repository: repository, kind: terminalDisplayKind(latest.kind), lastRun: finished,
+            duration: duration, detail: latestDetail)
+    }
+    return RowState(
+        repository: repository, kind: .noRuns, lastRun: nil, duration: nil, detail: nil)
+}
+
+public func terminalSummary(_ terminal: DaemonTerminal, now: Date) -> String {
+    let result: String
+    switch terminal.kind {
+    case .success: result = "passed"
+    case .failure: result = "failed"
+    case .timeout: result = "timed out"
+    case .cancelled: result = "cancelled"
+    case .interrupted: result = "interrupted"
+    }
+    let when = parseTimestamp(terminal.finished).map { relativeTime(from: $0, now: now) }
+    let duration = terminalDuration(terminal).map(durationText)
+    let code = terminal.kind == .success ? nil : "exit \(terminal.code)"
+    let parts: [String?] = [
+        "Last run \(result)", when, terminal.detail.isEmpty ? nil : terminal.detail,
+        code, duration,
+    ]
+    return parts.compactMap { $0 }.joined(separator: " \u{00B7} ")
 }

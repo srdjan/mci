@@ -4,7 +4,7 @@ import {
   type MonitorCapabilities,
   type MonitorOptions,
 } from "../scripts/install-monitor.ts";
-import { addWorkspace } from "../scripts/registry.ts";
+import { canonicalDirectory } from "../scripts/registry.ts";
 import { err, ok, type Result } from "../src/result.ts";
 import { assert, equal, exists, unwrap } from "./helpers.ts";
 
@@ -33,7 +33,6 @@ const withScene = async (test: (scene: Scene) => Promise<void>): Promise<void> =
       options: {
         workspace,
         applicationsDir: applications,
-        registryDir: registry,
         version: "9.8.7",
         packageDir: `${root}/package`,
         runningTimeoutMs: 40,
@@ -47,6 +46,7 @@ const withScene = async (test: (scene: Scene) => Promise<void>): Promise<void> =
 
 type Fake = {
   readonly calls: string[];
+  readonly registered: string[];
   readonly capabilities: MonitorCapabilities;
 };
 
@@ -64,6 +64,7 @@ const installerKey = async (bundle: string): Promise<Result<string>> => {
 
 const fakeCapabilities = (root: string, overrides: Overrides = {}): Fake => {
   const calls: string[] = [];
+  const registered: string[] = [];
   let opened = false;
   const capabilities: MonitorCapabilities = {
     swiftAvailable: () => {
@@ -106,9 +107,14 @@ const fakeCapabilities = (root: string, overrides: Overrides = {}): Fake => {
       await Deno.rename(from, to);
       return ok(undefined);
     },
+    register: (workspace) => {
+      calls.push("register");
+      registered.push(workspace);
+      return Promise.resolve(ok(undefined));
+    },
     ...overrides,
   };
-  return { calls, capabilities };
+  return { calls, registered, capabilities };
 };
 
 const names = async (directory: string): Promise<string[]> => {
@@ -130,9 +136,6 @@ const writeBundle = async (
 const readMarker = (destination: string): Promise<string> =>
   Deno.readTextFile(`${destination}/Contents/MacOS/MonitorApp`);
 
-const registryText = (registry: string): Promise<string> =>
-  Deno.readTextFile(`${registry}/monitor.json`);
-
 Deno.test("fresh install builds, stages, signs, registers, and opens", async () => {
   await withScene(async (scene) => {
     const fake = fakeCapabilities(scene.root);
@@ -140,7 +143,17 @@ Deno.test("fresh install builds, stages, signs, registers, and opens", async () 
     equal(installed.bundle, scene.destination);
     equal(installed.workspace, scene.workspace);
     equal(installed.warnings, []);
-    equal(fake.calls, ["swift", "build", "sign", "verify", "rename", "open", "running"]);
+    equal(fake.calls, [
+      "swift",
+      "build",
+      "sign",
+      "verify",
+      "rename",
+      "register",
+      "open",
+      "running",
+    ]);
+    equal(fake.registered, [scene.workspace]);
     equal(await names(scene.applications), ["mci Monitor.app"]);
     const executable = `${scene.destination}/Contents/MacOS/MonitorApp`;
     equal(await Deno.readTextFile(executable), "binary one");
@@ -162,10 +175,7 @@ Deno.test("fresh install builds, stages, signs, registers, and opens", async () 
         "<key>MCIInstaller</key>\n  <string>meeci</string>",
       ]
     ) assert(plist.includes(line), `Info.plist lacks ${line}`);
-    equal(JSON.parse(await registryText(scene.registry)), {
-      version: 1,
-      workspaces: [scene.workspace],
-    });
+    assert(!await exists(scene.registry));
   });
 });
 
@@ -194,6 +204,7 @@ Deno.test("reinstall replaces an owned bundle and leaves no staging or backup", 
       "quit",
       "rename",
       "rename",
+      "register",
       "open",
       "running",
     ]);
@@ -204,7 +215,7 @@ Deno.test("reinstall replaces an owned bundle and leaves no staging or backup", 
       ),
     );
     equal(await names(scene.applications), ["mci Monitor.app"]);
-    equal(JSON.parse(await registryText(scene.registry)).workspaces, [scene.workspace]);
+    equal(second.registered, [scene.workspace]);
   });
 });
 
@@ -301,7 +312,7 @@ Deno.test("a build failure changes nothing", async () => {
   });
 });
 
-Deno.test("an app that does not start is an error and keeps bundle and registry", async () => {
+Deno.test("an app that does not start is an error after daemon registration", async () => {
   await withScene(async (scene) => {
     const fake = fakeCapabilities(scene.root, {
       isRunning: () => Promise.resolve(ok(false)),
@@ -309,7 +320,20 @@ Deno.test("an app that does not start is an error and keeps bundle and registry"
     const result = await installMonitor(scene.options, fake.capabilities);
     assert(!result.ok && result.error.includes("did not start"));
     equal(await readMarker(scene.destination), "binary one");
-    equal(JSON.parse(await registryText(scene.registry)).workspaces, [scene.workspace]);
+    equal(fake.registered, [scene.workspace]);
+    assert(!await exists(scene.registry));
+  });
+});
+
+Deno.test("a daemon registration failure prevents the app from opening", async () => {
+  await withScene(async (scene) => {
+    const fake = fakeCapabilities(scene.root, {
+      register: () => Promise.resolve(err("daemon unavailable")),
+    });
+    const result = await installMonitor(scene.options, fake.capabilities);
+    assert(!result.ok && result.error.includes("daemon unavailable"));
+    assert(!fake.calls.includes("open"));
+    assert(!await exists(scene.registry));
   });
 });
 
@@ -347,94 +371,16 @@ Deno.test("a relative or missing workspace is refused before the build", async (
   });
 });
 
-Deno.test("the registry stores canonical paths once", async () => {
+Deno.test("canonicalDirectory resolves links and rejects invalid repositories", async () => {
   await withScene(async (scene) => {
     const link = `${scene.root}/link`;
     await Deno.symlink(scene.workspace, link);
-    equal(unwrap(await addWorkspace(scene.registry, link)), [scene.workspace]);
-    equal(unwrap(await addWorkspace(scene.registry, scene.workspace)), [scene.workspace]);
-    const other = `${scene.root}/second`;
-    await Deno.mkdir(other);
-    equal(unwrap(await addWorkspace(scene.registry, other)), [scene.workspace, other]);
-    equal(unwrap(await addWorkspace(scene.registry, link)), [scene.workspace, other]);
-    equal(JSON.parse(await registryText(scene.registry)).workspaces, [
-      scene.workspace,
-      other,
-    ]);
-  });
-});
-
-Deno.test("the registry file has exactly the keys the Swift decoder accepts", async () => {
-  await withScene(async (scene) => {
-    unwrap(await addWorkspace(scene.registry, scene.workspace));
-    const text = await registryText(scene.registry);
-    const parsed: unknown = JSON.parse(text);
-    equal(parsed, { version: 1, workspaces: [scene.workspace] });
-    equal(Object.keys(parsed as Record<string, unknown>).sort(), [
-      "version",
-      "workspaces",
-    ]);
-    assert(text.endsWith("\n"));
-    equal(await names(scene.registry), ["monitor.json", "monitor.json.lock"]);
-  });
-});
-
-Deno.test("the registry rejects relative and non-directory paths", async () => {
-  await withScene(async (scene) => {
+    equal(unwrap(await canonicalDirectory(link)), scene.workspace);
     const file = `${scene.root}/file.txt`;
     await Deno.writeTextFile(file, "x");
     for (const path of ["relative", file, `${scene.root}/absent`]) {
-      assert(!(await addWorkspace(scene.registry, path)).ok, path);
+      assert(!(await canonicalDirectory(path)).ok, path);
     }
-    assert(!await exists(`${scene.registry}/monitor.json`));
-  });
-});
-
-Deno.test("the registry refuses malformed or unknown content and keeps it", async () => {
-  const bad = [
-    "{not json",
-    "[]",
-    `{"version":2,"workspaces":[]}`,
-    `{"version":true,"workspaces":[]}`,
-    `{"version":"1","workspaces":[]}`,
-    `{"version":1,"workspaces":[],"extra":1}`,
-    `{"version":1}`,
-    `{"version":1,"workspaces":["relative"]}`,
-    `{"version":1,"workspaces":[1]}`,
-    `{"version":1,"workspaces":"/x"}`,
-  ];
-  for (const content of bad) {
-    await withScene(async (scene) => {
-      await Deno.mkdir(scene.registry);
-      await Deno.writeTextFile(`${scene.registry}/monitor.json`, content);
-      const result = await addWorkspace(scene.registry, scene.workspace);
-      assert(!result.ok, content);
-      equal(await registryText(scene.registry), content);
-      equal(await names(scene.registry), ["monitor.json", "monitor.json.lock"]);
-    });
-  }
-});
-
-Deno.test("the registry writer waits for a held lock", async () => {
-  await withScene(async (scene) => {
-    await Deno.mkdir(scene.registry);
-    const holder = await Deno.open(`${scene.registry}/monitor.json.lock`, {
-      create: true,
-      read: true,
-      write: true,
-    });
-    await holder.lock(true);
-    let finished = false;
-    const pending = addWorkspace(scene.registry, scene.workspace).then((result) => {
-      finished = true;
-      return result;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    assert(!finished, "the writer must wait for the lock");
-    assert(!await exists(`${scene.registry}/monitor.json`));
-    await holder.unlock();
-    holder.close();
-    equal(unwrap(await pending), [scene.workspace]);
   });
 });
 

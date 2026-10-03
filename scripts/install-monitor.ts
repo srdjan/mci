@@ -1,8 +1,9 @@
 // @light-fp adapter
 import { captureCommand } from "../src/command.ts";
+import { rpc } from "../src/client.ts";
 import { attempt, err, message, ok, type Result } from "../src/result.ts";
 import { cliVersion } from "../src/runtime.ts";
-import { addWorkspace, canonicalDirectory } from "./registry.ts";
+import { canonicalDirectory } from "./registry.ts";
 
 const bundleName = "mci Monitor.app";
 const executableName = "MonitorApp";
@@ -12,7 +13,6 @@ const usage = "usage: deno task monitor:install [workspace]";
 export type MonitorOptions = {
   readonly workspace: string;
   readonly applicationsDir: string;
-  readonly registryDir: string;
   readonly version: string;
   readonly packageDir: string;
   readonly runningTimeoutMs?: number;
@@ -29,6 +29,7 @@ export type MonitorCapabilities = {
   readonly open: (bundle: string) => Promise<Result<void>>;
   readonly isRunning: (executablePath: string) => Promise<Result<boolean>>;
   readonly rename: (from: string, to: string) => Promise<Result<void>>;
+  readonly register: (workspace: string) => Promise<Result<void>>;
 };
 
 export type Installed = {
@@ -218,8 +219,8 @@ export const installMonitor = async (
   );
   if (!swapped.ok) return abandon(swapped.error);
 
-  const registered = await addWorkspace(options.registryDir, workspace.value);
-  if (!registered.ok) return err(`Cannot update the registry: ${registered.error}`);
+  const registered = await capabilities.register(workspace.value);
+  if (!registered.ok) return err(`Cannot register the repository: ${registered.error}`);
   const opened = await capabilities.open(destination);
   if (!opened.ok) return err(`Cannot open the app: ${opened.error}`);
   const running = await waitForRunning(
@@ -347,6 +348,10 @@ export const nativeCapabilities: MonitorCapabilities = {
   },
   isRunning: pgrep,
   rename: (from, to) => attempt(() => Deno.rename(from, to)),
+  register: async (workspace) => {
+    const response = await rpc({ version: 1, op: "register", path: workspace });
+    return response.ok ? ok(undefined) : response;
+  },
 };
 
 const pathOf = (relative: string): string =>
@@ -374,7 +379,6 @@ export const main = async (
   const installed = await installMonitor({
     workspace,
     applicationsDir: `${home}/Applications`,
-    registryDir: `${home}/Library/Application Support/meeci`,
     version: cliVersion,
     packageDir: pathOf("../monitor/"),
   }, capabilities);

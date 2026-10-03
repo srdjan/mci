@@ -62,26 +62,26 @@ func logAttributedString(_ runs: [StyledRun]) -> NSAttributedString {
 
 private func messageText(_ error: LogError) -> String {
     switch error {
-    case .missing: "No log yet: .mci/ci/latest.log does not exist."
-    case .notFile: "latest.log is not a regular file, so the monitor does not read it."
-    case .read(let reason): "Cannot read latest.log: \(reason)"
+    case .missing: "The selected log does not exist."
+    case .notFile: "The selected log is not a regular file, so the monitor does not read it."
+    case .read(let reason): "Cannot read the selected log: \(reason)"
     }
 }
 
-/// Shows `.mci/ci/latest.log` of one repository in one reused window. The file is only read.
+/// Shows one immutable daemon log path in one reused window. The file is only read.
 @MainActor
 final class LogWindowPresenter: NSObject {
     private var window: NSWindow?
-    private var workspace: String?
+    private var selection: (path: String, repository: String)?
     private lazy var textView = NSTextView()
     private lazy var notice = NSTextField(labelWithString: "")
 
-    func show(workspace: String) {
+    func show(path: String, repository: String) {
         NSApp.keyWindow?.orderOut(nil)
-        self.workspace = workspace
+        selection = (path, repository)
         let window = self.window ?? makeWindow()
         self.window = window
-        window.title = "latest.log (\(repositoryName(workspace)))"
+        window.title = "\((path as NSString).lastPathComponent) (\(repositoryName(repository)))"
         load()
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
@@ -90,18 +90,18 @@ final class LogWindowPresenter: NSObject {
     @objc private func reload(_ sender: Any?) { load() }
 
     @objc private func revealInFinder(_ sender: Any?) {
-        guard let workspace else { return }
-        let path = logPath(workspace: workspace)
+        guard let selection else { return }
+        let path = selection.path
         if FileManager.default.fileExists(atPath: path) {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         } else {
-            NSWorkspace.shared.open(URL(fileURLWithPath: workspace, isDirectory: true))
+            NSWorkspace.shared.open(URL(fileURLWithPath: selection.repository, isDirectory: true))
         }
     }
 
     private func load() {
-        guard let workspace else { return }
-        switch readLogTail(workspace: workspace) {
+        guard let selection else { return }
+        switch readLogTail(path: selection.path) {
         case .success(let tail):
             let limit = logTailLimit / 1024
             notice.stringValue = tail.truncated ? "Showing the last \(limit) KiB." : ""

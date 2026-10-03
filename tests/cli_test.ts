@@ -1,5 +1,6 @@
 import { assert, equal, exists, fixture, inWorkspace, waitFor } from "./helpers.ts";
-import { readCiStatus } from "../src/ci.ts";
+import { rpc } from "../src/client.ts";
+import { withDaemon } from "./daemon_helpers.ts";
 import { cliSourceArgs } from "../src/runtime.ts";
 import denoConfig from "../deno.json" with { type: "json" };
 
@@ -17,7 +18,11 @@ const command = (
   });
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 
-const taskCommand = async (workspace: string, args: readonly string[]) => {
+const taskCommand = async (
+  workspace: string,
+  args: readonly string[],
+  env?: Readonly<Record<string, string>>,
+) => {
   await Deno.writeTextFile(
     `${workspace}/deno.json`,
     JSON.stringify({
@@ -33,6 +38,7 @@ const taskCommand = async (workspace: string, args: readonly string[]) => {
   return new Deno.Command(Deno.execPath(), {
     args: ["task", "mci", ...args],
     cwd: workspace,
+    env,
     stdout: "piped",
     stderr: "piped",
   });
@@ -118,62 +124,170 @@ Deno.test("CLI ci without a job returns 2 and saves nothing", () =>
   }));
 
 Deno.test({
-  name: "macOS CLI ci saves a passing job",
+  name: "macOS CLI ci saves a passing daemon job",
   ignore: Deno.build.os !== "darwin",
   fn: () =>
     inWorkspace(async (workspace) => {
-      await Deno.writeTextFile(`${workspace}/ci.yml`, fixture("      - run: echo hello"));
-      const result = await command(workspace, ["ci", "ci.yml", "--job", "check"])
-        .output();
-      equal(result.code, 0);
-      assert(text(result.stdout).includes("hello"), text(result.stderr));
-      const status = await readCiStatus(workspace);
-      assert(status.ok && status.value !== null, "status was not saved");
-      equal(status.value.state, "pass");
-      equal(status.value.code, 0);
-      const log = await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`);
-      assert(log.includes("hello"));
-      assert(log.includes("[mci] exit 0"));
+      await withDaemon(workspace, async (directory) => {
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture("      - run: echo hello"),
+        );
+        const result = await command(workspace, ["ci", "ci.yml", "--job", "check"], {
+          MCI_HOME: directory,
+        }).output();
+        equal(result.code, 0);
+        assert(text(result.stdout).includes("hello"), text(result.stderr));
+        const status = await rpc({ version: 1, op: "status" }, directory);
+        assert(status.ok);
+        equal(status.value.repositories[0]?.latest?.kind, "success");
+        equal(status.value.repositories[0]?.latest?.code, 0);
+        assert(
+          (await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`)).includes("hello"),
+        );
+      });
     }),
 });
 
 Deno.test({
-  name: "macOS CLI ci returns the exit code of run for a failing step",
+  name: "macOS CLI ci returns the standalone run failure code",
   ignore: Deno.build.os !== "darwin",
   fn: () =>
     inWorkspace(async (workspace) => {
-      await Deno.writeTextFile(`${workspace}/ci.yml`, fixture("      - run: exit 3"));
-      const direct = await command(workspace, ["run", "ci.yml", "--job", "check"])
-        .output();
-      equal(direct.code, 1);
-      const result = await command(workspace, ["ci", "ci.yml", "--job", "check"])
-        .output();
-      equal(result.code, direct.code);
-      const status = await readCiStatus(workspace);
-      assert(status.ok && status.value !== null, "status was not saved");
-      equal(status.value.state, "fail");
-      equal(status.value.code, 1);
+      await withDaemon(workspace, async (directory) => {
+        await Deno.writeTextFile(`${workspace}/ci.yml`, fixture("      - run: exit 3"));
+        const direct = await command(workspace, ["run", "ci.yml", "--job", "check"])
+          .output();
+        equal(direct.code, 1);
+        const result = await command(workspace, ["ci", "ci.yml", "--job", "check"], {
+          MCI_HOME: directory,
+        }).output();
+        equal(result.code, direct.code);
+        const status = await rpc({ version: 1, op: "status" }, directory);
+        assert(status.ok);
+        equal(status.value.repositories[0]?.latest?.kind, "failure");
+        equal(status.value.repositories[0]?.latest?.code, 1);
+      });
     }),
 });
 
 Deno.test({
-  name: "macOS CLI ci saves a workflow validation error",
+  name: "macOS CLI ci validates before submission and preserves completed evidence",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      await withDaemon(workspace, async (directory) => {
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture("      - run: echo completed"),
+        );
+        const prior = await command(workspace, ["ci", "ci.yml", "--job", "check"], {
+          MCI_HOME: directory,
+        }).output();
+        equal(prior.code, 0);
+        const saved = await Deno.readTextFile(`${workspace}/.mci/ci/status.json`);
+        const log = await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`);
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture("      - run: touch unreachable\n        unsupported-field: true"),
+        );
+        const result = await command(workspace, ["ci", "ci.yml", "--job", "check"], {
+          MCI_HOME: directory,
+        }).output();
+        equal(result.code, 2);
+        assert(text(result.stderr).includes("unsupported-field"));
+        equal(await Deno.readTextFile(`${workspace}/.mci/ci/status.json`), saved);
+        equal(await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`), log);
+        assert(!await exists(`${workspace}/unreachable`));
+      });
+    }),
+});
+
+Deno.test({
+  name: "macOS CLI ci refuses a missing daemon without standalone execution",
   ignore: Deno.build.os !== "darwin",
   fn: () =>
     inWorkspace(async (workspace) => {
       await Deno.writeTextFile(
         `${workspace}/ci.yml`,
-        fixture("      - run: echo hello\n        unsupported-field: true"),
+        fixture("      - run: touch unreachable"),
       );
-      const result = await command(workspace, ["ci", "ci.yml", "--job", "check"])
-        .output();
-      equal(result.code, 2);
-      const status = await readCiStatus(workspace);
-      assert(status.ok && status.value !== null, "status was not saved");
-      equal(status.value.state, "fail");
-      equal(status.value.code, 2);
-      const log = await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`);
-      assert(log.includes("unsupported-field"), log);
+      const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-absent-" });
+      try {
+        const result = await command(workspace, ["ci", "ci.yml", "--job", "check"], {
+          MCI_HOME: directory,
+        }).output();
+        equal(result.code, 1);
+        assert(text(result.stderr).includes("Daemon unavailable"));
+        assert(!await exists(`${workspace}/unreachable`));
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    }),
+});
+
+Deno.test({
+  name: "macOS daemon CI forwards SIGINT and releases the repository",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      await withDaemon(workspace, async (directory) => {
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture(
+            "      - run: |\n          touch ready\n          sleep 30\n      - run: touch skipped",
+          ),
+        );
+        const child = command(workspace, ["ci", "ci.yml", "--job", "check"], {
+          MCI_HOME: directory,
+        }).spawn();
+        const output = child.output();
+        try {
+          await waitFor(() => exists(`${workspace}/ready`));
+        } finally {
+          child.kill("SIGINT");
+        }
+        equal((await output).code, 130);
+        assert(!await exists(`${workspace}/skipped`));
+        assert(!await exists(`${workspace}/.mci/run.json`));
+      });
+    }),
+});
+
+Deno.test({
+  name: "macOS killed CI task cancels its daemon request",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      await withDaemon(workspace, async (directory) => {
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture(
+            "      - run: |\n          trap 'touch stopped; exit 0' TERM\n          touch ready\n          while :; do sleep 0.01; done\n      - run: touch skipped",
+          ),
+        );
+        const owner = (await taskCommand(workspace, ["ci", "ci.yml", "--job", "check"], {
+          MCI_HOME: directory,
+        })).spawn();
+        const output = owner.output();
+        try {
+          await waitFor(() => exists(`${workspace}/ready`));
+        } finally {
+          owner.kill("SIGKILL");
+        }
+        await output;
+        await waitFor(async () => {
+          const current = await rpc({ version: 1, op: "status" }, directory);
+          return current.ok && current.value.repositories[0]?.active === null;
+        });
+        assert(await exists(`${workspace}/stopped`));
+        assert(!await exists(`${workspace}/skipped`));
+        assert(!await exists(`${workspace}/.mci/run.json`));
+        const current = await rpc({ version: 1, op: "status" }, directory);
+        assert(current.ok);
+        equal(current.value.repositories[0]?.latest?.kind, "cancelled");
+        equal(current.value.repositories[0]?.latest?.code, 143);
+      });
     }),
 });
 

@@ -5,41 +5,34 @@ import Observation
 @MainActor @Observable
 final class MonitorModel {
     private(set) var rows: [RowState] = []
-    private(set) var registryError: String?
+    private(set) var daemonAvailable = false
+    private(set) var daemonError: String?
     private(set) var actionError: String?
 
-    /// One line for a registry or action failure.
-    var message: String? { registryError ?? actionError }
+    var message: String? { actionError ?? daemonError }
+    var combined: CombinedState { combinedState(rows, daemonAvailable: daemonAvailable) }
 
-    var combined: CombinedState { combinedState(rows) }
-
-    @ObservationIgnored private let registry: Registry
-    @ObservationIgnored private let inspector: any ProcessInspector
-    @ObservationIgnored private var workspaces: [String] = []
-    @ObservationIgnored private var registryWatcher: DirectoryWatcher?
-    @ObservationIgnored private var workspaceWatchers: [String: DirectoryWatcher] = [:]
+    @ObservationIgnored private let client: DaemonClient
+    @ObservationIgnored private var watcher: DirectoryWatcher?
     @ObservationIgnored private var refreshing = false
     @ObservationIgnored private var refreshAgain = false
     @ObservationIgnored private var pending: Task<Void, Never>?
     @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var actionUncertain = false
 
-    init(registry: Registry = Registry(), inspector: any ProcessInspector = NativeProcessInspector()) {
-        self.registry = registry
-        self.inspector = inspector
+    init(client: DaemonClient = DaemonClient()) {
+        self.client = client
     }
 
     func start() {
-        registryWatcher = DirectoryWatcher(path: registry.directory) { [weak self] in
-            self?.schedule()
-        }
-        registryWatcher?.ensureActive()
+        watcher = DirectoryWatcher(path: client.directory) { [weak self] in self?.schedule() }
+        watcher?.ensureActive()
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
         refresh()
     }
 
-    /// Coalesces a burst of file events into one refresh.
     func schedule() {
         pending?.cancel()
         pending = Task { [weak self] in
@@ -50,29 +43,44 @@ final class MonitorModel {
     }
 
     func add(path: String) {
-        apply(registry.add(path))
+        Task { [weak self] in
+            guard let self else { return }
+            await apply(await client.register(path: path))
+        }
     }
 
-    func remove(path: String) {
-        apply(registry.remove(path))
+    func remove(_ row: RowState) {
+        Task { [weak self] in
+            guard let self else { return }
+            await apply(await client.unregister(repository: row.repositoryID))
+        }
     }
 
     func open(_ row: RowState) {
         NSWorkspace.shared.open(URL(fileURLWithPath: row.workspace, isDirectory: true))
     }
 
-    private func apply(_ result: Result<[String], MonitorError>) {
+    private func apply(_ result: Result<DaemonSnapshot, DaemonClientError>) async {
         switch result {
-        case .success: actionError = nil
-        case .failure(let error): actionError = error.message
+        case .success(let snapshot):
+            actionError = nil
+            actionUncertain = false
+            use(snapshot: snapshot, daemonAvailable: true)
+        case .failure(let error):
+            switch error {
+            case .daemon:
+                actionUncertain = false
+                actionError = error.message
+            case .unavailable, .invalidResponse:
+                actionUncertain = true
+                actionError = "The request returned no result. Reload status before you try again."
+            }
+            refresh()
         }
-        refresh()
     }
 
-    /// Retries missing watches, then refreshes. It also re-inspects running records.
     private func tick() {
-        registryWatcher?.ensureActive()
-        for watcher in workspaceWatchers.values { watcher.ensureActive() }
+        watcher?.ensureActive()
         refresh()
     }
 
@@ -82,49 +90,40 @@ final class MonitorModel {
             return
         }
         refreshing = true
-        Task { await self.runRefresh() }
+        Task { await runRefresh() }
     }
 
     private func runRefresh() async {
         repeat {
             refreshAgain = false
-            switch registry.load() {
-            case .success(let loaded):
-                workspaces = loaded
-                registryError = nil
+            switch await client.status() {
+            case .success(let snapshot):
+                if actionUncertain {
+                    actionError = nil
+                    actionUncertain = false
+                }
+                use(snapshot: snapshot, daemonAvailable: true)
             case .failure(let error):
-                registryError = error.message
+                daemonAvailable = false
+                daemonError = error.message
+                let path = client.snapshotPath
+                let persisted = await Task.detached(priority: .utility) {
+                    readSnapshot(path: path)
+                }.value
+                switch persisted {
+                case .success(let snapshot): use(snapshot: snapshot, daemonAvailable: false)
+                case .failure: rows = []
+                }
             }
-            syncWatchers()
-            rows = await Self.compute(workspaces, inspector: inspector)
         } while refreshAgain
         refreshing = false
     }
 
-    private func syncWatchers() {
-        for (path, watcher) in workspaceWatchers where !workspaces.contains(path) {
-            watcher.cancel()
-            workspaceWatchers[path] = nil
-        }
-        for path in workspaces where workspaceWatchers[path] == nil {
-            let watcher = DirectoryWatcher(path: path + "/.mci/ci") { [weak self] in
-                self?.schedule()
-            }
-            workspaceWatchers[path] = watcher
-        }
-        for watcher in workspaceWatchers.values { watcher.ensureActive() }
-    }
-
-    private nonisolated static func compute(
-        _ workspaces: [String], inspector: any ProcessInspector
-    ) async -> [RowState] {
-        await withTaskGroup(of: (Int, RowState).self) { group in
-            for (index, workspace) in workspaces.enumerated() {
-                group.addTask { (index, await rowState(workspace: workspace, inspector: inspector)) }
-            }
-            var collected: [(Int, RowState)] = []
-            for await item in group { collected.append(item) }
-            return collected.sorted { $0.0 < $1.0 }.map(\.1)
+    private func use(snapshot: DaemonSnapshot, daemonAvailable: Bool) {
+        self.daemonAvailable = daemonAvailable
+        daemonError = daemonAvailable ? nil : daemonError
+        rows = snapshot.repositories.map {
+            rowState(repository: $0, daemonAvailable: daemonAvailable)
         }
     }
 }

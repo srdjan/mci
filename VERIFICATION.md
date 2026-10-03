@@ -1,14 +1,37 @@
 # Verification
 
-The architecture hardening and CI monitor checks passed on Apple Silicon macOS on
-2026-10-02. The host uses macOS 26.6.2, build 25G83, and Darwin kernel 25.6.0. Deno
-reports `aarch64-apple-darwin`, version 2.9.7, V8 15.0.245.2-rusty, and TypeScript 6.0.3.
+On 2026-10-03, final `deno task verify` passed on Apple Silicon macOS. Formatting,
+linting, type checking, and architecture checks passed.
 
-The current suite passes **96 tests**, with no failures and one Linux-only test ignored.
-Formatting, linting, and type checking pass. The local workflow passes against the current
-checkout.
+The Deno suite passed 155 tests with one opposite-platform test ignored. The native
+monitor suite passed 309 checks.
 
-## Commands and observed results
+The final archive built successfully and installed through the local Homebrew tap.
+`brew test local/meeci/mci` passed. The Homebrew daemon restarted successfully. Setup also
+started a stopped service after reading Homebrew state.
+
+Two temporary repositories ran Deno tasks concurrently through the installed daemon. The
+native socket client read both repositories.
+
+The installed Git hook blocked a failed check and permitted a passing check. The hook used
+the packaged absolute path.
+
+Two `mci setup` runs replaced and opened the packaged monitor. The installed app passed
+`codesign --verify --deep --strict`.
+
+The native socket client also read this registered checkout through the installed service.
+`deno task ci` passed through that service. The final archive checksum is
+`f0c22161265891f9bc5dcb33f712819e0f446d2d433e5f810cad66b5224bd1c0`.
+
+## Earlier hardening baseline
+
+Architecture hardening and earlier monitor checks passed on Apple Silicon macOS on
+2026-10-02. The host used macOS 26.6.2, build 25G83, and Darwin kernel 25.6.0.
+
+Deno reported `aarch64-apple-darwin`, version 2.9.7, V8 15.0.245.2-rusty, and TypeScript
+6.0.3. The earlier suite passed 96 tests, with one Linux-only test ignored.
+
+## Earlier commands and observed results
 
 | Command                                           | Result                                                    |
 | ------------------------------------------------- | --------------------------------------------------------- |
@@ -23,7 +46,24 @@ checkout.
 | `./dist/mci run examples/basic.yml --job check`   | Both example steps pass                                   |
 | Compiled CLI in a separate workspace with spaces  | Validation and execution preserve the invoking directory  |
 
-## Behavior covered
+## Shared-daemon behavior covered
+
+Focused tests cover FIFO execution within each repository and concurrent execution across
+repositories. They cover isolated cancellation after a client cancel or disconnect.
+
+Restart tests confirm that accepted unfinished requests become INTERRUPTED. The daemon
+does not retry those requests.
+
+Snapshot tests keep the latest completed result visible during active and queued work.
+Retention tests keep the latest spool and spools used by connected clients.
+
+Shutdown tests close idle clients and mark unfinished requests as interrupted. IPC tests
+enforce strict UTF-8, complete frames, and the four MiB frame limit.
+
+Terminal-copy tests cover serialized result projection for each repository. Protocol tests
+reject unknown fields and invalid response shapes.
+
+## Earlier runner behavior covered
 
 Public API tests cover validation before effects, environment precedence, fresh shells,
 shared files, contained directories, paths with spaces, closed stdin, and pipeline
@@ -60,12 +100,12 @@ Two runner regressions failed before the corresponding changes. A competing run 
 the same workspace. A directory cleanup failure hid the original exit code 23. Both
 regressions pass after workspace integration.
 
-The installed pre-commit hook passes all 96 active tests and the other verification
-checks. A temporary local repository with spaces exercises the Git commit boundary. A
+The earlier installed pre-commit hook passed all 96 tests and the other verification
+checks. A temporary local repository with spaces exercised the Git commit boundary. A
 failed check blocks the commit without creating a revision. A passing check permits the
 commit. The hook resolves the correct repository root in both cases.
 
-## Saved CI output
+## Earlier saved CI output
 
 The pre-commit hook calls `deno task ci`. The logging adapter executes the local YAML,
 which calls `deno task verify` directly. The adapter records stdout, stderr, exit status,
@@ -99,7 +139,7 @@ On 2026-10-03, SwiftBar was uninstalled with `brew uninstall --zap --cask swiftb
 plugin, its support folder, and the SwiftBar plugin code and tests were removed. A native
 menu bar app replaces them; see `docs/monitor-app-plan.md`.
 
-## Menu bar app
+## Earlier menu bar app evidence
 
 On 2026-10-03 with the Command Line Tools only (Swift 6.4), `deno task verify` ran the
 Deno suite and `app:check` in 11 s wall time with a warm Swift build. `MonitorChecks`
@@ -139,10 +179,20 @@ and "Launch at login" was still checked. A start at the next login is not yet co
 
 ## Evidence limits
 
+The final host checks establish package installation, daemon startup, concurrent
+execution, socket decoding, signature validity, and hook behavior.
+
+A native probe used an accepted socket that sent no response. The native client reported
+its deadline after 1002.8 ms.
+
+The current app still needs a visual and VoiceOver check. A start at the next login
+remains unconfirmed.
+
 The initial package passed 18 tests on Linux x86_64 before architecture hardening. That
 result does not establish Linux evidence for the current changes. Current Linux and Intel
-execution results remain unavailable. Minimum macOS compatibility and binary distribution
-remain untested. Any additional compatibility checks run locally on the claimed systems.
+execution results remain unavailable. Minimum macOS compatibility and public binary
+distribution remain untested. Any additional compatibility checks run locally on the
+claimed systems.
 
 GitHub serves only as a repository backup service. Automatic CI runs only through the
 local Git pre-commit hook. The repository does not require hosted checks.

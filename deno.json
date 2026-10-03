@@ -1,5 +1,5 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "imports": { "yaml": "npm:yaml@2.8.1" },
   "permissions": {
     "mci": {
@@ -7,6 +7,7 @@
       "write": true,
       "env": true,
       "run": true,
+      "net": true,
       "sys": ["osRelease"]
     }
   },
@@ -16,10 +17,11 @@
     "test": "deno test --permission-set=mci",
     "verify": "deno fmt --check && deno lint && deno task check && deno task test && deno task app:check",
     "app:check": "deno run --quiet --allow-run=swift scripts/app-check.ts",
-    "monitor:install": "deno run --quiet --allow-read --allow-write --allow-env=HOME --allow-run=swift,/usr/bin/codesign,/usr/bin/open,/usr/bin/pkill,/usr/bin/pgrep,/usr/bin/plutil scripts/install-monitor.ts",
+    "monitor:install": "deno run --quiet --permission-set=mci scripts/install-monitor.ts",
     "hooks:install": "git config --local core.hooksPath .githooks",
     "demo": "deno task mci run examples/basic.yml --job check",
     "compile": "deno compile --permission-set=mci --output dist/mci src/main.ts",
+    "package": "deno run --quiet --permission-set=mci scripts/package.ts",
     "ci": "MCI_TASK_PARENT=true deno run --quiet --permission-set=mci src/main.ts ci ci/local-ci.yml --job check"
   },
   "compilerOptions": { "strict": true, "noUncheckedIndexedAccess": true },

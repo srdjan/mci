@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "instance": "daemon-a",
+  "pid": 4242,
+  "updated": "2026-10-03T18:00:00.000Z",
+  "repositories": [
+    {
+      "id": "repo-a",
+      "path": "/tmp/repo-a",
+      "queued": 0,
+      "active": {
+        "id": "run-a",
+        "workflow": "ci.yml",
+        "job": "check",
+        "started": "2026-10-03T17:59:00.000Z",
+        "step": 3,
+        "log": "/tmp/run-a.log"
+      },
+      "latest": null,
+      "blocked": null
+    }
+  ]
+}

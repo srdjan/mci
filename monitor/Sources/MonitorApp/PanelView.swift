@@ -63,7 +63,7 @@ struct PanelView: View {
                 .padding(12)
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(model.rows, id: \.workspace) { row in
+                ForEach(model.rows, id: \.repositoryID) { row in
                     RowView(row: row, now: now, model: model, logPresenter: logPresenter)
                 }
             }
@@ -128,23 +128,53 @@ struct RowView: View {
                             .lineLimit(2)
                             .help(detail)
                     }
+                    if row.active != nil && row.queued > 0 {
+                        Text("\(row.queued) queued")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer(minLength: 4)
-                    Button { logPresenter.show(workspace: row.workspace) } label: {
+                    Button {
+                        if let path = row.selectedLog {
+                            logPresenter.show(path: path, repository: row.workspace)
+                        }
+                    } label: {
                         Image(systemName: "doc.text")
                     }
                     .buttonStyle(.borderless)
+                    .disabled(row.selectedLog == nil)
                     .help("View log")
                     .accessibilityLabel("View log")
                     Button { model.open(row) } label: { Image(systemName: "folder") }
                         .buttonStyle(.borderless)
                         .help("Open repository")
                         .accessibilityLabel("Open repository")
-                    Button { model.remove(path: row.workspace) } label: {
+                    Button { model.remove(row) } label: {
                         Image(systemName: "minus.circle")
                     }
                     .buttonStyle(.borderless)
-                    .help("Remove from monitor")
-                    .accessibilityLabel("Remove from monitor")
+                    .help("Unregister repository")
+                    .accessibilityLabel("Unregister repository")
+                }
+                if let latest = row.latest {
+                    HStack(spacing: 4) {
+                        Text(terminalSummary(latest, now: now))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .help(terminalSummary(latest, now: now))
+                        Spacer(minLength: 4)
+                        if row.active != nil {
+                            Button {
+                                logPresenter.show(path: latest.log, repository: row.workspace)
+                            } label: {
+                                Image(systemName: "doc.text.fill")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("View last run log")
+                            .accessibilityLabel("View last run log")
+                        }
+                    }
                 }
             }
         }
@@ -154,7 +184,7 @@ struct RowView: View {
 
     private var timeText: String {
         guard let lastRun = row.lastRun else { return "" }
-        return row.kind == .running
+        return row.active != nil
             ? runningTime(since: lastRun, now: now) : relativeTime(from: lastRun, now: now)
     }
 }

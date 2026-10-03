@@ -1,4 +1,6 @@
 import { readCiStatus, runLoggedCi } from "../src/ci.ts";
+import { rpc } from "../src/client.ts";
+import { withDaemon } from "./daemon_helpers.ts";
 import { assert, equal, exists, inWorkspace, unwrap, waitFor } from "./helpers.ts";
 
 const text = (chunks: readonly Uint8Array[]): string => {
@@ -37,14 +39,15 @@ const killIfPresent = (send: () => void): void => {
 };
 
 Deno.test({
-  name: "CI adapter cancels its workflow when the disposable parent dies",
+  name: "daemon CI cancels its workflow when the disposable parent dies",
   ignore: Deno.build.os !== "darwin",
   fn: () =>
-    inWorkspace(async (workspace) => {
-      await Deno.mkdir(`${workspace}/ci`);
-      await Deno.writeTextFile(
-        `${workspace}/ci/local-ci.yml`,
-        `defaults:
+    inWorkspace((workspace) =>
+      withDaemon(workspace, async (directory) => {
+        await Deno.mkdir(`${workspace}/ci`);
+        await Deno.writeTextFile(
+          `${workspace}/ci/local-ci.yml`,
+          `defaults:
   run:
     shell: bash
 jobs:
@@ -57,85 +60,89 @@ jobs:
           touch ready
           while :; do :; done
 `,
-      );
-      const childArgs = [
-        "run",
-        "--quiet",
-        "--permission-set=mci",
-        "--config",
-        `${Deno.cwd()}/deno.json`,
-        `${Deno.cwd()}/src/main.ts`,
-        "ci",
-        "ci/local-ci.yml",
-        "--job",
-        "check",
-      ];
-      const parentSource = `const child = new Deno.Command(${
-        JSON.stringify(Deno.execPath())
-      }, {
-      args: ${JSON.stringify(childArgs)}, cwd: ${JSON.stringify(workspace)},
-      stdin: "null", stdout: "null", stderr: "null",
-    }).spawn();
-    await Deno.writeTextFile("logger.pid", String(child.pid));
-    await child.status;`;
-      const parentPath = `${workspace}/parent.ts`;
-      await Deno.writeTextFile(parentPath, parentSource);
-      const parent = new Deno.Command(Deno.execPath(), {
-        args: [
+        );
+        const childArgs = [
           "run",
           "--quiet",
           "--permission-set=mci",
           "--config",
           `${Deno.cwd()}/deno.json`,
-          parentPath,
-        ],
-        cwd: workspace,
-        stdin: "null",
-        stdout: "null",
-        stderr: "null",
-      }).spawn();
-      let parentSettled = false;
-      const parentStatus = parent.status.then((status) => {
-        parentSettled = true;
-        return status;
-      });
-      try {
-        await waitFor(() => exists(`${workspace}/ready`));
-        parent.kill("SIGKILL");
-        await parentStatus;
-        await waitFor(async () => {
-          const status = await readCiStatus(workspace);
-          return status.ok && status.value?.state === "cancelled";
+          `${Deno.cwd()}/src/main.ts`,
+          "ci",
+          "ci/local-ci.yml",
+          "--job",
+          "check",
+        ];
+        const parentSource = `const child = new Deno.Command(${
+          JSON.stringify(Deno.execPath())
+        }, {
+      args: ${JSON.stringify(childArgs)}, cwd: ${JSON.stringify(workspace)},
+      stdin: "null", stdout: "null", stderr: "null",
+    }).spawn();
+    await Deno.writeTextFile("logger.pid", String(child.pid));
+    await child.status;`;
+        const parentPath = `${workspace}/parent.ts`;
+        await Deno.writeTextFile(parentPath, parentSource);
+        const parent = new Deno.Command(Deno.execPath(), {
+          args: [
+            "run",
+            "--quiet",
+            "--permission-set=mci",
+            "--config",
+            `${Deno.cwd()}/deno.json`,
+            parentPath,
+          ],
+          cwd: workspace,
+          env: { MCI_HOME: directory },
+          stdin: "null",
+          stdout: "null",
+          stderr: "null",
+        }).spawn();
+        let parentSettled = false;
+        const parentStatus = parent.status.then((status) => {
+          parentSettled = true;
+          return status;
         });
-        equal(await Deno.readTextFile(`${workspace}/stopped`), "stopped");
-        assert(!await exists(`${workspace}/.mci/run.json`));
-        const status = unwrap(await readCiStatus(workspace));
-        assert(status !== null);
-        equal(status.code, 143);
-        // The logger writes cancelled status before it releases the CI lock.
-        const logger = Number(await Deno.readTextFile(`${workspace}/logger.pid`));
-        await waitFor(() =>
-          Promise.resolve().then(() => {
-            try {
-              Deno.kill(logger, 0);
-              return false;
-            } catch (error) {
-              return error instanceof Deno.errors.NotFound;
-            }
-          })
-        );
-        equal(unwrap(await runShell(workspace, "true")).code, 0);
-      } finally {
-        if (!parentSettled) {
-          killIfPresent(() => parent.kill("SIGTERM"));
+        try {
+          await waitFor(() => exists(`${workspace}/ready`));
+          parent.kill("SIGKILL");
+          await parentStatus;
+          await waitFor(async () => {
+            const status = await rpc({ version: 1, op: "status" }, directory);
+            return status.ok &&
+              status.value.repositories[0]?.latest?.kind === "cancelled";
+          });
+          equal(await Deno.readTextFile(`${workspace}/stopped`), "stopped");
+          assert(!await exists(`${workspace}/.mci/run.json`));
+          const current = unwrap(await rpc({ version: 1, op: "status" }, directory));
+          const status = current.repositories[0]?.latest;
+          assert(status !== null && status !== undefined);
+          equal(status.code, 143);
+          // The daemon saves cancellation before the client exits.
+          const logger = Number(await Deno.readTextFile(`${workspace}/logger.pid`));
+          await waitFor(() =>
+            Promise.resolve().then(() => {
+              try {
+                Deno.kill(logger, 0);
+                return false;
+              } catch (error) {
+                return error instanceof Deno.errors.NotFound;
+              }
+            })
+          );
+          equal(unwrap(await runShell(workspace, "true")).code, 0);
+        } finally {
+          if (!parentSettled) {
+            killIfPresent(() => parent.kill("SIGTERM"));
+          }
+          await parentStatus;
+          if (await exists(`${workspace}/logger.pid`)) {
+            const pid = Number(await Deno.readTextFile(`${workspace}/logger.pid`));
+            killIfPresent(() => Deno.kill(pid, "SIGTERM"));
+          }
         }
-        await parentStatus;
-        if (await exists(`${workspace}/logger.pid`)) {
-          const pid = Number(await Deno.readTextFile(`${workspace}/logger.pid`));
-          killIfPresent(() => Deno.kill(pid, "SIGTERM"));
-        }
-      }
-    }),
+      })
+    ),
 });
 
 Deno.test("logged CI rejects a symlink log without changing its target", () =>

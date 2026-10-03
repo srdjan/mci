@@ -3,6 +3,7 @@ import { attempt, err, ok, type Result } from "./result.ts";
 export type CommandCapture = {
   readonly status: Deno.CommandStatus;
   readonly stdout: Uint8Array;
+  readonly stderr: Uint8Array;
 };
 
 export type CommandCapturePolicy = {
@@ -72,7 +73,7 @@ const readAll = async (
   return output;
 };
 
-/** Run a command with bounded standard-output capture and process reaping. */
+/** Run a command with bounded output capture and process reaping. */
 export const captureCommand = async (
   command: string,
   options: Omit<Deno.CommandOptions, "stdin" | "stdout" | "stderr">,
@@ -83,38 +84,55 @@ export const captureCommand = async (
       ...options,
       stdin: "null",
       stdout: "piped",
-      stderr: "null",
+      stderr: "piped",
     }).spawn()
   );
   if (!spawned.ok) return err(`Unable to launch command ${command}: ${spawned.error}`);
 
   const child = spawned.value;
-  const reader = child.stdout.getReader();
+  const stdoutReader = child.stdout.getReader();
+  const stderrReader = child.stderr.getReader();
   const status = observe(child.status);
-  const output = observe(readAll(reader));
+  const stdout = observe(readAll(stdoutReader));
+  const stderr = observe(readAll(stderrReader));
   const captured = await waitBounded(
-    Promise.all([status.completed, output.completed]),
+    Promise.all([status.completed, stdout.completed, stderr.completed]),
     policy.timeoutMs,
   );
   if (captured.kind === "settled") {
-    const [finished, read] = captured.value;
+    const [finished, capturedStdout, capturedStderr] = captured.value;
     const diagnostics: string[] = [];
     if (!finished.ok) {
       diagnostics.push(`Command ${command} status failed: ${finished.error}`);
     }
-    if (!read.ok) diagnostics.push(`Command ${command} stdout failed: ${read.error}`);
-    if (!finished.ok || !read.ok) return err(diagnostics.join("\n"));
-    return ok({ status: finished.value, stdout: read.value });
+    if (!capturedStdout.ok) {
+      diagnostics.push(`Command ${command} stdout failed: ${capturedStdout.error}`);
+    }
+    if (!capturedStderr.ok) {
+      diagnostics.push(`Command ${command} stderr failed: ${capturedStderr.error}`);
+    }
+    if (!finished.ok || !capturedStdout.ok || !capturedStderr.ok) {
+      return err(diagnostics.join("\n"));
+    }
+    return ok({
+      status: finished.value,
+      stdout: capturedStdout.value,
+      stderr: capturedStderr.value,
+    });
   }
 
   const diagnostics = [`Command ${command} timed out after ${policy.timeoutMs} ms`];
   const statusCurrent = status.current();
-  const outputCurrent = output.current();
+  const stdoutCurrent = stdout.current();
+  const stderrCurrent = stderr.current();
   if (statusCurrent !== null && !statusCurrent.ok) {
     diagnostics.push(`Command ${command} status failed: ${statusCurrent.error}`);
   }
-  if (outputCurrent !== null && !outputCurrent.ok) {
-    diagnostics.push(`Command ${command} stdout failed: ${outputCurrent.error}`);
+  if (stdoutCurrent !== null && !stdoutCurrent.ok) {
+    diagnostics.push(`Command ${command} stdout failed: ${stdoutCurrent.error}`);
+  }
+  if (stderrCurrent !== null && !stderrCurrent.ok) {
+    diagnostics.push(`Command ${command} stderr failed: ${stderrCurrent.error}`);
   }
 
   if (statusCurrent === null || !statusCurrent.ok) {
@@ -123,14 +141,26 @@ export const captureCommand = async (
       diagnostics.push(`Command ${command} SIGKILL failed: ${killed.error}`);
     }
   }
-  const closing = track(
-    outputCurrent === null
-      ? attempt(() => reader.cancel("command capture timed out"))
+  const closingStdout = track(
+    stdoutCurrent === null
+      ? attempt(() => stdoutReader.cancel("command capture timed out"))
       : Promise.resolve(ok(undefined)),
   );
-  const [reaped, closed] = await Promise.all([
+  const closingStderr = track(
+    stderrCurrent === null
+      ? attempt(() => stderrReader.cancel("command capture timed out"))
+      : Promise.resolve(ok(undefined)),
+  );
+  const [reaped, closedStdout, closedStderr] = await Promise.all([
     waitBounded(status.completed, policy.reapMs),
-    waitBounded(Promise.all([closing.completed, output.completed]), policy.reapMs),
+    waitBounded(
+      Promise.all([closingStdout.completed, stdout.completed]),
+      policy.reapMs,
+    ),
+    waitBounded(
+      Promise.all([closingStderr.completed, stderr.completed]),
+      policy.reapMs,
+    ),
   ]);
 
   let didReap = false;
@@ -144,27 +174,52 @@ export const captureCommand = async (
     didReap = true;
   }
 
-  if (closed.kind === "timeout") {
-    const cancelCurrent = closing.current();
-    const readCurrent = output.current();
-    if (cancelCurrent !== null && !cancelCurrent.ok) {
-      diagnostics.push(`Command ${command} stdout close failed: ${cancelCurrent.error}`);
+  const diagnoseClose = (
+    name: "stdout" | "stderr",
+    closed: Bounded<readonly [Result<void>, Result<Uint8Array>]>,
+    closing: Observed<void>,
+    output: Observed<Uint8Array>,
+    outputCurrent: Result<Uint8Array> | null,
+  ): void => {
+    if (closed.kind === "timeout") {
+      const cancelCurrent = closing.current();
+      const readCurrent = output.current();
+      if (cancelCurrent !== null && !cancelCurrent.ok) {
+        diagnostics.push(
+          `Command ${command} ${name} close failed: ${cancelCurrent.error}`,
+        );
+      }
+      if (readCurrent !== null && !readCurrent.ok) {
+        diagnostics.push(`Command ${command} ${name} failed: ${readCurrent.error}`);
+      }
+      diagnostics.push(
+        `Command ${command} ${name} close timed out after ${policy.reapMs} ms`,
+      );
+      return;
     }
-    if (readCurrent !== null && !readCurrent.ok) {
-      diagnostics.push(`Command ${command} stdout failed: ${readCurrent.error}`);
-    }
-    diagnostics.push(
-      `Command ${command} stdout close timed out after ${policy.reapMs} ms`,
-    );
-  } else {
     const [cancelled, read] = closed.value;
     if (!cancelled.ok) {
-      diagnostics.push(`Command ${command} stdout close failed: ${cancelled.error}`);
+      diagnostics.push(`Command ${command} ${name} close failed: ${cancelled.error}`);
     }
     if (!read.ok && outputCurrent === null) {
-      diagnostics.push(`Command ${command} stdout failed: ${read.error}`);
+      diagnostics.push(`Command ${command} ${name} failed: ${read.error}`);
     }
-  }
+  };
+
+  diagnoseClose(
+    "stdout",
+    closedStdout,
+    closingStdout,
+    stdout,
+    stdoutCurrent,
+  );
+  diagnoseClose(
+    "stderr",
+    closedStderr,
+    closingStderr,
+    stderr,
+    stderrCurrent,
+  );
 
   if (!didReap) {
     const released = await attempt(() => child.unref());

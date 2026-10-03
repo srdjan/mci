@@ -95,7 +95,7 @@ const removeRun = async (state: string, runDir: string): Promise<Result<void>> =
   return cleared.ok ? cleared : err(`journal cleanup failed: ${cleared.error}`);
 };
 
-const recoverWorkspace = async (state: string): Promise<Result<void>> => {
+const recoverState = async (state: string): Promise<Result<void>> => {
   const journalPath = `${state}/run.json`;
   const found = await metadata(journalPath);
   if (!found.ok) return found;
@@ -171,7 +171,7 @@ export const acquireWorkspace = async (workspace: string): Promise<Result<RunLea
   if (!locked.value) {
     return await fail("another job is already running in this workspace");
   }
-  const recovered = await recoverWorkspace(state);
+  const recovered = await recoverState(state);
   if (!recovered.ok) return await fail(recovered.error);
   const created = await attempt(() => Deno.makeTempDir({ dir: state, prefix: "run-" }));
   if (!created.ok) return await fail(created.error);
@@ -231,4 +231,10 @@ export const acquireWorkspace = async (workspace: string): Promise<Result<RunLea
     return diagnostics.length ? err(diagnostics.join("\n")) : ok(undefined);
   };
   return ok({ directory: journal.runDir, prepare, record, close });
+};
+
+export const recoverWorkspace = async (workspace: string): Promise<Result<void>> => {
+  const acquired = await acquireWorkspace(workspace);
+  if (!acquired.ok) return acquired;
+  return await acquired.value.close();
 };

@@ -1,58 +1,79 @@
 # mci
 
-A minimal local CI runner for macOS, written in Deno and light functional TypeScript. It
-reads a small GitHub Actions YAML subset and runs one selected job against your current
-working tree.
+A local CI runner for macOS, written in Deno and light functional TypeScript. It reads a
+small GitHub Actions YAML subset and runs one selected job against your current working
+tree.
+
+One daemon serves all registered repositories for one user. Each repository has a FIFO
+queue, while different repositories can run at the same time.
 
 The runner uses trusted local commands and one selected job. See
 [VERIFICATION.md](VERIFICATION.md) for tested hosts, commands, and remaining evidence
 limits.
 
-## Quick start
+## Install with a local Homebrew tap
 
-Install [Deno](https://docs.deno.com/runtime/getting_started/installation/) 2.9.7 or newer
-and make Bash available on `PATH`. No Node installation, Docker, VM or GitHub account is
-needed. Run these commands from the extracted repository root:
+Install Homebrew and Deno 2.9.7 or newer. Make Bash available on `PATH`. The package build
+also requires the Xcode Command Line Tools.
+
+Build the package from this checkout. Create the local tap, then copy the generated
+formula into the tap.
 
 ```sh
-deno task mci check examples/basic.yml --job check
-deno task demo
-deno task mci run ci/local-ci.yml --job check
+deno task package
+brew tap-new --no-git local/meeci
+cp dist/tap/Formula/mci.rb "$(brew --repo local/meeci)/Formula/mci.rb"
+brew install local/meeci/mci
+mci setup
 ```
 
-`demo` and `run` require macOS. `check`, type checking and the portable tests also work on
-Linux. The first invocation downloads the pinned `yaml` parser from npm; subsequent cached
-invocations need no network access from the runner. Scripts may still use the network.
+`mci setup` starts the Homebrew service and installs `~/Applications/mci Monitor.app`. The
+daemon imports the earlier registry only when its own registry does not exist.
 
-To use the CLI from another repository, compile it on your Mac:
+Register each repository. Then install its managed pre-commit hook.
 
 ```sh
-deno task compile
 cd /path/to/your/repository
-/path/to/mci/dist/mci check ci/local-ci.yml --job check
-/path/to/mci/dist/mci run ci/local-ci.yml --job check
-/path/to/mci/dist/mci ci ci/local-ci.yml --job check
+mci register "$PWD"
+mci hooks install "$PWD" --workflow ci/local-ci.yml --job check
 ```
 
-`mci ci` runs the selected job through `mci run` and saves the output and status under
-`.mci/ci/`. It returns the nonzero exit code of `mci run`. A logging failure turns a
-passing run into exit 1. Add `.mci/` to the repository's `.gitignore`.
+The hook adds the `mci:ci` task to `deno.json`. The task uses the stable Homebrew binary.
+Git selects the absolute hook directory under the stable Homebrew prefix. Hook
+installation uses Git configuration scoped to the current worktree.
 
-To run the job before each commit, put this hook in `.git/hooks/pre-commit` or in a
-tracked hooks directory, and make it executable:
+The hook is the only automatic CI trigger. GitHub remains a repository backup service.
+
+Run these commands for manual checks or diagnosis:
 
 ```sh
-#!/bin/sh
-exec /path/to/mci/dist/mci ci ci/local-ci.yml --job check
+mci check ci/local-ci.yml --job check
+mci run ci/local-ci.yml --job check
+mci ci ci/local-ci.yml --job check
+mci status
+mci logs "$PWD" --follow
+mci doctor "$PWD"
 ```
 
-Git runs the pre-commit hook from the repository root, which becomes the workspace. A
-nonzero exit blocks the commit. `mci ci` cancels the job when its parent process (Git)
-exits. mci does not write hooks or Git configuration in other repositories.
+`mci ci` requires a registered repository and a running daemon. It waits for the submitted
+request and streams that request's log.
 
-Compilation may download Deno's compilation runtime. The compiled binary uses the same
-permissions and version source as the source CLI. The `mci` permission set in `deno.json`
-supplies source, test, and compilation permissions.
+The daemon cancels a request when its submitting client disconnects. The cancellation does
+not affect requests from other clients.
+
+After a daemon restart, unfinished requests become INTERRUPTED. The daemon does not retry
+them.
+
+To update a same-version local package, build and copy the formula again. Then reinstall
+the formula, restart the service, and refresh the monitor app.
+
+```sh
+deno task package
+cp dist/tap/Formula/mci.rb "$(brew --repo local/meeci)/Formula/mci.rb"
+brew reinstall local/meeci/mci
+brew services restart mci
+mci setup
+```
 
 ## A workflow
 
@@ -163,24 +184,45 @@ instead of terminating an unrelated process.
 
 ## Develop and validate
 
-After cloning the repository, install its local pre-commit hook:
+Install this repository's tracked development hook after cloning:
 
 ```sh
 deno task hooks:install
 ```
 
 Git runs `.githooks/pre-commit` before each commit. The hook calls `deno task ci` from the
-repository root. That task runs `mci ci`, which executes `ci/local-ci.yml`, which calls
-`deno task verify` directly. A failed check blocks the commit. The checks cover the
-current working tree. Each clone needs its own hook installation because Git configuration
-stays local.
+repository root.
 
-CI saves its latest output at `.mci/ci/latest.log`. The status file at
-`.mci/ci/status.json` records the state, start time, finish time, and exit code. Those
-files remain local and gitignored. A new CI run replaces the previous log after acquiring
-the CI lock. After the command exits, CI waits at most 2 s for its output streams to
-close. A detached process can hold a stream open. CI then closes the stream, reports a
-failure, and releases the lock. Ctrl-C ends that wait at once.
+The local YAML calls `deno task verify` directly. A failed check blocks the commit, and
+the checks include unstaged changes.
+
+An installed Homebrew service also accepts requests from the source CLI. Without that
+service, run the source daemon in a separate terminal:
+
+```sh
+deno task mci daemon
+```
+
+Use another terminal to register this checkout and submit its local workflow:
+
+```sh
+deno task mci register "$PWD"
+deno task mci ci ci/local-ci.yml --job check
+```
+
+The source monitor installer requires a running daemon. It builds, signs, installs, and
+opens the native app.
+
+```sh
+deno task monitor:install "$PWD"
+```
+
+Each repository keeps request logs under `.mci/ci/requests/`. The daemon projects the
+latest completed result to `.mci/ci/latest.json`, `status.json`, and `latest.log`.
+
+The daemon keeps the latest completed result visible while another request runs or waits.
+It retains that result and every spool file used by a connected client. Pending journal
+entries also retain recovery files.
 
 To read the latest saved output:
 
@@ -188,30 +230,11 @@ To read the latest saved output:
 less .mci/ci/latest.log
 ```
 
-The menu bar app `mci Monitor` shows the saved results of one or more repositories. It
-needs the Xcode Command Line Tools (`xcode-select --install`) and no other app. Install it
-for this repository:
+The menu bar app observes daemon snapshots and status. It can register or unregister a
+repository, open a repository, and open saved logs.
 
-```sh
-deno task monitor:install
-```
-
-To add another repository, run this command from that repository, or use "Add repository…"
-in the app:
-
-```sh
-deno task --config /path/to/meeci/deno.json monitor:install "$PWD"
-```
-
-The installer builds the Swift package in `monitor/`, signs the app ad hoc, and installs
-it as `~/Applications/mci Monitor.app`. It replaces only an app that it installed itself.
-It adds the repository to `~/Library/Application Support/meeci/monitor.json` and opens the
-app. One menu bar icon shows the most urgent state of all repositories, with a count of
-the repositories that need attention. The panel lists each repository with its state,
-time, exit code, and duration. The app watches each `.mci/ci/` folder, so a new result
-shows within one second. It reads saved results only and never starts CI. "View log" opens
-the last 256 KiB of `latest.log` in a window with its terminal colors; the file itself
-stays unchanged.
+The monitor never starts CI. It shows the active request, queue count, and latest
+completed result for each repository.
 
 For a manual check:
 

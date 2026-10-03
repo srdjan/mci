@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "instance": "daemon-a",
+  "pid": 4242,
+  "updated": "2026-10-03T18:00:00.000Z",
+  "repositories": [
+    {
+      "id": "repo-a",
+      "path": "/tmp/repo-a",
+      "queued": 0,
+      "active": null,
+      "latest": {
+        "id": "run-a",
+        "repositoryId": "repo-b",
+        "workflow": "ci.yml",
+        "job": "check",
+        "started": "2026-10-03T17:59:00.000Z",
+        "finished": "2026-10-03T17:59:01.000Z",
+        "kind": "success",
+        "code": 0,
+        "completed": 1,
+        "total": 1,
+        "detail": "",
+        "log": "/tmp/run-a.log"
+      },
+      "blocked": null
+    }
+  ]
+}

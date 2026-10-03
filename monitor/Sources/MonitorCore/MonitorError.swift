@@ -33,17 +33,3 @@ public enum StatusError: Error, Equatable, Sendable {
         }
     }
 }
-
-public enum MonitorError: Error, Equatable, Sendable {
-    case status(StatusError)
-    case inspection(String)
-    case registry(String)
-
-    public var message: String {
-        switch self {
-        case .status(let error): error.message
-        case .inspection(let reason): reason
-        case .registry(let reason): reason
-        }
-    }
-}
