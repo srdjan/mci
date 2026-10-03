@@ -361,3 +361,92 @@ Deno.test("logged CI cancellation records cancelled and reaps the direct child",
     });
     assert(absent, `direct child ${pid} remains alive`);
   }));
+
+const holderScript = "echo $$ > child.pid; sleep 5 & echo $! > holder.pid";
+
+const killHolder = async (workspace: string): Promise<void> => {
+  if (!await exists(`${workspace}/holder.pid`)) return;
+  const pid = Number((await Deno.readTextFile(`${workspace}/holder.pid`)).trim());
+  killIfPresent(() => Deno.kill(pid, "SIGKILL"));
+};
+
+Deno.test("logged CI cuts output that a detached process holds open", () =>
+  inWorkspace(async (workspace) => {
+    try {
+      const began = performance.now();
+      const result = unwrap(
+        await runLoggedCi({
+          workspace,
+          command: "/bin/sh",
+          args: ["-c", holderScript],
+          outputGraceMs: 100,
+        }),
+      );
+      const elapsed = performance.now() - began;
+      assert(elapsed < 1500, `run took ${elapsed} ms`);
+      equal(result.code, 1);
+      const diagnostic = "stdout stayed open 100 ms after the command exited; " +
+        "a detached process probably holds it";
+      assert(
+        result.diagnostics.some((detail) => detail.includes(diagnostic)),
+        `missing grace diagnostic in ${JSON.stringify(result.diagnostics)}`,
+      );
+      const status = unwrap(await readCiStatus(workspace));
+      assert(status !== null);
+      equal(status.state, "fail");
+      equal(status.code, 1);
+      const log = await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`);
+      assert(log.includes(`[mci] ${diagnostic}`), "log lacks the grace diagnostic");
+      assert(log.includes("[mci] exit 1"), "log lacks the exit line");
+      equal(unwrap(await runShell(workspace, "true")).code, 0);
+    } finally {
+      await killHolder(workspace);
+    }
+  }));
+
+Deno.test("logged CI cancellation after exit cuts output that a detached process holds", () =>
+  inWorkspace(async (workspace) => {
+    const controller = new AbortController();
+    const running = runLoggedCi({
+      workspace,
+      command: "/bin/sh",
+      args: ["-c", holderScript],
+      signal: controller.signal,
+      outputGraceMs: 10000,
+    });
+    try {
+      await waitFor(() => exists(`${workspace}/holder.pid`));
+      const shellPid = Number((await Deno.readTextFile(`${workspace}/child.pid`)).trim());
+      await waitFor(() =>
+        Promise.resolve().then(() => {
+          try {
+            Deno.kill(shellPid, 0);
+            return false;
+          } catch (error) {
+            return error instanceof Deno.errors.NotFound;
+          }
+        })
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const began = performance.now();
+      controller.abort("SIGINT");
+      const result = unwrap(await running);
+      const elapsed = performance.now() - began;
+      assert(elapsed < 2000, `run took ${elapsed} ms after the abort`);
+      equal(result.code, 130);
+      const status = unwrap(await readCiStatus(workspace));
+      assert(status !== null);
+      equal(status.state, "cancelled");
+      equal(status.code, 130);
+      assert(
+        result.diagnostics.some((detail) =>
+          detail.includes("closed by cancellation after the command exited")
+        ),
+        `missing cancellation diagnostic in ${JSON.stringify(result.diagnostics)}`,
+      );
+    } finally {
+      controller.abort("SIGINT");
+      await running;
+      await killHolder(workspace);
+    }
+  }));

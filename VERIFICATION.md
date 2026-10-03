@@ -4,7 +4,7 @@ The architecture hardening and CI monitor checks passed on Apple Silicon macOS o
 2026-10-02. The host uses macOS 26.6.2, build 25G83, and Darwin kernel 25.6.0. Deno
 reports `aarch64-apple-darwin`, version 2.9.7, V8 15.0.245.2-rusty, and TypeScript 6.0.3.
 
-The current suite passes **80 tests**, with no failures and one Linux-only test ignored.
+The current suite passes **82 tests**, with no failures and one Linux-only test ignored.
 Formatting, linting, and type checking pass. The local workflow passes against the current
 checkout.
 
@@ -51,7 +51,7 @@ Two runner regressions failed before the corresponding changes. A competing run 
 the same workspace. A directory cleanup failure hid the original exit code 23. Both
 regressions pass after workspace integration.
 
-The installed pre-commit hook passes all 80 active tests and the other verification
+The installed pre-commit hook passes all 82 active tests and the other verification
 checks. A temporary local repository with spaces exercises the Git commit boundary. A
 failed check blocks the commit without creating a revision. A passing check permits the
 commit. The hook resolves the correct repository root in both cases.
@@ -60,11 +60,16 @@ commit. The hook resolves the correct repository root in both cases.
 
 The pre-commit hook calls `deno task ci`. The logging adapter executes the local YAML,
 which calls `deno task verify` directly. The adapter records stdout, stderr, exit status,
-and failures beneath `.mci/ci/`. The saved files remain gitignored. Thirteen public tests
+and failures beneath `.mci/ci/`. The saved files remain gitignored. Fifteen public tests
 cover stream forwarding, exit preservation, failed sinks, launch failure, writer
 exclusion, status validation, cancellation, linked log preservation, and publication
-failure. The adapter lifecycle test kills a disposable task parent. It confirms workflow
-cancellation, journal cleanup, cancelled status, and successful writer reuse.
+failure. Two tests start a detached background process that holds the output pipes after
+the command exits. One test confirms that the adapter cuts the held streams after the
+output grace period and reports failure. The other test cancels after the command exits
+and confirms that the adapter returns at once with cancelled status. Both tests confirm
+that the lock is released. The adapter lifecycle test kills a disposable task parent. It
+confirms workflow cancellation, journal cleanup, cancelled status, and successful writer
+reuse.
 
 Native probes killed the Deno task parent and the CI logger in separate temporary
 workspaces. Both probes confirmed active workflow cancellation and removal of the

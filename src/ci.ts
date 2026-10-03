@@ -28,9 +28,12 @@ export type RunLoggedCiOptions = {
   readonly args: readonly string[];
   readonly env?: Readonly<Record<string, string>>;
   readonly signal?: AbortSignal;
+  readonly outputGraceMs?: number;
   readonly stdout?: (chunk: Uint8Array) => void | Promise<void>;
   readonly stderr?: (chunk: Uint8Array) => void | Promise<void>;
 };
+
+const defaultOutputGraceMs = 2000;
 
 const object = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -330,11 +333,17 @@ export const runLoggedCi = async (
       diagnostics.push(`command launch failed: ${spawned.error}`);
     } else {
       const child = spawned.value;
+      const graceMs = options.outputGraceMs ?? defaultOutputGraceMs;
+      const cut = new AbortController();
       let settled = false;
       let cancellationError: string | null = null;
       const cancel = () => {
-        if (settled || cancelled) return;
+        if (cancelled) return;
         cancelled = true;
+        if (settled) {
+          cut.abort("cancel");
+          return;
+        }
         const sent = signalChild(child, interruption(options.signal?.reason).signal);
         if (!sent.ok) cancellationError = sent.error;
       };
@@ -358,17 +367,23 @@ export const runLoggedCi = async (
         stream: ReadableStream<Uint8Array>,
         sink: ((chunk: Uint8Array) => void | Promise<void>) | undefined,
         label: "stdout" | "stderr",
-      ): Promise<void> => {
+      ): Promise<boolean> => {
         const reader = stream.getReader();
+        const cancelling: { promise: Promise<Result<void>> | null } = { promise: null };
+        const onCut = () => {
+          cancelling.promise = attempt(() => reader.cancel());
+        };
+        cut.signal.addEventListener("abort", onCut, { once: true });
+        if (cut.signal.aborted) onCut();
         let sinkAvailable = sink !== undefined;
         try {
           while (true) {
             const next = await attempt(() => reader.read());
             if (!next.ok) {
               diagnostics.push(`${label} read failed: ${next.error}`);
-              return;
+              return cancelling.promise !== null;
             }
-            if (next.value.done) return;
+            if (next.value.done) return cancelling.promise !== null;
             const chunk = next.value.value;
             if (chunk === undefined) {
               diagnostics.push(`${label} returned an empty stream chunk`);
@@ -384,11 +399,20 @@ export const runLoggedCi = async (
             }
           }
         } finally {
+          cut.signal.removeEventListener("abort", onCut);
+          if (cancelling.promise !== null) {
+            const closed = await cancelling.promise;
+            if (!closed.ok) {
+              diagnostics.push(`${label} cancel failed: ${closed.error}`);
+            }
+          }
           reader.releaseLock();
         }
       };
+      let graceTimer: ReturnType<typeof setTimeout> | undefined;
       const statusPromise = attempt(() => child.status).then((status) => {
         settled = true;
+        graceTimer = setTimeout(() => cut.abort("grace"), graceMs);
         return status;
       });
       const completed = await Promise.all([
@@ -396,7 +420,14 @@ export const runLoggedCi = async (
         drain(child.stdout, options.stdout, "stdout"),
         drain(child.stderr, options.stderr, "stderr"),
       ]);
+      clearTimeout(graceTimer);
       options.signal?.removeEventListener("abort", cancel);
+      const cutDetail = cut.signal.reason === "cancel"
+        ? "closed by cancellation after the command exited"
+        : `stayed open ${graceMs} ms after the command exited; ` +
+          "a detached process probably holds it";
+      if (completed[1]) diagnostics.push(`stdout ${cutDetail}`);
+      if (completed[2]) diagnostics.push(`stderr ${cutDetail}`);
       if (cancellationError !== null) {
         diagnostics.push(`command cancellation failed: ${cancellationError}`);
       }

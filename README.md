@@ -160,7 +160,9 @@ Each clone needs its own hook installation because Git configuration stays local
 CI saves its latest output at `.mci/ci/latest.log`. The status file at
 `.mci/ci/status.json` records the state, start time, finish time, and exit code. Those
 files remain local and gitignored. A new CI run replaces the previous log after acquiring
-the CI lock.
+the CI lock. After the command exits, CI waits at most 2 s for its output streams to
+close. A detached process can hold a stream open. CI then closes the stream, reports a
+failure, and releases the lock. Ctrl-C ends that wait at once.
 
 To read the latest saved output:
 

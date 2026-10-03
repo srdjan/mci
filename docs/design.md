@@ -118,6 +118,13 @@ Atomic status updates record running, pass, fail, or cancelled. A nonzero child 
 its exit code when logging also fails. Cancellation converts a zero child exit to the
 interruption code.
 
+After the child process exits, the adapter waits for stdout and stderr to close for an
+output grace period of 2000 ms. A detached process, for example one started with `setsid`,
+can hold a pipe open. The adapter then cancels the stream reader and records a diagnostic.
+The diagnostic converts a zero child exit to failure. Cancellation after the child exits
+cuts open streams at once and keeps the cancelled state. The adapter never signals the
+detached holder. The holder receives EPIPE or SIGPIPE on its next write.
+
 The adapter launches the source CLI directly with parent supervision enabled. It forwards
 OS cancellation and observes its own Deno task parent. The existing CLI handles workflow
 process cleanup if the logging adapter dies.
