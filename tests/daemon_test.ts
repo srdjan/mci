@@ -733,7 +733,9 @@ Deno.test("an active run keeps the prior terminal and compatibility log", () =>
     })
   ));
 
-Deno.test("a client that does not read cannot block its worker", () =>
+// Worker output goes to the spool file, so the socket carries only the accepted and
+// result frames. This test proves the spool path, not socket backpressure.
+Deno.test("a worker with large output finishes while its client reads nothing", () =>
   inWorkspace((workspace) =>
     withDaemon(workspace, async (directory) => {
       const paths = servicePaths(directory);
