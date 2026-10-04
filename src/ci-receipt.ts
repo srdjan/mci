@@ -375,9 +375,10 @@ export const finishReceipt = async (
   if (!checked.ok || checked.value.kind === "pending") {
     return err(checked.ok ? "A final receipt cannot remain pending" : checked.error);
   }
+  const now = new Date().toISOString();
   const finished: CiReceipt = {
     ...receipt,
-    finished: new Date().toISOString(),
+    finished: now < receipt.started ? receipt.started : now,
     outcome: checked.value,
   };
   const written = await writeReceipt(finished, home);

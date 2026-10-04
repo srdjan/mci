@@ -127,6 +127,43 @@ Deno.test("CI receipts keep missing workflow identity after creation through a s
     }
   }));
 
+Deno.test("CI receipt completion survives a clock before its recorded start", () =>
+  inWorkspace(async (workspace) => {
+    const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-clock-" });
+    try {
+      await withSessionEnvironment({ MCI_SESSION_ID: "clock-receipt" }, async () => {
+        const pending = unwrap(
+          await beginReceipt({
+            workspace,
+            workflow: "ci.yml",
+            job: "check",
+            command: "run",
+            home,
+          }),
+        );
+        assert(pending !== null);
+        const future = {
+          ...pending,
+          started: new Date(Date.now() + 60_000).toISOString(),
+        };
+        const completed = unwrap(
+          await finishReceipt(future, {
+            kind: "success",
+            code: 0,
+            detail: "passed",
+            requestId: null,
+            log: null,
+          }, home),
+        );
+        assert(completed !== null);
+        equal(completed.finished, future.started);
+        equal(unwrap(await readSessionReceipts("clock-receipt", home)), [completed]);
+      });
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  }));
+
 Deno.test("CI receipt session selection uses the documented precedence", async () => {
   await withSessionEnvironment({
     MCI_SESSION_ID: "mci",
