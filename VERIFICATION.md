@@ -1,5 +1,28 @@
 # Verification
 
+## Submission cancellation
+
+On 2026-10-03, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 187
+tests with one opposite-platform test ignored. The native monitor passed 309 checks.
+Formatting, linting, and type checking passed.
+
+Six public client tests use temporary Unix sockets. The tests cover silent acceptance,
+cancellation before and after acceptance, a blocked request write, complete frame order,
+and success after cancellation. All six tests passed after the final code cleanup. The
+blocked-write test reads an incomplete frame after the deadline closes the client socket.
+
+Code review completed with no remaining findings. The review confirmed all twelve
+requirements in the submission plan. The review identified the need to observe an
+incomplete frame in the blocked-write test. That correction passed the six client tests.
+
+The initial regression failed before the source change. The server received submission and
+cancellation, but the client did not stop waiting within the test observation period.
+
+These checks cover source execution on this host. The installed package retains its
+earlier binary. Blocked terminal output remains outside the socket deadlines.
+
+## Earlier packaged baseline
+
 On 2026-10-03, final `deno task verify` passed on Apple Silicon macOS. Formatting,
 linting, type checking, and architecture checks passed.
 

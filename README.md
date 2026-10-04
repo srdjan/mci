@@ -58,6 +58,14 @@ mci doctor "$PWD"
 `mci ci` requires a registered repository and a running daemon. It waits for the submitted
 request and streams that request's log.
 
+The client waits up to five seconds for acceptance. After cancellation, the client waits
+up to ten seconds for the daemon result. These deadlines are policies. Client deadlines do
+not limit accepted execution or queue waiting. Each job keeps its workflow deadline.
+
+If either client deadline expires, the client closes its connection and reports unknown
+completion. The request does not resume automatically. `mci status` shows the current
+daemon state.
+
 The daemon cancels a request when its submitting client disconnects. The cancellation does
 not affect requests from other clients.
 

@@ -58,6 +58,20 @@ that sends no first frame in that time. This value is a policy, not a measured c
 The submitting connection owns its request. A cancel message or connection loss cancels
 only that request.
 
+The submission client starts a 5000 ms acceptance deadline after connection. This deadline
+covers the request write and acceptance reply. An acceptance reply clears that deadline.
+An accepted request has no client deadline for execution or queue waiting.
+
+The first abort starts a separate 10000 ms cancellation deadline and clears the acceptance
+deadline. Cancellation handling starts before the request write. The client sends its
+cancellation frame after the complete request frame. A blocked request write therefore
+cannot mix submission and cancellation bytes.
+
+If a deadline expires, the client closes its socket and reports unknown completion. The
+request does not resume automatically. These deadlines are policies, not measured capacity
+limits. A terminal reply clears both deadlines before the client drains its log. Blocked
+terminal output writes remain outside these socket deadlines.
+
 The daemon journals every accepted request before it confirms acceptance. On restart, it
 records each unfinished request that began as INTERRUPTED and does not retry it. A durable
 terminal record preserves completed work if projection or journal cleanup fails.

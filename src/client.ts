@@ -62,6 +62,16 @@ const writeTerminal = async (bytes: Uint8Array): Promise<Result<void>> => {
   return ok(undefined);
 };
 
+export type SubmissionPolicy = {
+  readonly acceptanceMs?: number;
+  readonly cancellationMs?: number;
+};
+
+const nativeSubmissionPolicy = {
+  acceptanceMs: 5000,
+  cancellationMs: 10000,
+};
+
 /** Tail this request's spool. The server never waits for terminal output. */
 const tailRequest = async (
   path: string,
@@ -95,35 +105,84 @@ export const submit = async (
   request: Extract<Request, { readonly op: "submit" }>,
   signal: AbortSignal,
   home?: string,
+  policy: SubmissionPolicy = {},
 ): Promise<Result<Terminal>> => {
   const connected = await connect(home);
   if (!connected.ok) return connected;
   const conn = connected.value;
+  const acceptanceMs = policy.acceptanceMs ?? nativeSubmissionPolicy.acceptanceMs;
+  const cancellationMs = policy.cancellationMs ?? nativeSubmissionPolicy.cancellationMs;
   let completed = false;
   let tail: Promise<Result<void>> | undefined;
   let cancelled = false;
-  const cancel = () => {
-    if (cancelled) return;
-    cancelled = true;
-    void sendJson(conn, {
+  let requestWritten = false;
+  let cancellationWrite: Promise<Result<void>> | undefined;
+  let deadlineError: string | undefined;
+  let writeError: string | undefined;
+  let acceptanceTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const close = () => {
+    try {
+      conn.close();
+    } catch { /* Already closed. */ }
+  };
+  const clearAcceptance = () => {
+    clearTimeout(acceptanceTimer);
+    acceptanceTimer = undefined;
+  };
+  const clearTimers = () => {
+    clearAcceptance();
+    clearTimeout(cancellationTimer);
+    cancellationTimer = undefined;
+  };
+  const expire = (error: string) => {
+    deadlineError ??= error;
+    close();
+  };
+  const sendCancellation = (): void => {
+    if (!cancelled || !requestWritten || cancellationWrite !== undefined) return;
+    cancellationWrite = sendJson(conn, {
       version: 1,
       op: "cancel",
       reason: signal.reason === "SIGINT" ? "SIGINT" : "SIGTERM",
     }).then((sent) => {
       if (!sent.ok) {
-        try {
-          conn.close();
-        } catch { /* Already closed. */ }
+        writeError ??= sent.error;
+        close();
       }
+      return sent;
     });
   };
+  const cancel = () => {
+    if (cancelled || completed) return;
+    cancelled = true;
+    clearAcceptance();
+    cancellationTimer = setTimeout(
+      () =>
+        expire(
+          `Cancellation deadline expired after ${cancellationMs} ms. Request completion is unknown. The request will not resume automatically.`,
+        ),
+      cancellationMs,
+    );
+    sendCancellation();
+  };
+  acceptanceTimer = setTimeout(
+    () =>
+      expire(
+        `Acceptance deadline expired after ${acceptanceMs} ms. Request completion is unknown. The request will not resume automatically.`,
+      ),
+    acceptanceMs,
+  );
+  signal.addEventListener("abort", cancel, { once: true });
+  if (signal.aborted) cancel();
   try {
     const sent = await sendJson(conn, request);
-    if (!sent.ok) return sent;
-    signal.addEventListener("abort", cancel, { once: true });
-    if (signal.aborted) cancel();
+    if (!sent.ok) return err(deadlineError ?? sent.error);
+    requestWritten = true;
+    sendCancellation();
     for await (const received of readJson(conn)) {
-      if (!received.ok) return received;
+      if (!received.ok) return err(deadlineError ?? writeError ?? received.error);
       const decoded = decodeResponse(received.value);
       if (!decoded.ok) return decoded;
       const response = decoded.value;
@@ -133,18 +192,18 @@ export const submit = async (
         case "ok":
           return err("Unexpected response to submission");
         case "accepted":
+          clearAcceptance();
           if (tail !== undefined) return err("Duplicate acceptance");
           tail = tailRequest(response.log, () => completed);
           void tail.then((result) => {
             if (!result.ok) {
               cancelled = true;
-              try {
-                conn.close();
-              } catch { /* Already closed. */ }
+              close();
             }
           });
           break;
         case "result": {
+          clearTimers();
           completed = true;
           if (tail === undefined) return err("Result arrived without acceptance");
           const drained = await tail;
@@ -153,15 +212,17 @@ export const submit = async (
         }
       }
     }
+    if (deadlineError !== undefined) return err(deadlineError);
+    if (writeError !== undefined) return err(writeError);
     return err(
       "Daemon connection closed before a result. The request will not resume automatically.",
     );
   } finally {
     completed = true;
+    clearTimers();
     signal.removeEventListener("abort", cancel);
-    try {
-      conn.close();
-    } catch { /* Already closed. */ }
+    close();
+    if (cancellationWrite !== undefined) await cancellationWrite;
     if (tail !== undefined) await tail;
   }
 };
