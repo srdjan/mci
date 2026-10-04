@@ -122,16 +122,17 @@ const checkDestination = async (
   return ok("owned");
 };
 
+/** Move the staged bundle into place. An old bundle moves to the backup, which stays. */
 const swapIn = async (
   staging: string,
   destination: string,
   backup: string,
   existed: boolean,
   capabilities: MonitorCapabilities,
-): Promise<Result<readonly string[]>> => {
+): Promise<Result<void>> => {
   if (!existed) {
     const placed = await capabilities.rename(staging, destination);
-    return placed.ok ? ok([]) : err(`Cannot install the app: ${placed.error}`);
+    return placed.ok ? ok(undefined) : err(`Cannot install the app: ${placed.error}`);
   }
   const moved = await capabilities.rename(destination, backup);
   if (!moved.ok) return err(`Cannot move the old app aside: ${moved.error}`);
@@ -145,10 +146,39 @@ const swapIn = async (
           `${restored.error}. The old app is at ${backup}.`,
     );
   }
-  const removed = await removeTree(backup);
-  return ok(
-    removed.ok ? [] : [`Cannot remove the old app at ${backup}: ${removed.error}`],
-  );
+  return ok(undefined);
+};
+
+const sentence = (text: string): string => text.endsWith(".") ? text : `${text}.`;
+
+/** Quit the new app, put the old bundle back, and open it. Returns the full error text. */
+const rollback = async (
+  primary: string,
+  destination: string,
+  backup: string,
+  executable: string,
+  capabilities: MonitorCapabilities,
+): Promise<string> => {
+  const head = sentence(primary);
+  const quit = await capabilities.quit(executable);
+  if (!quit.ok) {
+    return `${head} Rollback could not quit the new app: ${sentence(quit.error)} ` +
+      `The old app remains at ${backup}.`;
+  }
+  const removed = await removeTree(destination);
+  if (!removed.ok) {
+    const cause = sentence(removed.error);
+    return `${head} Rollback could not remove ${destination}: ${cause} ` +
+      `The old app remains at ${backup}.`;
+  }
+  const restored = await capabilities.rename(backup, destination);
+  if (!restored.ok) {
+    return `${head} Rollback failed. The old app remains at ${backup}: ${restored.error}`;
+  }
+  const reopened = await capabilities.open(destination);
+  return reopened.ok
+    ? `${head} The old app was restored and opened.`
+    : `${head} The old app was restored, but it did not open: ${reopened.error}`;
 };
 
 const waitForRunning = async (
@@ -219,18 +249,33 @@ export const installMonitor = async (
   );
   if (!swapped.ok) return abandon(swapped.error);
 
+  // A reinstall restores the old app after a failure. A fresh install keeps the new app.
+  const owned = state.value === "owned";
+  const fail = async (primary: string): Promise<Result<Installed>> =>
+    err(
+      owned
+        ? await rollback(primary, destination, backup, executable, capabilities)
+        : primary,
+    );
+
   const registered = await capabilities.register(workspace.value);
-  if (!registered.ok) return err(`Cannot register the repository: ${registered.error}`);
+  if (!registered.ok) {
+    return fail(`Cannot register the repository: ${registered.error}`);
+  }
   const opened = await capabilities.open(destination);
-  if (!opened.ok) return err(`Cannot open the app: ${opened.error}`);
+  if (!opened.ok) return fail(`Cannot open the app: ${opened.error}`);
   const running = await waitForRunning(
     executable,
     capabilities,
     options.runningTimeoutMs ?? 5000,
     options.pollMs ?? 100,
   );
-  if (!running.ok) return err(running.error);
-  return ok({ bundle: destination, workspace: workspace.value, warnings: swapped.value });
+  if (!running.ok) return fail(running.error);
+  const removed = owned ? await removeTree(backup) : ok(undefined);
+  const warnings = removed.ok
+    ? []
+    : [`Cannot remove the old app at ${backup}: ${removed.error}`];
+  return ok({ bundle: destination, workspace: workspace.value, warnings });
 };
 
 const deadline = {

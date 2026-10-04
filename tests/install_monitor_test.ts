@@ -69,50 +69,52 @@ const fakeCapabilities = (root: string, overrides: Overrides = {}): Fake => {
   const capabilities: MonitorCapabilities = {
     swiftAvailable: () => {
       calls.push("swift");
-      return Promise.resolve(true);
+      return overrides.swiftAvailable?.() ?? Promise.resolve(true);
     },
-    buildApp: async () => {
+    buildApp: async (packageDir) => {
       calls.push("build");
+      if (overrides.buildApp !== undefined) return await overrides.buildApp(packageDir);
       const binary = `${root}/build-output`;
       await Deno.writeTextFile(binary, overrides.binary ?? "binary one");
       return ok(binary);
     },
-    sign: () => {
+    sign: (bundle) => {
       calls.push("sign");
-      return Promise.resolve(ok(undefined));
+      return overrides.sign?.(bundle) ?? Promise.resolve(ok(undefined));
     },
-    verify: () => {
+    verify: (bundle) => {
       calls.push("verify");
-      return Promise.resolve(ok(undefined));
+      return overrides.verify?.(bundle) ?? Promise.resolve(ok(undefined));
     },
     readInstallerKey: (bundle) => {
       calls.push("key");
-      return installerKey(bundle);
+      return overrides.readInstallerKey?.(bundle) ?? installerKey(bundle);
     },
-    quit: () => {
+    quit: (executablePath) => {
       calls.push("quit");
-      return Promise.resolve(ok(undefined));
+      return overrides.quit?.(executablePath) ?? Promise.resolve(ok(undefined));
     },
-    open: () => {
+    open: (bundle) => {
       calls.push("open");
+      if (overrides.open !== undefined) return overrides.open(bundle);
       opened = true;
       return Promise.resolve(ok(undefined));
     },
-    isRunning: () => {
+    isRunning: (executablePath) => {
       calls.push("running");
-      return Promise.resolve(ok(opened));
+      return overrides.isRunning?.(executablePath) ?? Promise.resolve(ok(opened));
     },
     rename: async (from, to) => {
       calls.push("rename");
+      if (overrides.rename !== undefined) return await overrides.rename(from, to);
       await Deno.rename(from, to);
       return ok(undefined);
     },
     register: (workspace) => {
       calls.push("register");
       registered.push(workspace);
-      return Promise.resolve(ok(undefined));
+      return overrides.register?.(workspace) ?? Promise.resolve(ok(undefined));
     },
-    ...overrides,
   };
   return { calls, registered, capabilities };
 };
@@ -294,7 +296,7 @@ Deno.test("missing swift fails before the build and before any change", async ()
     });
     const result = await installMonitor(scene.options, fake.capabilities);
     assert(!result.ok && result.error.includes("swift is not available"));
-    equal(fake.calls, []);
+    equal(fake.calls, ["swift"]);
     assert(!await exists(scene.applications));
     assert(!await exists(scene.registry));
   });
@@ -354,6 +356,179 @@ Deno.test("a failed rename into place restores the old bundle", async () => {
     equal(await names(scene.applications), ["mci Monitor.app"]);
     assert(!fake.calls.includes("open"));
     assert(!await exists(scene.registry));
+  });
+});
+
+const backupPrefix = ".mci-monitor-backup-";
+
+const backupOf = async (scene: Scene): Promise<string | undefined> =>
+  (await names(scene.applications)).find((name) => name.startsWith(backupPrefix));
+
+const withOwnedScene = (test: (scene: Scene) => Promise<void>): Promise<void> =>
+  withScene(async (scene) => {
+    await writeBundle(scene.destination, infoPlist("1.0.0"), "old");
+    await test(scene);
+  });
+
+Deno.test("a registration failure on reinstall restores and opens the old app", async () => {
+  await withOwnedScene(async (scene) => {
+    const fake = fakeCapabilities(scene.root, {
+      register: () => Promise.resolve(err("daemon unavailable")),
+    });
+    const result = await installMonitor(scene.options, fake.capabilities);
+    assert(!result.ok);
+    assert(result.error.includes("daemon unavailable"), result.error);
+    assert(result.error.includes("The old app was restored and opened."), result.error);
+    assert(!result.error.includes(".."), result.error);
+    equal(await readMarker(scene.destination), "old");
+    equal(await names(scene.applications), ["mci Monitor.app"]);
+    equal(
+      fake.calls.slice(-6),
+      ["rename", "rename", "register", "quit", "rename", "open"],
+    );
+  });
+});
+
+Deno.test("an open failure on reinstall quits the new app and restores the old app", async () => {
+  await withOwnedScene(async (scene) => {
+    let opens = 0;
+    const fake = fakeCapabilities(scene.root, {
+      open: () => {
+        opens += 1;
+        return Promise.resolve(opens === 1 ? err("open refused") : ok(undefined));
+      },
+    });
+    const result = await installMonitor(scene.options, fake.capabilities);
+    assert(!result.ok);
+    assert(result.error.includes("open refused"), result.error);
+    assert(result.error.includes("restored and opened"), result.error);
+    assert(!result.error.includes(".."), result.error);
+    equal(await readMarker(scene.destination), "old");
+    equal(await names(scene.applications), ["mci Monitor.app"]);
+    equal(fake.calls.slice(-5), ["register", "open", "quit", "rename", "open"]);
+  });
+});
+
+Deno.test("a startup failure on reinstall restores and opens the old app", async () => {
+  await withOwnedScene(async (scene) => {
+    const fake = fakeCapabilities(scene.root, {
+      isRunning: () => Promise.resolve(ok(false)),
+    });
+    const result = await installMonitor(scene.options, fake.capabilities);
+    assert(!result.ok);
+    equal(
+      result.error,
+      "The app did not start within 40 ms. The old app was restored and opened.",
+    );
+    equal(await readMarker(scene.destination), "old");
+    equal(await names(scene.applications), ["mci Monitor.app"]);
+  });
+});
+
+Deno.test("a restore failure names the retained backup", async () => {
+  await withOwnedScene(async (scene) => {
+    const fake = fakeCapabilities(scene.root, {
+      register: () => Promise.resolve(err("daemon unavailable")),
+      rename: async (from, to) => {
+        if (from.includes(backupPrefix)) return err("restore refused");
+        await Deno.rename(from, to);
+        return ok(undefined);
+      },
+    });
+    const result = await installMonitor(scene.options, fake.capabilities);
+    assert(!result.ok);
+    const backup = await backupOf(scene);
+    assert(backup !== undefined, "the backup folder is kept");
+    const backupPath = `${scene.applications}/${backup}`;
+    assert(
+      result.error.includes("Rollback failed. The old app remains at"),
+      result.error,
+    );
+    assert(result.error.includes(backupPath), result.error);
+    assert(result.error.includes("restore refused"), result.error);
+    assert(!result.error.includes(".."), result.error);
+    equal(await readMarker(backupPath), "old");
+    assert(!await exists(scene.destination));
+  });
+});
+
+Deno.test("a reopen failure after restoration keeps the restored old app", async () => {
+  await withOwnedScene(async (scene) => {
+    const fake = fakeCapabilities(scene.root, {
+      open: () => Promise.resolve(err("open refused")),
+    });
+    const result = await installMonitor(scene.options, fake.capabilities);
+    assert(!result.ok);
+    assert(result.error.includes("Cannot open the app"), result.error);
+    assert(result.error.includes("restored, but it did not open"), result.error);
+    assert(!result.error.includes(".."), result.error);
+    equal(await readMarker(scene.destination), "old");
+    equal(await names(scene.applications), ["mci Monitor.app"]);
+  });
+});
+
+Deno.test("a quit failure during rollback leaves the new app and the backup", async () => {
+  await withOwnedScene(async (scene) => {
+    let quits = 0;
+    const fake = fakeCapabilities(scene.root, {
+      register: () => Promise.resolve(err("daemon unavailable")),
+      quit: () => {
+        quits += 1;
+        return Promise.resolve(quits === 1 ? ok(undefined) : err("quit refused"));
+      },
+    });
+    const result = await installMonitor(scene.options, fake.capabilities);
+    assert(!result.ok);
+    const backup = await backupOf(scene);
+    assert(backup !== undefined, "the backup folder is kept");
+    const backupPath = `${scene.applications}/${backup}`;
+    assert(result.error.includes("could not quit the new app"), result.error);
+    assert(result.error.includes(backupPath), result.error);
+    assert(!result.error.includes(".."), result.error);
+    equal(await readMarker(scene.destination), "binary one");
+    equal(await readMarker(backupPath), "old");
+    equal(fake.calls.slice(-2), ["register", "quit"]);
+  });
+});
+
+Deno.test("the backup stays until the new app runs and is removed afterwards", async () => {
+  await withOwnedScene(async (scene) => {
+    let during: string[] = [];
+    const fake = fakeCapabilities(scene.root, {
+      isRunning: async () => {
+        during = await names(scene.applications);
+        return ok(true);
+      },
+    });
+    unwrap(await installMonitor(scene.options, fake.capabilities));
+    assert(during.some((name) => name.startsWith(backupPrefix)), during.join(","));
+    equal(await names(scene.applications), ["mci Monitor.app"]);
+    equal(await readMarker(scene.destination), "binary one");
+  });
+});
+
+Deno.test("a removal failure during rollback names the backup", async () => {
+  await withOwnedScene(async (scene) => {
+    const contents = `${scene.destination}/Contents`;
+    try {
+      const fake = fakeCapabilities(scene.root, {
+        register: async () => {
+          await Deno.chmod(contents, 0o555);
+          return err("daemon unavailable");
+        },
+      });
+      const result = await installMonitor(scene.options, fake.capabilities);
+      assert(!result.ok);
+      const backup = await backupOf(scene);
+      assert(backup !== undefined, "the backup folder is kept");
+      const backupPath = `${scene.applications}/${backup}`;
+      assert(result.error.includes("Rollback could not remove"), result.error);
+      assert(result.error.includes(backupPath), result.error);
+      assert(!result.error.includes(".."), result.error);
+      equal(await readMarker(backupPath), "old");
+    } finally {
+      await Deno.chmod(contents, 0o755);
+    }
   });
 });
 

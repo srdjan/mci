@@ -393,7 +393,10 @@ Both installers stage the bundle next to the destination. They replace
 new one into place, and restores the old one if that move fails.
 
 `deno task monitor:install` builds the app, signs it ad hoc, verifies the signature, and
-registers the repository through the daemon. It requires a running daemon. `mci setup`
+registers the repository through the daemon. It requires a running daemon. On a reinstall,
+the source installer keeps the old bundle until the new app runs. After a registration,
+open, or startup failure, it quits the new app, restores the previous bundle, and opens
+it. If restoration fails, the error names the retained backup. The command `mci setup`
 copies the packaged bundle and verifies its signature. Setup also requires a valid
 signature on an existing owned bundle.
 

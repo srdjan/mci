@@ -13,8 +13,8 @@ describes the resulting behavior. This list does not reopen those findings.
 `deno task verify` passed: 181 Deno tests passed, one platform test was ignored, and 309
 native monitor checks passed. Formatting, linting, and type checking also passed.
 
-H1 to H5 shipped in commits 85480a0, 17c1b48, 4f195c7, 13cae87, and fd13acb.
-`VERIFICATION.md` records each.
+H1 to H5 shipped in commits 85480a0, 17c1b48, 4f195c7, 13cae87, and fd13acb. H6 shipped
+after them. `VERIFICATION.md` records each.
 
 Effort describes scope, not elapsed time. Small means one boundary and its checks. Medium
 means coordinated changes across boundaries. Change risk describes what a fix or removal
@@ -22,39 +22,10 @@ can break.
 
 ## Ordered backlog
 
-| Order | Item                                                        | Category  | Effect                                                                     | Effort | Change risk | Confidence          |
-| ----- | ----------------------------------------------------------- | --------- | -------------------------------------------------------------------------- | ------ | ----------- | ------------------- |
-| 1     | H6: Keep the source installer backup until startup succeeds | Hardening | A failed startup leaves the replacement installed without the previous app | Medium | Medium      | High: source        |
-| 2     | P1: Remove the unused direct CI logger                      | Pruning   | Tests maintain a logger that the current CLI does not call                 | Medium | Low         | High: caller search |
-| 3     | P2: Remove the unused monitor status decoder                | Pruning   | Checks maintain the old status contract beside the daemon contract         | Medium | Medium      | High: caller search |
-
-## Hardening details
-
-### H6: Keep the source installer backup until startup succeeds
-
-Evidence: `scripts/install-monitor.ts:125-151` removes the previous bundle after the
-replacement move. `scripts/install-monitor.ts:222-232` registers the repository, opens the
-app, and checks startup after that removal.
-
-When registration, app opening, or startup detection fails, the installer returns an error
-after it deletes the previous bundle. The previous working app cannot be restored through
-that backup.
-
-The source installer remains an active development command in `deno.json:20` and
-`README.md:236-241`. It is not dead code. The packaged installer already retains its
-backup through later checks in `src/install.ts:319-366`.
-
-The proposed fix retains the backup until source installation succeeds. Failures after
-replacement must restore and reopen the previous owned bundle. Restoration failures must
-identify the retained backup location.
-
-Verification injects registration, opening, and startup failures after replacement. Checks
-confirm that the previous bundle remains recoverable and that foreign bundles remain
-unchanged.
-
-The change risk concerns app shutdown, replacement, and reopening. A shared installation
-transaction is a possible follow-up, but removing the development command requires a
-separate decision about its continued use.
+| Order | Item                                         | Category | Effect                                                             | Effort | Change risk | Confidence          |
+| ----- | -------------------------------------------- | -------- | ------------------------------------------------------------------ | ------ | ----------- | ------------------- |
+| 1     | P1: Remove the unused direct CI logger       | Pruning  | Tests maintain a logger that the current CLI does not call         | Medium | Low         | High: caller search |
+| 2     | P2: Remove the unused monitor status decoder | Pruning  | Checks maintain the old status contract beside the daemon contract | Medium | Medium      | High: caller search |
 
 ## Pruning details
 
@@ -116,8 +87,9 @@ interface. `status.json` projection also remains documented; removing that proje
 requires a compatibility decision.
 
 The source monitor installer remains documented. Consolidating its transaction with
-packaged setup can reduce duplicated behavior. This review does not classify the source
-installer as unused.
+packaged setup can reduce duplicated behavior. The two installers differ after a failed
+fresh install: setup removes the new app, while the source installer keeps it. This review
+does not classify the source installer as unused.
 
 File size alone does not justify splitting `daemon.ts`. Arbitrary trusted commands,
 advisory locks, and best-effort process recovery remain accepted product boundaries. The
@@ -136,8 +108,8 @@ Whether macOS returns a transient `accept()` error such as ECONNABORTED needs me
 
 ## Next action and ownership
 
-The repository maintainer owns selection of the next implementation unit. H1 to H5
-shipped. The maintainer selects the next unit from H6, P1, and P2.
+The repository maintainer owns selection of the next implementation unit. H1 to H6
+shipped. The maintainer selects the next unit from P1 and P2.
 
 Each accepted unit needs its own checks and local commit on `main`. The repository
 maintainer owns pushes and repository backups.

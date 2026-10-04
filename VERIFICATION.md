@@ -1,5 +1,38 @@
 # Verification
 
+## Source monitor installer rollback
+
+On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 230
+tests with one opposite-platform test ignored. The native monitor passed 309 checks.
+Formatting, linting, and type checking passed.
+
+One earlier full run failed "daemon restart marks an accepted request interrupted without
+retry" with a refused daemon connection. Ten isolated runs and three runs of
+`tests/daemon_test.ts` passed. This change does not touch the daemon. The cause is not
+known and needs investigation.
+
+Eight new public tests call `installMonitor` with fake capabilities in temporary
+directories. All eight failed before the source change. Four tests received the unchanged
+primary error with no restoration text. Three tests found no retained backup folder,
+because the old installer deleted it after the swap. One test found no backup while the
+startup check ran.
+
+The fixed installer keeps the old bundle until the new app runs. After a registration,
+open, or startup failure on a reinstall, it quits the new app and removes it. It then
+renames the backup to the destination and opens the restored app. Checks cover each of
+these failures, and the exact startup failure text. Further checks cover a failed restore,
+a failed reopen, a failed quit, and a failed removal. Each failed rollback names the
+retained backup, and the backup keeps its old content. A fresh install keeps today's
+behavior.
+
+After the change, the 24 tests in `tests/install_monitor_test.ts` passed in 163 ms. The
+slowest test took 48 ms, because it waits for the 40 ms startup limit.
+
+These checks use fake capabilities only. They do not run the native quit, open, or
+reinstall steps. The native quit confirms process absence only at that moment. A first
+launch slower than the 5000 ms default now causes a rollback, instead of leaving the new
+app installed. The installed app is unchanged.
+
 ## Matching package artifacts
 
 On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 222
