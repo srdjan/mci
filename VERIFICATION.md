@@ -1,5 +1,30 @@
 # Verification
 
+## Legacy status import coverage
+
+On 2026-10-04, the legacy import tests in `tests/daemon_test.ts` gained coverage for the
+real record shape and for daemon startup. The nine legacy tests passed.
+
+The removed direct CI logger always wrote a `logger` key, as an identity object or null.
+The earlier import tests used only records without that key. The import test now covers an
+identity object, a null logger, and no logger key. The invalid-record test now also covers
+an invalid logger and an unfinished record with an exit code.
+
+The entry "Legacy status import tests" below says that the daemon runs this import when a
+repository registers. That statement is incomplete. The daemon also runs the import at
+startup for each registered repository without `latest.json`. A new test starts the daemon
+with a legacy `monitor.json` and a legacy `status.json`. It checks the imported result and
+its copied log after the startup retention sweep.
+
+Four temporary mutations confirmed that the tests detect defects. Each mutation was
+reverted with `git checkout`:
+
+1. A key count that ignored the `logger` key failed three tests. The tests from commit
+   `a369133` passed 8 of 8 with this mutation.
+2. A logger check that accepted any value failed the invalid-record test.
+3. An unfinished-record check that accepted an exit code failed the invalid-record test.
+4. A startup sweep that did not keep the latest result failed the startup test.
+
 ## Legacy unfinished run finish time
 
 On 2026-10-04, a new test showed a defect in the import of an unfinished legacy run. The
