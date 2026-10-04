@@ -1271,3 +1271,120 @@ Deno.test("daemon closes a connection that sends no first request", () =>
       idle.close();
     }
   }));
+
+const writeLegacy = async (
+  workspace: string,
+  record: Readonly<Record<string, unknown>>,
+  log: string | null,
+): Promise<void> => {
+  await Deno.mkdir(`${workspace}/.mci/ci`, { recursive: true });
+  await Deno.writeTextFile(`${workspace}/.mci/ci/status.json`, JSON.stringify(record));
+  if (log !== null) await Deno.writeTextFile(`${workspace}/.mci/ci/latest.log`, log);
+};
+
+const latestOf = async (directory: string) => {
+  const current = await rpc({ version: 1, op: "status" }, directory);
+  assert(current.ok, current.ok ? "" : current.error);
+  return current.value.repositories[0];
+};
+
+const legacyFinished = {
+  version: 1,
+  state: "pass",
+  pid: 7,
+  started: "2026-10-03T10:00:00.000Z",
+  finished: "2026-10-03T10:00:01.000Z",
+  code: 0,
+};
+
+Deno.test("registration imports a finished legacy CI status and its log", async () => {
+  const cases = [
+    { state: "pass", code: 0, kind: "success" },
+    { state: "fail", code: 1, kind: "failure" },
+    { state: "cancelled", code: 143, kind: "cancelled" },
+  ] as const;
+  for (const legacy of cases) {
+    await inWorkspace(async (workspace) => {
+      await writeLegacy(
+        workspace,
+        { ...legacyFinished, state: legacy.state, code: legacy.code },
+        "legacy output\n",
+      );
+      await withDaemon(workspace, async (directory) => {
+        const repository = await latestOf(directory);
+        equal(repository?.blocked, null);
+        const latest = repository?.latest;
+        assert(latest !== null && latest !== undefined, `${legacy.state}: no latest`);
+        equal(latest.kind, legacy.kind);
+        equal(latest.code, legacy.code);
+        equal(latest.workflow, "legacy");
+        equal(latest.started, legacyFinished.started);
+        equal(latest.finished, legacyFinished.finished);
+        equal(latest.detail, "Imported from the legacy CI status.");
+        equal(latest.log, `${workspace}/.mci/ci/requests/${latest.id}.log`);
+        equal(await Deno.readTextFile(latest.log), "legacy output\n");
+        const reference = JSON.parse(
+          await Deno.readTextFile(`${workspace}/.mci/ci/latest.json`),
+        );
+        equal(reference.id, latest.id);
+      });
+    });
+  }
+});
+
+Deno.test("registration records an unfinished legacy CI run as interrupted", () =>
+  inWorkspace(async (workspace) => {
+    await writeLegacy(
+      workspace,
+      { ...legacyFinished, state: "running", finished: null, code: null },
+      "partial output\n",
+    );
+    await withDaemon(workspace, async (directory) => {
+      const latest = (await latestOf(directory))?.latest;
+      assert(latest !== null && latest !== undefined);
+      equal(latest.kind, "interrupted");
+      equal(latest.code, 143);
+      equal(latest.detail, "The daemon found an unfinished legacy run.");
+      equal(await Deno.readTextFile(latest.log), "partial output\n");
+    });
+  }));
+
+Deno.test("registration blocks a repository with an invalid legacy CI status", async () => {
+  const cases = [
+    {
+      record: { ...legacyFinished, pid: 0 },
+      log: "x",
+      reason: "invalid legacy CI status",
+    },
+    {
+      record: { ...legacyFinished, code: 1 },
+      log: "x",
+      reason: "invalid legacy terminal status",
+    },
+    { record: legacyFinished, log: null, reason: "legacy CI log must be a real file" },
+  ];
+  for (const legacy of cases) {
+    await inWorkspace(async (workspace) => {
+      await writeLegacy(workspace, legacy.record, legacy.log);
+      await withDaemon(workspace, async (directory) => {
+        const repository = await latestOf(directory);
+        equal(repository?.latest, null);
+        assert(
+          repository?.blocked?.includes(legacy.reason) === true,
+          `expected ${legacy.reason}, received ${repository?.blocked}`,
+        );
+        assert(!await exists(`${workspace}/.mci/ci/latest.json`));
+      });
+    });
+  }
+});
+
+Deno.test("registration ignores a status file that is not a legacy record", () =>
+  inWorkspace(async (workspace) => {
+    await writeLegacy(workspace, { ...legacyFinished, version: 2 }, "x");
+    await withDaemon(workspace, async (directory) => {
+      const repository = await latestOf(directory);
+      equal(repository?.latest, null);
+      equal(repository?.blocked, null);
+    });
+  }));

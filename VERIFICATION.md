@@ -1,5 +1,25 @@
 # Verification
 
+## Legacy status import tests
+
+On 2026-10-04, four new tests in `tests/daemon_test.ts` cover the daemon import of a
+version 1 `status.json`. The daemon runs this import when a repository registers without
+`latest.json`. Before this change, no test covered it.
+
+The tests check pass, fail, and cancelled records, and an unfinished record. Each check
+confirms the imported kind, code, detail, and copied log. Further checks cover an invalid
+record, an invalid exit code, and a missing log, which block the repository. A status file
+of another version is not imported.
+
+Three temporary mutations of `src/daemon-store.ts` confirmed that the tests detect
+defects. A decoder that accepted no version 1 record failed three tests. A cancelled
+record mapped to failure failed the import test. A missing check on the log file failed
+the invalid-record test. Each mutation was reverted with `git checkout`.
+
+The six registration tests in `tests/daemon_test.ts` passed in about 1 s. These checks use
+temporary workspaces and an in-process daemon. They do not import status files from an
+installed earlier version.
+
 ## Monitor status decoder removal
 
 On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 215

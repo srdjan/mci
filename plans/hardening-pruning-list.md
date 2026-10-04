@@ -52,9 +52,6 @@ startup at the next login retain their existing evidence limits.
 The earlier manual record did not establish exact update latency, interrupted-state
 latency, deleted-watch recovery, or picker cancellation.
 
-The legacy `status.json` import in `src/daemon-store.ts` has no direct test before or
-after the P2 change.
-
 Whether macOS returns a transient `accept()` error such as ECONNABORTED needs measurement.
 
 ## Next action and ownership
