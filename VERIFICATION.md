@@ -1,5 +1,22 @@
 # Verification
 
+## Daemon readiness in restart tests
+
+On 2026-10-04, one full `deno task verify` run failed "daemon restart marks an accepted
+request interrupted without retry". The client reported "Connection refused (os error
+61)". The two restart tests spawn a daemon process and waited only until its socket file
+existed.
+
+A Python probe bound a Unix socket and connected before `listen()`. The socket file
+existed, and the connection failed with errno 61. After `listen()`, the connection
+succeeded. A connection between the two calls therefore produces the reported error. This
+is the probable cause. Twenty-five runs of both restart tests under load on all 14 cores
+did not reproduce the failure.
+
+Both tests now wait until the daemon answers a ping. Five runs of the four restart tests
+passed afterward. Production clients already poll with a ping or report an unavailable
+daemon. The daemon itself is unchanged.
+
 ## Source monitor installer rollback
 
 On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 230
@@ -8,8 +25,8 @@ Formatting, linting, and type checking passed.
 
 One earlier full run failed "daemon restart marks an accepted request interrupted without
 retry" with a refused daemon connection. Ten isolated runs and three runs of
-`tests/daemon_test.ts` passed. This change does not touch the daemon. The cause is not
-known and needs investigation.
+`tests/daemon_test.ts` passed. This change does not touch the daemon. The section "Daemon
+readiness in restart tests" records the probable cause and the test change.
 
 Eight new public tests call `installMonitor` with fake capabilities in temporary
 directories. All eight failed before the source change. Four tests received the unchanged

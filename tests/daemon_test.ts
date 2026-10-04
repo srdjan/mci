@@ -798,9 +798,8 @@ Deno.test({
         stderr: "null",
       }).spawn();
       try {
-        const paths = servicePaths(directory);
-        assert(paths.ok, paths.ok ? "" : paths.error);
-        await waitFor(() => exists(paths.value.socket));
+        // The socket file exists after bind() and before listen(). Wait for an answer.
+        await waitFor(async () => (await rpc({ version: 1, op: "ping" }, directory)).ok);
         const registered = await rpc(
           { version: 1, op: "register", path: workspace },
           directory,
@@ -858,9 +857,8 @@ Deno.test({
         stderr: "null",
       }).spawn();
       try {
-        const paths = servicePaths(directory);
-        assert(paths.ok, paths.ok ? "" : paths.error);
-        await waitFor(() => exists(paths.value.socket));
+        // The socket file exists after bind() and before listen(). Wait for an answer.
+        await waitFor(async () => (await rpc({ version: 1, op: "ping" }, directory)).ok);
         const registered = await rpc(
           { version: 1, op: "register", path: workspace },
           directory,
