@@ -1349,6 +1349,22 @@ Deno.test("registration records an unfinished legacy CI run as interrupted", () 
     });
   }));
 
+Deno.test("registration ends a future unfinished legacy run at its start time", () =>
+  inWorkspace(async (workspace) => {
+    const started = "2999-01-01T00:00:00.000Z";
+    await writeLegacy(
+      workspace,
+      { ...legacyFinished, state: "running", started, finished: null, code: null },
+      "x",
+    );
+    await withDaemon(workspace, async (directory) => {
+      const latest = (await latestOf(directory))?.latest;
+      assert(latest !== null && latest !== undefined);
+      equal(latest.kind, "interrupted");
+      equal(latest.finished, started);
+    });
+  }));
+
 Deno.test("registration blocks a repository with an invalid legacy CI status", async () => {
   const cases = [
     {

@@ -1,5 +1,21 @@
 # Verification
 
+## Legacy unfinished run finish time
+
+On 2026-10-04, a new test showed a defect in the import of an unfinished legacy run. The
+import set the finish time to the current clock. When the legacy start time was later than
+the clock, the finish time came before the start time. `decodeTerminal` rejects that
+record, so the client rejected every snapshot that contained it.
+
+Before the fix, the test "registration ends a future unfinished legacy run at its start
+time" failed. The register call returned "Invalid terminal record fields". The fix in
+`src/daemon-store.ts` uses the start time as the finish time when the clock is earlier.
+After the fix, the eight legacy tests in `tests/daemon_test.ts` passed.
+
+The same unclamped finish time remains in `workerTerminal`, `failedTerminal`, and the
+startup interrupted record in `src/daemon.ts`. Those records fail only when the clock
+moves back during a run. This change does not alter them.
+
 ## Legacy status import tests
 
 On 2026-10-04, four new tests in `tests/daemon_test.ts` cover the daemon import of a

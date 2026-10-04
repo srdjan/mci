@@ -286,13 +286,15 @@ const decodeLegacyTerminal = (
     if (value.finished !== null || value.code !== null) {
       return err("invalid legacy running status");
     }
+    // A clock that moved back since the legacy start must not end the run first.
+    const now = new Date().toISOString();
     return ok({
       id: `legacy-${value.pid}-${value.started.replaceAll(/[^0-9]/g, "")}`,
       repositoryId: repository.id,
       workflow: "legacy",
       job: "legacy",
       started: value.started,
-      finished: new Date().toISOString(),
+      finished: now < value.started ? value.started : now,
       kind: "interrupted",
       code: 143,
       completed: 0,
