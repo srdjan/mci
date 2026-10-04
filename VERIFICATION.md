@@ -1,5 +1,29 @@
 # Verification
 
+## Shutdown during path resolution
+
+On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 188
+tests with one opposite-platform test ignored. The native monitor passed 309 checks.
+Formatting, linting, type checking, and the suppression check passed.
+
+The new public regression holds submission path resolution during shutdown. Shutdown
+finishes, the client reaches EOF, and the socket disappears before the resolver returns. A
+successor daemon starts in the same directory while the old resolver remains pending. This
+establishes release of the service lock and socket.
+
+After the old resolver returns, no forbidden command runs. The request journal and spool
+remain unchanged. A later daemon startup retains the registered repository without a new
+terminal result.
+
+The regression failed before the source change because shutdown waited for resolution.
+That failure took 583 ms. The corrected focused regression passed in 89 ms. The main agent
+also ran the daemon and race suites: all 42 tests passed. An independent review found no
+supported defect in the cancellation boundary or late-result handling.
+
+The controlled resolver proves the cancellation boundary. The test does not reproduce a
+stalled native filesystem. Other filesystem operations retain their existing shutdown
+limits. These checks cover source execution; the installed binary remains unchanged.
+
 ## Submission cancellation
 
 On 2026-10-03, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 187

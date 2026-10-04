@@ -85,6 +85,13 @@ The daemon resolves request paths in one chain for each path text. A stalled vol
 only requests for its own path. An unregister request no longer reports busy after the
 result frame of a finished client, even if that client keeps its connection open.
 
+Shutdown cancels each pending submission wait for path resolution. The daemon releases its
+socket and service lock without waiting for that resolver. A late resolution cannot accept
+a request, allocate a spool, change the request journal, or start a worker.
+
+The filesystem lookup can continue after the submission wait ends. This cancellation
+boundary adds no timer and does not bound other filesystem operations during shutdown.
+
 Registration and daemon startup recover each workspace. A held workspace lock, such as a
 direct `mci run`, does not block the repository. The worker acquires the workspace before
 each job, so recovery still precedes the next command.

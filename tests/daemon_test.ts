@@ -1063,6 +1063,113 @@ Deno.test("a stalled path resolution does not delay a submission for another pat
     })
   ));
 
+Deno.test("daemon shutdown releases resources during stalled path resolution", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+    const release = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const returned = Promise.withResolvers<void>();
+    const forbidden = `${workspace}/late-resolution-ran`;
+    const spool = `${workspace}/.mci/ci/requests`;
+    let connection: Deno.UnixConn | null = null;
+    let successor: Awaited<ReturnType<typeof startDaemon>> | null = null;
+    let restarted: Awaited<ReturnType<typeof startDaemon>> | null = null;
+    const daemon = await startDaemon({
+      directory,
+      resolvePath: async (path) => {
+        entered.resolve();
+        await release.promise;
+        try {
+          return await attempt(() => Deno.realPath(path));
+        } finally {
+          returned.resolve();
+        }
+      },
+    });
+    assert(daemon.ok, daemon.ok ? "" : daemon.error);
+    const paths = servicePaths(directory);
+    assert(paths.ok, paths.ok ? "" : paths.error);
+    try {
+      const registered = await rpc(
+        { version: 1, op: "register", path: workspace },
+        directory,
+      );
+      assert(registered.ok, registered.ok ? "" : registered.error);
+      const journalBefore = await exists(paths.value.journal)
+        ? await Deno.readTextFile(paths.value.journal)
+        : null;
+      const spoolBefore = await exists(spool)
+        ? [...Deno.readDirSync(spool)].map((entry) => entry.name).sort()
+        : null;
+
+      connection = await Deno.connect({ transport: "unix", path: paths.value.socket });
+      const sent = await sendJson(connection, {
+        version: 1,
+        op: "submit",
+        path: workspace,
+        workflow: "stalled-shutdown.yml",
+        job: "check",
+        source: fixture(`      - run: touch ${JSON.stringify(forbidden)}`),
+        env: capturedEnv(),
+      });
+      assert(sent.ok, sent.ok ? "" : sent.error);
+      assert(
+        await within(entered.promise.then(() => true), 500) === true,
+        "the path resolver was not entered",
+      );
+
+      const closed = await within(daemon.value.close().then(() => true), 500);
+      assert(closed === true, "daemon shutdown waited for path resolution");
+      const eof = await within(
+        connection.read(new Uint8Array(1)).then((value) => ({ value })),
+        500,
+      );
+      assert(eof !== null, "the submission socket did not close");
+      equal(eof.value, null);
+      assert(!await exists(paths.value.socket));
+
+      successor = await startDaemon({ directory });
+      assert(successor.ok, successor.ok ? "" : successor.error);
+      const current = successor.value.snapshot().repositories[0];
+      equal(current?.path, workspace);
+      equal(current?.latest, null);
+      equal(current?.active, null);
+      equal(current?.queued, 0);
+      await successor.value.close();
+
+      release.resolve();
+      assert(
+        await within(returned.promise.then(() => true), 500) === true,
+        "the old path resolver did not return",
+      );
+      await sleep(20);
+      assert(!await exists(forbidden));
+      const journalAfter = await exists(paths.value.journal)
+        ? await Deno.readTextFile(paths.value.journal)
+        : null;
+      const spoolAfter = await exists(spool)
+        ? [...Deno.readDirSync(spool)].map((entry) => entry.name).sort()
+        : null;
+      equal(journalAfter, journalBefore);
+      equal(spoolAfter, spoolBefore);
+
+      restarted = await startDaemon({ directory });
+      assert(restarted.ok, restarted.ok ? "" : restarted.error);
+      const preserved = restarted.value.snapshot().repositories[0];
+      equal(preserved?.path, workspace);
+      equal(preserved?.latest, null);
+      equal(preserved?.active, null);
+      equal(preserved?.queued, 0);
+    } finally {
+      release.resolve();
+      connection?.close();
+      if (restarted?.ok) await restarted.value.close();
+      if (successor?.ok) await successor.value.close();
+      await daemon.value.close();
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
 const failingListener = (failures: number) => (path: string): DaemonListener => {
   const real = Deno.listen({ transport: "unix", path });
   let remaining = failures;

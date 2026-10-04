@@ -67,6 +67,7 @@ type DaemonRuntime = {
   management: Promise<void>;
   readonly routing: Map<string, Promise<void>>;
   readonly resolvePath: (path: string) => Promise<Result<string>>;
+  readonly shutdown: AbortController;
   readonly requestDeadlineMs: number;
   closed: boolean;
 };
@@ -553,7 +554,18 @@ const registeredRepository = async (
   runtime: DaemonRuntime,
   path: string,
 ): Promise<Result<MutableRepository>> => {
-  const real = await runtime.resolvePath(path);
+  if (runtime.closed) return err("daemon is closed");
+  const stopped = Promise.withResolvers<Result<string>>();
+  const abort = () => stopped.resolve(err("daemon is closed"));
+  runtime.shutdown.signal.addEventListener("abort", abort, { once: true });
+  if (runtime.shutdown.signal.aborted) abort();
+  let real: Result<string>;
+  try {
+    real = await Promise.race([runtime.resolvePath(path), stopped.promise]);
+  } finally {
+    runtime.shutdown.signal.removeEventListener("abort", abort);
+  }
+  if (runtime.closed) return err("daemon is closed");
   if (!real.ok) return err(`repository is unavailable: ${real.error}`);
   const repository = Array.from(runtime.repositories.values()).find((state) =>
     state.repository.path === real.value.replace(/\/$/, "")
@@ -907,6 +919,7 @@ const prepareRuntime = async (
     management: Promise.resolve(),
     routing: new Map(),
     resolvePath,
+    shutdown: new AbortController(),
     requestDeadlineMs,
     closed: false,
   };
@@ -1182,6 +1195,7 @@ export const startDaemon = async (options: {
     if (closing !== null) return closing;
     closing = (async () => {
       runtime.value.closed = true;
+      runtime.value.shutdown.abort("daemon is closed");
       try {
         listener.close();
       } catch { /* The listener is already closed. */ }
