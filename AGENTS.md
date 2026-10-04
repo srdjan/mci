@@ -10,7 +10,7 @@ checks remain available for diagnosis and release evidence.
 CI YAML calls Deno tasks directly. Saved CI logs and status remain gitignored under
 `.mci/ci/`. One local daemon serves one user and multiple repositories. Each repository
 uses a FIFO queue, while different repositories can run concurrently. Restart interrupts
-unfinished work without automatic retry.
+started work and drops queued work. The daemon retries neither.
 
 The menu bar monitor app reads daemon snapshots and opens saved logs. The monitor must not
 start CI or add another automatic trigger.

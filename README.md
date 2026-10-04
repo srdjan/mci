@@ -32,8 +32,9 @@ brew install local/meeci/mci
 mci setup
 ```
 
-`mci setup` starts the Homebrew service and installs `~/Applications/mci Monitor.app`. The
-daemon imports the earlier registry only when its own registry does not exist.
+`mci setup` installs and opens `~/Applications/mci Monitor.app`. It starts the Homebrew
+service only when the daemon does not answer. The daemon imports the earlier registry only
+when its own registry does not exist.
 
 Register each repository. Then install its managed pre-commit hook.
 
@@ -43,8 +44,8 @@ mci register "$PWD"
 mci hooks install "$PWD" --workflow ci/local-ci.yml --job check
 ```
 
-The hook adds the `mci:ci` task to `deno.json`. The task uses the stable Homebrew binary.
-Git selects the absolute hook directory under the stable Homebrew prefix. Hook
+Hook installation adds the `mci:ci` task to `deno.json`. The task uses the stable Homebrew
+binary. Git selects the absolute hook directory under the stable Homebrew prefix. Hook
 installation uses Git configuration scoped to the current worktree.
 
 If installation rollback fails, the diagnostic keeps the original error. It names each
@@ -77,8 +78,8 @@ daemon state.
 The daemon cancels a request when its submitting client disconnects. The cancellation does
 not affect requests from other clients.
 
-After a daemon restart, unfinished requests become INTERRUPTED. The daemon does not retry
-them.
+After a daemon restart, an unfinished request that began becomes INTERRUPTED. The daemon
+drops a queued request that never began. It retries neither.
 
 To update a same-version local package, build and copy the formula again. Then reinstall
 the formula, restart the service, and refresh the monitor app.
@@ -160,13 +161,14 @@ runner bounds its subsequent wait for the direct child. Cleanup errors preserve 
 original execution detail and make the run fail. Process identity inspection also has a
 deadline and bounded cleanup.
 
-Captured helper commands allow 1 MiB per output stream. The source monitor build allows 16
-MiB per stream. A MiB is 1,048,576 bytes. Output beyond a budget fails the helper and
-starts bounded cleanup. Workflow steps continue to stream their output.
+Helper commands that the `mci` CLI runs allow 1 MiB per output stream. The source monitor
+build allows 16 MiB per stream. A MiB is 1,048,576 bytes. Output beyond a budget fails the
+helper and starts bounded cleanup. Workflow steps continue to stream their output.
 
-The `mci` task monitors its native Deno task parent. If that parent exits, the CLI cancels
-the active job and cleans the workspace. Standalone execution uses the usual OS signals
-and job deadline.
+Under the `mci` task, `mci run` monitors its native Deno task parent. If that parent
+exits, the CLI cancels the active job and cleans the workspace. `mci ci` always monitors
+its parent and cancels its daemon request when the parent exits. Standalone `mci run` uses
+the usual OS signals and job deadline.
 
 The runner cleans up background processes in the same group after every step. Background
 processes cannot act as services for later steps. The runner removes private scripts after
@@ -211,7 +213,8 @@ deno task hooks:install
 ```
 
 Git runs `.githooks/pre-commit` before each commit. The hook calls `deno task ci` from the
-repository root.
+repository root. That task submits the local YAML to the daemon, which saves the output
+under `.mci/ci/`. The hook needs a running daemon and a registered checkout.
 
 The local YAML calls `deno task verify` directly. A failed check blocks the commit, and
 the checks include unstaged changes.
@@ -262,18 +265,21 @@ For a manual check:
 deno task verify
 ```
 
-This runs formatting, linting, type checking and real subprocess tests. On macOS it also
-runs the CLI success/SIGINT test skipped on Linux. The source is organized as pure
-workflow validation, process supervision and a small CLI. There are no application
-classes, inheritance, expression engine or plugin system. Typed results carry failures;
-exception handling is limited to library and OS boundaries.
+This runs formatting, linting, type checking, real subprocess tests, and `app:check`.
+`app:check` builds the Swift monitor and runs its checks. It needs the Xcode Command Line
+Tools. On macOS the tests also run the CLI success/SIGINT test skipped on Linux. The Deno
+source is organized as pure workflow validation, process supervision, the daemon, and a
+small CLI. The Deno source has no application classes, inheritance, expression engine or
+plugin system. Typed results carry failures; exception handling is limited to library and
+OS boundaries.
 
-`deno task ci` runs the local YAML and saves its output.
+`deno task ci` submits the local YAML to the daemon, which saves its output.
 
 Read [docs/design.md](docs/design.md) for module responsibilities, recovery rules, and
-release ownership. The local workflow lives in `ci/local-ci.yml` and uses the current
-checkout and installed Deno. Automatic CI runs only through the pre-commit hook. GitHub
-serves only as a repository backup service.
+release ownership. Open hardening and pruning work lives in
+[plans/hardening-pruning-list.md](plans/hardening-pruning-list.md). The local workflow
+lives in `ci/local-ci.yml` and uses the current checkout and installed Deno. Automatic CI
+runs only through the pre-commit hook. GitHub serves only as a repository backup service.
 
 The CLI identifies the host, runtime, and resolved Bash executable. Installed commands and
 the inherited environment remain inputs to each local run. A local pass does not establish

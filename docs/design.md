@@ -10,7 +10,7 @@ the authority of the invoking user.
 | ----------------- | ------------------------------------------------------------------------------ |
 | `workflow.ts`     | YAML validation, environment precedence, and plan construction                 |
 | `process.ts`      | Process groups, cancellation, bounded termination, and identity checks         |
-| `workspace.ts`    | Workspace exclusion, private scripts, and worker recovery journals             |
+| `workspace.ts`    | Workspace exclusion, private scripts, and run recovery journals                |
 | `runner.ts`       | Step order, environment filtering, deadlines, and final results                |
 | `protocol.ts`     | Exact daemon request, response, snapshot, and terminal record shapes           |
 | `ipc.ts`          | Bounded newline-delimited JSON transport                                       |
@@ -23,12 +23,18 @@ the authority of the invoking user.
 | `cli.ts`          | Command routing, direct runs, daemon submission, and signal handling           |
 | `runtime.ts`      | Version, source arguments, and self-invocation                                 |
 | `result.ts`       | Expected failures and exception conversion at library and operating boundaries |
+| `command.ts`      | Helper command capture with deadlines, byte budgets, and bounded cleanup       |
+| `management.ts`   | Register, unregister, status, and log commands over the daemon socket          |
+| `paths.ts`        | Service directory and socket paths, including the `MCI_HOME` override          |
+| `main.ts`         | Process entry point: runs the CLI, reports a fatal error, and exits            |
 
 The menu bar app lives in the Swift package `monitor/`. `MonitorCore` decodes daemon
-snapshots and maps repository states to display states.
+snapshots, talks to the daemon socket, reads log tails, and maps repository states to
+display states.
 
-`MonitorApp` owns the SwiftUI panel, daemon client, snapshot watch, and log window.
-`MonitorChecks` runs plain checks without Swift Testing macros.
+`MonitorApp` owns the SwiftUI panel, directory watch, log window, and login item.
+`MonitorChecks` runs plain checks because Swift Testing macros failed in 10 of 22 runs on
+the Command Line Tools toolchain. `VERIFICATION.md` records that evidence.
 
 The YAML package version and integrity value reside in `deno.lock`. The parser checks the
 entire document before selected-job validation. An invalid unselected job can therefore
@@ -94,7 +100,8 @@ boundary adds no timer and does not bound other filesystem operations during shu
 
 Registration and daemon startup recover each workspace. A held workspace lock, such as a
 direct `mci run`, does not block the repository. The worker acquires the workspace before
-each job, so recovery still precedes the next command.
+each job, so recovery still precedes the next command. `mci doctor` reads `blocked`, so it
+reports such a repository as ready.
 
 A request that leaves the queue before it starts is not a result. Its own client receives
 the terminal, and the daemon removes its journal entry and spool. It never replaces the
@@ -115,9 +122,10 @@ The daemon writes the registry, the request journal, the terminal records, `late
 syncs the temporary file, renames it, and then syncs the parent directory. A sync failure
 fails the write and removes the temporary file. The daemon also syncs the spool log before
 it closes the log. The daemon does not sync `snapshot.json`. It never reads that file, and
-it rewrites the file at each step change. No power-loss test confirms this behavior.
-Nobody verified whether Deno `syncData` on macOS flushes the drive cache or only the
-kernel buffers.
+it rewrites the file at each step change. On 2026-10-03, a 2 KB atomic write took 0.23 ms
+without sync and 8.58 ms with sync on an Apple Silicon host. Each value is the mean of 50
+writes. No power-loss test confirms this behavior. Nobody verified whether Deno `syncData`
+on macOS flushes the drive cache or only the kernel buffers.
 
 An interrupted atomic write leaves a `.write-*` or `.copy-*` file. Older daemons also left
 `.latest-*` files. At startup, before the listener opens, the daemon removes regular files
@@ -126,6 +134,11 @@ Only the daemon that holds `daemon.lock` writes these prefixes, so the cleanup c
 remove a file in use. The daemon keeps other names, such as `.status-*` from a direct run.
 A removal failure in the service directory stops the daemon at startup. A removal failure
 in a repository blocks that repository, as other retention failures do.
+
+After a worker exits, the daemon waits at most 2000 ms for its output to close. It then
+cancels the readers. A request whose output stays open after that fails unless it was
+cancelled. An earlier probe of the CI adapter measured stream EOF within 0.09 ms of child
+exit. The 2000 ms value matches the process grace period.
 
 A signal to a worker that already exited is not a failure. The daemon tracks worker exit
 and skips the signal. At shutdown, only a cancelled result becomes INTERRUPTED. A worker
@@ -193,10 +206,11 @@ between steps.
 
 The job deadline starts immediately before the first process launch. The deadline remains
 active between steps and during ordinary cleanup. Cancellation reaches the active group,
-with SIGKILL escalation after the configured grace period. The process module bounds the
-subsequent wait for the direct child. Cleanup errors make the run fail and preserve the
-original execution detail. OS scheduling and filesystem operations prevent a hard
-real-time completion guarantee.
+with SIGKILL escalation after the grace period. The grace period is two seconds. This
+value is a policy, not a measured capacity. The process module bounds the subsequent wait
+for the direct child. Cleanup errors make the run fail and preserve the original execution
+detail. OS scheduling and filesystem operations prevent a hard real-time completion
+guarantee.
 
 On macOS, a group signal returns EPERM when the remaining group members are all unreaped
 zombies. Deno reaps the direct child and launchd reaps orphans, so such a group soon
@@ -213,7 +227,8 @@ the record even after registration fails.
 
 Capture policies require independent byte budgets for stdout and stderr. Ordinary helpers
 allow 1 MiB per stream. The source monitor's Swift build allows 16 MiB per stream. A MiB
-is 1,048,576 bytes. These budgets limit retained bytes, not total process memory.
+is 1,048,576 bytes. These budgets limit retained bytes, not total process memory. The
+packager and `app:check` run helpers without capture budgets.
 
 An exact budget remains valid. The first chunk beyond the remaining budget causes a
 capture failure. The diagnostic names the command, stream, and byte budget. The module
@@ -221,9 +236,11 @@ retains that diagnostic if cleanup also fails. The module rejects invalid budget
 spawning the command. Workflow output continues to stream through the runner.
 
 The `mci` task sets an internal marker for parent supervision. The CLI captures its parent
-PID and checks the current parent during execution. Parent death cancels the job through
-the existing signal path. The CLI clears the watcher after the run. The runner removes the
-marker from step environments, and workflow validation rejects marker overrides.
+PID and checks the current parent during execution. `mci ci` always watches its parent.
+`mci run` watches its parent only when the marker is set. Parent death cancels the job
+through the existing signal path. The CLI clears the watcher after the run. The runner
+removes the marker from step environments, and workflow validation rejects marker
+overrides.
 
 ## Recovery rules
 
@@ -233,6 +250,10 @@ wide `ps` output with a fixed locale and the UTC time zone. A change of the host
 then cannot change the recorded start text. A journal that an earlier version wrote in the
 host time zone fails recovery once with a different start time. Recovery checks identity
 immediately before SIGTERM and at each grace poll.
+
+`ps` exits 1 with empty output for an absent PID. It exits 1 with stderr text for an
+invalid PID. The process module treats only the first case as absent. It reports every
+other `ps` failure as an error.
 
 A missing leader with no remaining group counts as completed cleanup. A missing leader
 with an existing group leaves identity uncertain. A changed command or start identity also
@@ -245,6 +266,13 @@ After recovery confirms the leader and sends SIGTERM, it waits for the grace per
 the group still exists then, the leader can be present or gone. Recovery sends SIGKILL to
 the group without another identity check and waits for the group to disappear. Run cleanup
 also escalates to SIGKILL. A group that survives SIGKILL leaves cleanup uncertain.
+
+Recovery makes no second identity check before SIGKILL. It confirmed the leader before
+SIGTERM and saw the group at the last grace check. A reused group ID needs three events
+between two polls: the group vanishes, the PID becomes a new group leader, and that leader
+exits. This window is the same class as the race in run cleanup. The claim that macOS
+keeps a group ID reserved while any member exists is an inference from XNU source. Nobody
+measured it.
 
 Recovery remains best effort because process inspection and signaling are separate
 operations. A crash between process creation and journal persistence can leave an
@@ -280,14 +308,16 @@ local archive and `dist/tap/Formula/mci.rb`.
 
 The packager creates tar output under a unique private path. It computes the archive
 checksum and prepares complete formula text before publication. The published archive
-filename includes the full SHA-256 checksum. Publication never replaces an existing
-checksum-named archive. An existing archive must be a real regular file with matching
-contents.
+filename includes the full SHA-256 checksum, as
+`mci-<version>-darwin-<architecture>-<sha256>.tar.gz`. Publication never replaces an
+existing checksum-named archive. An existing archive must be a real regular file with
+matching contents.
 
-The packager publishes the complete archive before replacing the formula. One rename
-beside `dist/tap/Formula/mci.rb` switches the formula to the new archive. A checksum,
-preparation, archive publication, or formula switch failure preserves the earlier formula
-and its archive.
+The packager publishes the complete archive before replacing the formula. The packager
+removes its private archive before the formula switch. A successful switch therefore
+returns success with no later fallible step. One rename beside `dist/tap/Formula/mci.rb`
+switches the formula to the new archive. A checksum, preparation, archive publication, or
+formula switch failure preserves the earlier formula and its archive.
 
 Concurrent publishers prepare separate files. Each formula switch names an already
 published matching archive. The last switch wins. Earlier archives remain available for
@@ -298,8 +328,15 @@ evidence limits.
 The formula installs the CLI, stores the monitor under `libexec`, and defines `mci daemon`
 as a Homebrew service.
 
-`mci setup` installs the packaged monitor and starts the service when necessary. The
-daemon imports the earlier registry only when its own registry does not exist.
+`mci setup` installs the packaged monitor and starts the service when the daemon does not
+answer. Setup runs its helper commands with bounded waits and byte budgets. After a
+service, readiness, or launch failure, setup restores the previous app. Setup stops only a
+service that setup started.
+
+The daemon imports the earlier registry only when its own registry does not exist. For a
+repository without `latest.json`, the daemon imports a version 1 `status.json` from the
+legacy CI adapter. Removing the `status.json` projection requires a compatibility
+decision.
 
 `mci hooks install` validates one job and rejects recursive CI calls. It adds a stable
 `mci:ci` Deno task and selects the packaged hook through an absolute Homebrew path. Git
@@ -323,11 +360,13 @@ diagnosis and release evidence.
 
 ## Menu bar monitor
 
-The app requests status from the daemon. It reads `snapshot.json` only when the daemon is
-unavailable, and treats active data in that snapshot as stale.
+The app requests status from the daemon. The request has a one-second deadline and a four
+MiB response limit. The app reads `snapshot.json` only when the daemon is unavailable, and
+treats active data in that snapshot as stale.
 
-The app watches the daemon state directory and refreshes on changes. A five-second timer
-repairs the watch and refreshes relative times.
+The app watches the daemon state directory and refreshes on changes. It coalesces
+filesystem events for 100 ms. A five-second timer repairs the watch and refreshes relative
+times.
 
 The app can register or unregister a repository through daemon requests. Unregistration
 fails while that repository has accepted requests.
@@ -335,16 +374,28 @@ fails while that repository has accepted requests.
 The monitor does not submit or cancel CI. It opens repositories and reads selected spool
 logs without changing them.
 
+The log window reads only a regular file and refuses symbolic links. It reads the last 256
+KiB, replaces invalid UTF-8, and renders ANSI SGR foreground colors and bold text.
+
+The Launch at login control uses `SMAppService.mainApp`. The installers never change the
+login preference.
+
 Each row shows the active request, queued count, and latest completed result. A separate
 button opens the last completed log during an active request.
 
 The combined icon uses the most urgent repository state. The states include unavailable,
-error, missing, interrupted, failure, running, queued, cancelled, pass, and no runs.
+error, missing, interrupted, failure, running, queued, cancelled, pass, and no runs. The
+attention count covers unavailable, error, missing, interrupted, and failed repositories.
 
-The installer stages the bundle next to the destination, signs it ad hoc, and verifies the
-signature. It replaces `~/Applications/mci Monitor.app` only when the destination is a
-real folder whose `Info.plist` carries `MCIInstaller = meeci`. It moves the old bundle
-aside, moves the new one into place, and restores the old one if that move fails.
+Both installers stage the bundle next to the destination. They replace
+`~/Applications/mci Monitor.app` only when the destination is a real folder whose
+`Info.plist` carries `MCIInstaller = meeci`. Each moves the old bundle aside, moves the
+new one into place, and restores the old one if that move fails.
+
+`deno task monitor:install` builds the app, signs it ad hoc, verifies the signature, and
+registers the repository through the daemon. It requires a running daemon. `mci setup`
+copies the packaged bundle and verifies its signature. Setup also requires a valid
+signature on an existing owned bundle.
 
 ## Release responsibility
 
