@@ -58,7 +58,7 @@ const withRepository = async (
   test: (repository: string, prefix: string) => Promise<void>,
 ): Promise<void> => {
   const root = await Deno.realPath(await Deno.makeTempDir({ prefix: "mci hook " }));
-  const repository = `${root}/repository`;
+  const repository = `${root}/repository's worktree`;
   const prefix = `${root}/brew/opt/mci`;
   try {
     await Deno.mkdir(repository);
@@ -113,6 +113,113 @@ const capabilities = (prefix: string) => ({
   brewPrefix: () => Promise.resolve(ok(prefix)),
   git: (args: readonly string[]) => fixtureGitResult(args),
 });
+
+const shellQuote = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
+
+type RollbackFaults = {
+  readonly primaryCommand: string;
+  readonly primaryDetail: string;
+  readonly rollbackCommand?: string;
+  readonly rollbackDetail?: string;
+  readonly failFileRestore?: boolean;
+};
+
+const rollbackCapabilities = (
+  repository: string,
+  prefix: string,
+  faults: RollbackFaults,
+) => {
+  const delegated = capabilities(prefix);
+  return {
+    ...delegated,
+    git: async (args: readonly string[]): Promise<Result<string>> => {
+      const command = args.slice(2).join("\0");
+      if (command === faults.primaryCommand) {
+        if (faults.failFileRestore === true) {
+          await Deno.rename(
+            `${repository}/deno.json`,
+            `${repository}/updated-deno.json`,
+          );
+          await Deno.mkdir(`${repository}/deno.json`);
+        }
+        return err(faults.primaryDetail);
+      }
+      if (command === faults.rollbackCommand) {
+        return err(faults.rollbackDetail ?? "missing rollback failure detail");
+      }
+      return delegated.git(args);
+    },
+  };
+};
+
+const hookSetCommand = (prefix: string): string =>
+  `config\0--worktree\0core.hooksPath\0${prefix}/libexec/hooks`;
+
+const extensionEnableCommand = "config\0--local\0extensions.worktreeConfig\0true";
+
+const assertFileRollbackFailure = (
+  error: string,
+  repository: string,
+): void => {
+  const configPath = `${repository}/deno.json`;
+  assert(
+    error.includes(`Rollback failed for ${configPath}: Cannot write ${configPath}:`),
+  );
+  assert(
+    error.includes(
+      `Recovery: restore ${
+        shellQuote(configPath)
+      } to its prior contents and confirm the file.`,
+    ),
+  );
+  assert(!error.includes("fixture-secret"));
+};
+
+const assertGitRollbackFailure = async (
+  error: string,
+  repository: string,
+  prior: "absent" | "false",
+): Promise<void> => {
+  assert(
+    error.includes(
+      `Rollback failed for extensions.worktreeConfig in ${repository}: injected Git rollback failure`,
+    ),
+  );
+  const operation = prior === "absent"
+    ? "--unset-all extensions.worktreeConfig"
+    : "extensions.worktreeConfig false";
+  const action = prior === "absent"
+    ? "remove extensions.worktreeConfig and confirm that it is absent."
+    : "restore the prior extensions.worktreeConfig value and confirm the setting.";
+  const recoveryCommand = `git -C ${shellQuote(repository)} config --local ${operation}`;
+  assert(
+    error.includes(`Recovery: ${action}\nCommand:\n${recoveryCommand}`),
+  );
+  assert(error.split("\n").includes(recoveryCommand));
+
+  const recovered = await new Deno.Command("/bin/sh", {
+    args: ["-c", recoveryCommand],
+    clearEnv: true,
+    env: Object.fromEntries(
+      Object.entries(Deno.env.toObject()).filter(([name]) => !name.startsWith("GIT_")),
+    ),
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  const detail = new TextDecoder().decode(recovered.stderr).trim();
+  assert(recovered.success, detail);
+  const extension = await fixtureGitResult([
+    "-C",
+    repository,
+    "config",
+    "--local",
+    "--type=bool",
+    "--get",
+    "extensions.worktreeConfig",
+  ]);
+  if (prior === "absent") assert(!extension.ok);
+  else assert(extension.ok && extension.value === "false");
+};
 
 Deno.test("hook installation writes one stable task and configures Git", async () => {
   await withRepository(async (repository, prefix) => {
@@ -484,3 +591,266 @@ for (
     });
   });
 }
+
+Deno.test("rollback reports deno.json restoration failure after extension enablement fails", async () => {
+  await withRepository(async (repository, prefix) => {
+    await Deno.writeTextFile(
+      `${repository}/deno.json`,
+      '{"secret":"fixture-secret","tasks":{"test":"deno test"}}\n',
+    );
+    const before = await Deno.readTextFile(`${repository}/deno.json`);
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      rollbackCapabilities(repository, prefix, {
+        primaryCommand: extensionEnableCommand,
+        primaryDetail: "injected extension enable failure",
+        failFileRestore: true,
+      }),
+    );
+
+    assert(!result.ok);
+    assert(result.error.startsWith(
+      "Cannot enable worktreeConfig: injected extension enable failure",
+    ));
+    assertFileRollbackFailure(result.error, repository);
+    equal(
+      await Deno.readTextFile(`${repository}/updated-deno.json`) === before,
+      false,
+    );
+  });
+});
+
+Deno.test("rollback reports extension restoration failure and restores deno.json", async () => {
+  await withRepository(async (repository, prefix) => {
+    const before = await Deno.readTextFile(`${repository}/deno.json`);
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      rollbackCapabilities(repository, prefix, {
+        primaryCommand: hookSetCommand(prefix),
+        primaryDetail: "injected hook path failure",
+        rollbackCommand: "config\0--local\0--unset-all\0extensions.worktreeConfig",
+        rollbackDetail: "injected Git rollback failure",
+      }),
+    );
+
+    assert(!result.ok);
+    assert(result.error.startsWith(
+      "Cannot set worktree core.hooksPath: injected hook path failure",
+    ));
+    await assertGitRollbackFailure(result.error, repository, "absent");
+    equal(await Deno.readTextFile(`${repository}/deno.json`), before);
+  });
+});
+
+Deno.test("rollback reports deno.json restoration failure and restores Git", async () => {
+  await withRepository(async (repository, prefix) => {
+    await Deno.writeTextFile(
+      `${repository}/deno.json`,
+      '{"secret":"fixture-secret","tasks":{"test":"deno test"}}\n',
+    );
+    const before = await Deno.readTextFile(`${repository}/deno.json`);
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      rollbackCapabilities(repository, prefix, {
+        primaryCommand: hookSetCommand(prefix),
+        primaryDetail: "injected hook path failure",
+        failFileRestore: true,
+      }),
+    );
+
+    assert(!result.ok);
+    assert(result.error.startsWith(
+      "Cannot set worktree core.hooksPath: injected hook path failure",
+    ));
+    assertFileRollbackFailure(result.error, repository);
+    equal(
+      await Deno.readTextFile(`${repository}/updated-deno.json`) === before,
+      false,
+    );
+    const extension = await fixtureGitResult([
+      "-C",
+      repository,
+      "config",
+      "--local",
+      "--get",
+      "extensions.worktreeConfig",
+    ]);
+    assert(!extension.ok);
+  });
+});
+
+for (const prior of ["absent", "false"] as const) {
+  Deno.test(`rollback reports all restoration failures from prior ${prior} extension`, async () => {
+    await withRepository(async (repository, prefix) => {
+      if (prior === "false") {
+        await runGit(repository, [
+          "config",
+          "--local",
+          "extensions.worktreeConfig",
+          "false",
+        ]);
+      }
+      await Deno.writeTextFile(
+        `${repository}/deno.json`,
+        '{"secret":"fixture-secret","tasks":{"test":"deno test"}}\n',
+      );
+      const before = await Deno.readTextFile(`${repository}/deno.json`);
+      const rollbackCommand = prior === "absent"
+        ? "config\0--local\0--unset-all\0extensions.worktreeConfig"
+        : "config\0--local\0extensions.worktreeConfig\0false";
+      const result = await installHookWith(
+        repository,
+        ".github/workflows/ci.yml",
+        "check",
+        rollbackCapabilities(repository, prefix, {
+          primaryCommand: hookSetCommand(prefix),
+          primaryDetail: "injected hook path failure",
+          rollbackCommand,
+          rollbackDetail: "injected Git rollback failure",
+          failFileRestore: true,
+        }),
+      );
+
+      assert(!result.ok);
+      assert(result.error.startsWith(
+        "Cannot set worktree core.hooksPath: injected hook path failure",
+      ));
+      await assertGitRollbackFailure(result.error, repository, prior);
+      assertFileRollbackFailure(result.error, repository);
+      equal(
+        await Deno.readTextFile(`${repository}/updated-deno.json`) === before,
+        false,
+      );
+    });
+  });
+}
+
+for (const primary of ["extension enablement", "hook path configuration"] as const) {
+  Deno.test(`rollback succeeds after ${primary} failure`, async () => {
+    await withRepository(async (repository, prefix) => {
+      const before = await Deno.readTextFile(`${repository}/deno.json`);
+      const primaryCommand = primary === "extension enablement"
+        ? extensionEnableCommand
+        : hookSetCommand(prefix);
+      const primaryDetail = `injected ${primary} failure`;
+      const result = await installHookWith(
+        repository,
+        ".github/workflows/ci.yml",
+        "check",
+        rollbackCapabilities(repository, prefix, {
+          primaryCommand,
+          primaryDetail,
+        }),
+      );
+
+      assert(!result.ok);
+      assert(result.error.includes(primaryDetail));
+      assert(!result.error.includes("Rollback failed"));
+      equal(await Deno.readTextFile(`${repository}/deno.json`), before);
+      const extension = await fixtureGitResult([
+        "-C",
+        repository,
+        "config",
+        "--local",
+        "--get",
+        "extensions.worktreeConfig",
+      ]);
+      assert(!extension.ok);
+    });
+  });
+}
+
+Deno.test("rollback restores a prior false extension value", async () => {
+  await withRepository(async (repository, prefix) => {
+    await runGit(repository, [
+      "config",
+      "--local",
+      "extensions.worktreeConfig",
+      "false",
+    ]);
+    const before = await Deno.readTextFile(`${repository}/deno.json`);
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      rollbackCapabilities(repository, prefix, {
+        primaryCommand: hookSetCommand(prefix),
+        primaryDetail: "injected hook path failure",
+      }),
+    );
+
+    assert(!result.ok);
+    assert(result.error.startsWith(
+      "Cannot set worktree core.hooksPath: injected hook path failure",
+    ));
+    assert(!result.error.includes("Rollback failed"));
+    equal(await Deno.readTextFile(`${repository}/deno.json`), before);
+    equal(
+      await readGit(repository, [
+        "config",
+        "--local",
+        "--type=bool",
+        "--get",
+        "extensions.worktreeConfig",
+      ]),
+      "false",
+    );
+  });
+});
+
+Deno.test("rollback preserves an extension that was already true", async () => {
+  await withRepository(async (repository, prefix) => {
+    await runGit(repository, [
+      "config",
+      "--local",
+      "extensions.worktreeConfig",
+      "true",
+    ]);
+    const before = await Deno.readTextFile(`${repository}/deno.json`);
+    const delegated = capabilities(prefix);
+    const extensionMutations: string[] = [];
+    const mutationCommands = [
+      extensionEnableCommand,
+      "config\0--local\0extensions.worktreeConfig\0false",
+      "config\0--local\0--unset-all\0extensions.worktreeConfig",
+    ];
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      {
+        ...delegated,
+        git: (args: readonly string[]): Promise<Result<string>> => {
+          const command = args.slice(2).join("\0");
+          if (mutationCommands.includes(command)) extensionMutations.push(command);
+          return command === hookSetCommand(prefix)
+            ? Promise.resolve(err("injected hook path failure"))
+            : delegated.git(args);
+        },
+      },
+    );
+
+    assert(!result.ok);
+    assert(result.error.startsWith(
+      "Cannot set worktree core.hooksPath: injected hook path failure",
+    ));
+    equal(extensionMutations, []);
+    equal(await Deno.readTextFile(`${repository}/deno.json`), before);
+    equal(
+      await readGit(repository, [
+        "config",
+        "--local",
+        "--type=bool",
+        "--get",
+        "extensions.worktreeConfig",
+      ]),
+      "true",
+    );
+  });
+});

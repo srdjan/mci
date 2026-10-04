@@ -136,17 +136,14 @@ const writeAtomic = async (
   return ok(undefined);
 };
 
-const restore = async (
-  path: string,
-  prior: string | null,
-  mode?: number,
-): Promise<void> => {
-  if (prior === null) {
-    await attempt(() => Deno.remove(path));
-    return;
-  }
-  await writeAtomic(path, prior, mode);
-};
+const rollbackFailure = (
+  result: Result<void> | Result<string>,
+  target: string,
+  recovery: string,
+): string =>
+  result.ok
+    ? ""
+    : `\nRollback failed for ${target}: ${result.error}\nRecovery: ${recovery}`;
 
 export const installHookWith = async (
   repository: string,
@@ -389,8 +386,17 @@ export const installHookWith = async (
       "true",
     ]);
     if (!enabled.ok) {
-      await restore(configPath, oldConfig.value);
-      return err(`Cannot enable worktreeConfig: ${enabled.error}`);
+      const restoredConfig = await writeAtomic(configPath, oldConfig.value);
+      return err(
+        `Cannot enable worktreeConfig: ${enabled.error}` +
+          rollbackFailure(
+            restoredConfig,
+            configPath,
+            `restore ${
+              shellQuote(configPath)
+            } to its prior contents and confirm the file.`,
+          ),
+      );
     }
     enabledWorktreeConfig = true;
   }
@@ -404,29 +410,48 @@ export const installHookWith = async (
       hooksPath,
     ]);
     if (!set.ok) {
-      if (enabledWorktreeConfig) {
-        if (worktreeExtension.ok) {
-          await capabilities.git([
-            "-C",
-            real.value,
-            "config",
-            "--local",
-            "extensions.worktreeConfig",
-            worktreeExtension.value,
-          ]);
-        } else {
-          await capabilities.git([
-            "-C",
-            real.value,
-            "config",
-            "--local",
-            "--unset-all",
-            "extensions.worktreeConfig",
-          ]);
-        }
-      }
-      await restore(configPath, oldConfig.value);
-      return err(`Cannot set worktree core.hooksPath: ${set.error}`);
+      const restoredExtension = !enabledWorktreeConfig
+        ? ok(undefined)
+        : worktreeExtension.ok
+        ? await capabilities.git([
+          "-C",
+          real.value,
+          "config",
+          "--local",
+          "extensions.worktreeConfig",
+          worktreeExtension.value,
+        ])
+        : await capabilities.git([
+          "-C",
+          real.value,
+          "config",
+          "--local",
+          "--unset-all",
+          "extensions.worktreeConfig",
+        ]);
+      const restoredConfig = await writeAtomic(configPath, oldConfig.value);
+      const extensionRecovery = worktreeExtension.ok
+        ? "restore the prior extensions.worktreeConfig value and confirm the setting.\n" +
+          `Command:\ngit -C ${shellQuote(real.value)} config --local ` +
+          `extensions.worktreeConfig ${worktreeExtension.value}`
+        : "remove extensions.worktreeConfig and confirm that it is absent.\n" +
+          `Command:\ngit -C ${shellQuote(real.value)} config --local --unset-all ` +
+          "extensions.worktreeConfig";
+      return err(
+        `Cannot set worktree core.hooksPath: ${set.error}` +
+          rollbackFailure(
+            restoredExtension,
+            `extensions.worktreeConfig in ${real.value}`,
+            extensionRecovery,
+          ) +
+          rollbackFailure(
+            restoredConfig,
+            configPath,
+            `restore ${
+              shellQuote(configPath)
+            } to its prior contents and confirm the file.`,
+          ),
+      );
     }
   }
   return ok(undefined);

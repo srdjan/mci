@@ -42,6 +42,9 @@ The hook adds the `mci:ci` task to `deno.json`. The task uses the stable Homebre
 Git selects the absolute hook directory under the stable Homebrew prefix. Hook
 installation uses Git configuration scoped to the current worktree.
 
+If installation rollback fails, the diagnostic keeps the original error. It names each
+failed restoration target and gives the recovery action.
+
 The hook is the only automatic CI trigger. GitHub remains a repository backup service.
 
 Run these commands for manual checks or diagnosis:

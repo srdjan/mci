@@ -278,6 +278,16 @@ daemon imports the earlier registry only when its own registry does not exist.
 `mci:ci` Deno task and selects the packaged hook through an absolute Homebrew path. Git
 configuration applies to the current worktree.
 
+If Git configuration fails after the task write, the installer attempts to restore the
+previous `deno.json` contents. If the installer enabled `extensions.worktreeConfig`, it
+attempts to restore the previous value or absence of that setting. One failed rollback
+does not prevent the remaining restoration attempts.
+
+The diagnostic retains the primary error and every failed restoration result. Each
+rollback failure names the affected target and gives the recovery action. Git recovery
+commands use the previous value or remove a previously absent setting. The rollback
+diagnostic does not print the previous `deno.json` contents.
+
 A future worktree can inherit this hook path. Without the required task, the inherited
 hook blocks commits. Hook installation rejects unsafe shared Git settings.
 

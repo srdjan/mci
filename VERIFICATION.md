@@ -1,5 +1,33 @@
 # Verification
 
+## Hook rollback diagnostics
+
+On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 197
+tests with one opposite-platform test ignored. The native monitor passed 309 checks.
+Formatting, linting, type checking, and the suppression check passed.
+
+Nine new public tests call `installHookWith` in temporary repositories. Five regression
+tests failed before the source change because rollback diagnostics were absent. Two
+successful rollback checks passed before that change.
+
+The main agent ran all 23 hook tests after the changes. These checks cover file and Git
+restoration failures, combined failures, and continued file restoration after Git failure.
+They also cover successful restoration of absent and false extension settings. A separate
+check confirms that installation preserves an extension that was already enabled.
+
+Failure diagnostics retain the primary error and every failed restoration result. The
+checks confirm target paths, recovery actions, and absence of prior configuration
+contents. The repository fixtures contain spaces and an apostrophe. The recovery checks
+execute Git commands through `/bin/sh` and confirm the restored setting.
+
+An independent review found no supported defect in failure aggregation, recovery commands,
+or extension preservation. The reviewer also executed both Git recovery commands in
+temporary repositories and confirmed their effects.
+
+These checks use injected Git failures and a directory that blocks file restoration. They
+do not reproduce disk exhaustion or native Git failures. These checks cover source
+execution; the installed binary remains unchanged.
+
 ## Shutdown during path resolution
 
 On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 188
