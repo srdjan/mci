@@ -1,5 +1,18 @@
 # Verification
 
+## Legacy import without a log
+
+On 2026-10-04, the daemon changed its import of a version 1 `status.json` without
+`latest.log`. Before the change, the missing log blocked the repository at every start.
+The daemon now imports the record with an empty request log. Terminal recovery already
+treats a missing spool log the same way. A legacy log that is not a regular file still
+blocks the repository.
+
+A new test imports a record without a log and requires an empty copied log and a written
+`latest.json`. It failed before the change and passed after it. A second new test makes
+`latest.log` a directory and requires the block. The ten registration tests in
+`tests/daemon_test.ts` passed after the change.
+
 ## CI failure communication in Codex
 
 On 2026-10-04, the complete local CI gate passed 242 Deno tests and 242 native monitor

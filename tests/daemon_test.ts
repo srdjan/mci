@@ -1529,7 +1529,6 @@ Deno.test("registration blocks a repository with an invalid legacy CI status", a
       log: "x",
       reason: "invalid legacy terminal status",
     },
-    { record: legacyFinished, log: null, reason: "legacy CI log must be a real file" },
   ];
   for (const legacy of cases) {
     await inWorkspace(async (workspace) => {
@@ -1592,4 +1591,34 @@ Deno.test("daemon startup imports the legacy CI status of a legacy registry work
     } finally {
       await Deno.remove(directory, { recursive: true });
     }
+  }));
+
+Deno.test("registration imports a legacy CI status without a log as an empty log", () =>
+  inWorkspace(async (workspace) => {
+    await writeLegacy(workspace, legacyFinished, null);
+    await withDaemon(workspace, async (directory) => {
+      const repository = await repositoryOf(directory);
+      equal(repository?.blocked, null);
+      const latest = repository?.latest;
+      assert(latest !== null && latest !== undefined);
+      equal(latest.kind, "success");
+      equal(latest.log, `${workspace}/.mci/ci/requests/${latest.id}.log`);
+      equal(await Deno.readTextFile(latest.log), "");
+      assert(await exists(`${workspace}/.mci/ci/latest.json`));
+    });
+  }));
+
+Deno.test("registration blocks a legacy CI status whose log is not a regular file", () =>
+  inWorkspace(async (workspace) => {
+    await writeLegacy(workspace, legacyFinished, null);
+    await Deno.mkdir(`${workspace}/.mci/ci/latest.log`);
+    await withDaemon(workspace, async (directory) => {
+      const repository = await repositoryOf(directory);
+      equal(repository?.latest, null);
+      assert(
+        repository?.blocked?.includes("legacy CI log must be a real file") === true,
+        `received ${repository?.blocked}`,
+      );
+      assert(!await exists(`${workspace}/.mci/ci/latest.json`));
+    });
   }));
