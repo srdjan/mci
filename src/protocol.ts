@@ -138,6 +138,10 @@ export const decodeRequest = (v: unknown): Result<Request> => {
   return err("Invalid request fields or operation");
 };
 
+/** A terminal finish time. A clock that moved back never ends a record before it starts. */
+export const finishTime = (started: string, now: string): string =>
+  Date.parse(now) < Date.parse(started) ? started : now;
+
 export const decodeTerminal = (v: unknown): Result<Terminal> => {
   if (
     !object(v) ||
@@ -162,7 +166,8 @@ export const decodeTerminal = (v: unknown): Result<Terminal> => {
   if (
     nonempty(v.id) && nonempty(v.repositoryId) && nonempty(v.workflow) &&
     nonempty(v.job) &&
-    timestamp(v.started) && timestamp(v.finished) && v.finished >= v.started &&
+    timestamp(v.started) && timestamp(v.finished) &&
+    Date.parse(v.finished) >= Date.parse(v.started) &&
     (kind === "success" || kind === "failure" || kind === "timeout" ||
       kind === "cancelled" || kind === "interrupted") &&
     integer(v.code) && integer(v.completed) && integer(v.total) &&

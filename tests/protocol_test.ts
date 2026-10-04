@@ -1,5 +1,11 @@
-import { decodeRequest, decodeResponse, decodeSnapshot } from "../src/protocol.ts";
-import { assert } from "./helpers.ts";
+import {
+  decodeRequest,
+  decodeResponse,
+  decodeSnapshot,
+  decodeTerminal,
+  finishTime,
+} from "../src/protocol.ts";
+import { assert, equal } from "./helpers.ts";
 
 Deno.test("IPC rejects unknown versions, fields, and malformed environments", () => {
   assert(decodeRequest({ version: 1, op: "ping" }).ok);
@@ -56,4 +62,48 @@ Deno.test("daemon snapshot fixtures use the same boundary as the native monitor"
     checked++;
   }
   assert(checked > 0, "Missing shared daemon fixtures");
+});
+
+Deno.test("a finish time never comes before its start time", () => {
+  const started = "2026-10-04T12:00:00.000Z";
+  equal(finishTime(started, "2026-10-04T12:00:01.000Z"), "2026-10-04T12:00:01.000Z");
+  equal(finishTime(started, started), started);
+  equal(finishTime(started, "2026-10-04T11:59:59.000Z"), started);
+  equal(
+    finishTime("+010000-01-01T00:00:00.000Z", started),
+    "+010000-01-01T00:00:00.000Z",
+  );
+  equal(
+    finishTime("9999-12-31T23:59:59.999Z", "+010000-01-01T00:00:00.000Z"),
+    "+010000-01-01T00:00:00.000Z",
+  );
+});
+
+Deno.test("terminal decoding compares extended ISO years by time", () => {
+  const terminal = {
+    id: "run",
+    repositoryId: "repository",
+    workflow: "check.yml",
+    job: "check",
+    kind: "success",
+    code: 0,
+    completed: 1,
+    total: 1,
+    detail: "",
+    log: "/tmp/run.log",
+  };
+  assert(
+    decodeTerminal({
+      ...terminal,
+      started: "9999-12-31T23:59:59.999Z",
+      finished: "+010000-01-01T00:00:00.000Z",
+    }).ok,
+  );
+  assert(
+    !decodeTerminal({
+      ...terminal,
+      started: "+010000-01-01T00:00:00.000Z",
+      finished: "9999-12-31T23:59:59.999Z",
+    }).ok,
+  );
 });

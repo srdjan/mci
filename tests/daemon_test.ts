@@ -967,6 +967,92 @@ Deno.test("daemon restart records a legacy journal entry as interrupted", () =>
     })
   ));
 
+const recoverFutureJournal = (started: string): Promise<void> =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+    const first = await startDaemon({ directory });
+    assert(first.ok, first.ok ? "" : first.error);
+    try {
+      const registered = await rpc(
+        { version: 1, op: "register", path: workspace },
+        directory,
+      );
+      assert(registered.ok, registered.ok ? "" : registered.error);
+      const repository = registered.value.repositories[0];
+      assert(repository !== undefined);
+      await first.value.close();
+
+      const id = "future-start";
+      const log = `${workspace}/.mci/ci/requests/${id}.log`;
+      await Deno.mkdir(`${workspace}/.mci/ci/requests`, { recursive: true });
+      await Deno.writeTextFile(log, "partial output\n");
+      await Deno.writeTextFile(
+        `${directory}/requests.json`,
+        JSON.stringify({
+          version: 1,
+          requests: [{
+            id,
+            repositoryId: repository.id,
+            workflow: "future.yml",
+            job: "check",
+            started,
+            log,
+            total: 1,
+            begun: true,
+          }],
+        }),
+      );
+
+      const second = await startDaemon({ directory });
+      assert(second.ok, second.ok ? "" : second.error);
+      try {
+        const current = await rpc({ version: 1, op: "status" }, directory);
+        assert(current.ok, current.ok ? "" : current.error);
+        const recovered = current.value.repositories[0];
+        assert(recovered !== undefined);
+        const latest = recovered.latest;
+        assert(latest !== null);
+        equal(latest.id, id);
+        equal(latest.kind, "interrupted");
+        equal(latest.started, started);
+        equal(latest.finished, started);
+        equal(recovered.blocked, null);
+        equal(second.value.snapshot().repositories[0], recovered);
+        equal(
+          JSON.parse(await Deno.readTextFile(`${directory}/requests.json`)),
+          { version: 1, requests: [] },
+        );
+      } finally {
+        await second.value.close();
+      }
+
+      const third = await startDaemon({ directory });
+      assert(third.ok, third.ok ? "" : third.error);
+      try {
+        const preserved = third.value.snapshot().repositories[0];
+        assert(preserved?.latest !== null && preserved?.latest !== undefined);
+        equal(preserved.latest.id, id);
+        equal(preserved.latest.kind, "interrupted");
+        equal(preserved.latest.finished, started);
+        equal(preserved.blocked, null);
+      } finally {
+        await third.value.close();
+      }
+    } finally {
+      await first.value.close();
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+Deno.test("daemon restart clamps a future journal start and keeps the result", async () => {
+  for (
+    const started of [
+      "2999-01-01T00:00:00.000Z",
+      "+010000-01-01T00:00:00.000Z",
+    ]
+  ) await recoverFutureJournal(started);
+});
+
 Deno.test("a management client that does not read cannot stall later registrations", async () => {
   const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
   const base = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-many-" });
@@ -1335,6 +1421,50 @@ Deno.test("registration imports a finished legacy CI status and its log", async 
   }
 });
 
+Deno.test("registration keeps a later extended-year legacy result after restart", () =>
+  inWorkspace(async (workspace) => {
+    const started = "9999-12-31T23:59:59.999Z";
+    const finished = "+010000-01-01T00:00:00.000Z";
+    await writeLegacy(
+      workspace,
+      { ...legacyFinished, started, finished },
+      "extended-year output\n",
+    );
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+    const check = async (): Promise<void> => {
+      const repository = await repositoryOf(directory);
+      equal(repository?.blocked, null);
+      assert(repository?.latest !== null && repository?.latest !== undefined);
+      equal(repository.latest.started, started);
+      equal(repository.latest.finished, finished);
+      equal(await Deno.readTextFile(repository.latest.log), "extended-year output\n");
+    };
+    try {
+      const first = await startDaemon({ directory });
+      assert(first.ok, first.ok ? "" : first.error);
+      try {
+        const registered = await rpc(
+          { version: 1, op: "register", path: workspace },
+          directory,
+        );
+        assert(registered.ok, registered.ok ? "" : registered.error);
+        await check();
+      } finally {
+        await first.value.close();
+      }
+
+      const second = await startDaemon({ directory });
+      assert(second.ok, second.ok ? "" : second.error);
+      try {
+        await check();
+      } finally {
+        await second.value.close();
+      }
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
 Deno.test("registration records an unfinished legacy CI run as interrupted", () =>
   inWorkspace(async (workspace) => {
     await writeLegacy(
@@ -1390,6 +1520,15 @@ Deno.test("registration blocks a repository with an invalid legacy CI status", a
       log: "x",
       reason: "invalid legacy running status",
     },
+    {
+      record: {
+        ...legacyFinished,
+        started: "+010000-01-01T00:00:00.000Z",
+        finished: "9999-12-31T23:59:59.999Z",
+      },
+      log: "x",
+      reason: "invalid legacy terminal status",
+    },
     { record: legacyFinished, log: null, reason: "legacy CI log must be a real file" },
   ];
   for (const legacy of cases) {
@@ -1403,6 +1542,10 @@ Deno.test("registration blocks a repository with an invalid legacy CI status", a
           `expected ${legacy.reason}, received ${repository?.blocked}`,
         );
         assert(!await exists(`${workspace}/.mci/ci/latest.json`));
+        equal(
+          JSON.parse(await Deno.readTextFile(`${workspace}/.mci/ci/status.json`)),
+          legacy.record,
+        );
       });
     });
   }
