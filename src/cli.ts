@@ -1,5 +1,11 @@
 // @light-fp adapter
 import { rpc, submit } from "./client.ts";
+import {
+  beginReceipt,
+  type CiReceipt,
+  type CiReceiptOutcome,
+  finishReceipt,
+} from "./ci-receipt.ts";
 import { runDaemon } from "./daemon.ts";
 import { doctor, installHook } from "./hooks.ts";
 import { setup } from "./install.ts";
@@ -33,25 +39,69 @@ const watchParent = (controller: AbortController, parent: number): () => void =>
   return () => clearInterval(timer);
 };
 
-const runCi = async (file: string, job: string, parent: number): Promise<number> => {
+const shellQuote = (value: string): string =>
+  /^[A-Za-z0-9_./:-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
+
+const rerun = (command: "ci" | "run", file: string, job: string): void =>
+  console.error(
+    `Then rerun \`mci ${command} ${shellQuote(file)} --job ${shellQuote(job)}\`.`,
+  );
+
+const recordCompletion = async (
+  receipt: CiReceipt | null,
+  outcome: CiReceiptOutcome,
+  code: number,
+  command: "ci" | "run",
+  file: string,
+  job: string,
+): Promise<number> => {
+  const recorded = await finishReceipt(receipt, outcome);
+  if (recorded.ok) return code;
+  console.error(`CI receipt update failed: ${recorded.error}`);
+  console.error("The CI result is unresolved. Fix the receipt storage failure.");
+  rerun(command, file, job);
+  return code === 0 ? 1 : code;
+};
+
+const failCommand = async (
+  receipt: CiReceipt | null,
+  command: "ci" | "run",
+  file: string,
+  job: string,
+  code: 1 | 2,
+  detail: string,
+  kind: "error" | "unknown" = "error",
+): Promise<number> => {
+  console.error(`CI did not pass: ${detail}`);
+  console.error("Fix the CI failure before continuing.");
+  rerun(command, file, job);
+  const outcome: CiReceiptOutcome = kind === "unknown"
+    ? { kind, code: 1, detail, requestId: null, log: null }
+    : { kind, code, detail, requestId: null, log: null };
+  return await recordCompletion(receipt, outcome, code, command, file, job);
+};
+
+const runCi = async (
+  file: string,
+  job: string,
+  parent: number,
+  receipt: CiReceipt | null,
+): Promise<number> => {
   const loaded = await attempt(async () => ({
     workspace: await Deno.realPath(Deno.cwd()),
     source: await Deno.readTextFile(file),
     env: Deno.env.toObject(),
   }));
   if (!loaded.ok) {
-    console.error(`${file}: ${loaded.error}`);
-    return 2;
+    return await failCommand(receipt, "ci", file, job, 2, `${file}: ${loaded.error}`);
   }
   const plan = planWorkflow(loaded.value.source, job);
   if (!plan.ok) {
-    console.error(`${file}: ${plan.error}`);
-    return 2;
+    return await failCommand(receipt, "ci", file, job, 2, `${file}: ${plan.error}`);
   }
   const shell = await resolveBash(loaded.value.workspace, loaded.value.env.PATH ?? "");
   if (!shell.ok) {
-    console.error(shell.error);
-    return 2;
+    return await failCommand(receipt, "ci", file, job, 2, shell.error);
   }
   const controller = new AbortController();
   const interrupt = () => controller.abort("SIGINT");
@@ -70,11 +120,41 @@ const runCi = async (file: string, job: string, parent: number): Promise<number>
       env: loaded.value.env,
     }, controller.signal);
     if (!result.ok) {
-      console.error(result.error);
-      return 1;
+      const known =
+        /^(Daemon unavailable|invalid:|unavailable:|unregistered:|busy:|storage:)/
+          .test(result.error);
+      return await failCommand(
+        receipt,
+        "ci",
+        file,
+        job,
+        1,
+        result.error,
+        known ? "error" : "unknown",
+      );
     }
     console.log(`${result.value.kind}: ${result.value.detail}`);
-    return result.value.code;
+    if (result.value.code !== 0) {
+      console.error(`CI did not pass: ${result.value.kind}: ${result.value.detail}`);
+      console.error(`Request: ${result.value.id}`);
+      console.error(`Log: ${result.value.log}`);
+      console.error("Fix the CI failure before continuing.");
+      rerun("ci", file, job);
+    }
+    return await recordCompletion(
+      receipt,
+      {
+        kind: result.value.kind,
+        code: result.value.code,
+        detail: result.value.detail,
+        requestId: result.value.id,
+        log: result.value.log,
+      },
+      result.value.code,
+      "ci",
+      file,
+      job,
+    );
   } finally {
     stopWatching();
     Deno.removeSignalListener("SIGINT", interrupt);
@@ -149,24 +229,65 @@ export const main = async (args: readonly string[]): Promise<number> => {
     console.error(usage);
     return 2;
   }
-  if (command !== "check" && Deno.build.os !== "darwin") {
-    console.error(`mci ${command} supports macOS only. check is portable.`);
-    return 2;
+  const executionCommand = command === "ci" || command === "run" ? command : null;
+  const receipt = executionCommand !== null
+    ? await beginReceipt({
+      workspace: Deno.cwd(),
+      workflow: file,
+      job,
+      command: executionCommand,
+    })
+    : { ok: true as const, value: null };
+  if (!receipt.ok) {
+    console.error(`CI receipt creation failed: ${receipt.error}`);
+    console.error("The CI result is unresolved. Fix the receipt storage failure.");
+    rerun(executionCommand!, file, job);
+    return 1;
   }
-  if (command === "ci") return await runCi(file, job, parent);
+  if (executionCommand !== null && Deno.build.os !== "darwin") {
+    return await failCommand(
+      receipt.value,
+      executionCommand,
+      file,
+      job,
+      2,
+      `mci ${executionCommand} supports macOS only. check is portable.`,
+    );
+  }
+  if (command === "ci") return await runCi(file, job, parent, receipt.value);
   const loaded = await attempt(async () => ({
     source: await Deno.readTextFile(file),
     workspace: await Deno.realPath(Deno.cwd()),
     inherited: Deno.env.toObject(),
   }));
   if (!loaded.ok) {
-    console.error(`${file}: ${loaded.error}`);
-    return 2;
+    if (command === "check") {
+      console.error(`${file}: ${loaded.error}`);
+      return 2;
+    }
+    return await failCommand(
+      receipt.value,
+      "run",
+      file,
+      job,
+      2,
+      `${file}: ${loaded.error}`,
+    );
   }
   const planned = planWorkflow(loaded.value.source, job);
   if (!planned.ok) {
-    console.error(`${file}: ${planned.error}`);
-    return 2;
+    if (command === "check") {
+      console.error(`${file}: ${planned.error}`);
+      return 2;
+    }
+    return await failCommand(
+      receipt.value,
+      "run",
+      file,
+      job,
+      2,
+      `${file}: ${planned.error}`,
+    );
   }
   const plan = planned.value;
   const shell = await resolveBash(
@@ -174,8 +295,11 @@ export const main = async (args: readonly string[]): Promise<number> => {
     loaded.value.inherited.PATH ?? "",
   );
   if (!shell.ok) {
-    console.error(shell.error);
-    return 2;
+    if (command === "check") {
+      console.error(shell.error);
+      return 2;
+    }
+    return await failCommand(receipt.value, "run", file, job, 2, shell.error);
   }
   console.log(`${file} :: ${job} (${plan.name})`);
   console.log(`Workspace: ${loaded.value.workspace}`);
@@ -213,7 +337,25 @@ export const main = async (args: readonly string[]): Promise<number> => {
         outcome.total - outcome.completed
       }`,
     );
-    return outcome.code;
+    if (outcome.code !== 0) {
+      console.error(`CI did not pass: ${outcome.kind}: ${outcome.detail}`);
+      console.error("Fix the CI failure before continuing.");
+      rerun("run", file, job);
+    }
+    return await recordCompletion(
+      receipt.value,
+      {
+        kind: outcome.kind,
+        code: outcome.code,
+        detail: outcome.detail,
+        requestId: null,
+        log: null,
+      },
+      outcome.code,
+      "run",
+      file,
+      job,
+    );
   } finally {
     stopWatching();
     Deno.removeSignalListener("SIGINT", interrupt);

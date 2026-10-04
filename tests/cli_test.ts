@@ -8,6 +8,7 @@ import {
   waitFor,
 } from "./helpers.ts";
 import { rpc, submit } from "../src/client.ts";
+import { readSessionReceipts } from "../src/ci-receipt.ts";
 import { withDaemon } from "./daemon_helpers.ts";
 import { cliSourceArgs } from "../src/runtime.ts";
 import denoConfig from "../deno.json" with { type: "json" };
@@ -20,12 +21,18 @@ const command = (
   new Deno.Command(Deno.execPath(), {
     args: cliSourceArgs(args),
     cwd: workspace,
-    env,
+    env: isolatedEnv(env),
     stdout: "piped",
     stderr: "piped",
   });
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 const capturedEnv = () => ({ PATH: Deno.env.get("PATH") ?? "/bin:/usr/bin" });
+const isolatedEnv = (env?: Readonly<Record<string, string>>) => ({
+  MCI_SESSION_ID: "",
+  CODEX_SESSION_ID: "",
+  CODEX_THREAD_ID: "",
+  ...env,
+});
 
 const killIfPresent = (send: () => void): void => {
   try {
@@ -55,7 +62,7 @@ const taskCommand = async (
   return new Deno.Command(Deno.execPath(), {
     args: ["task", "mci", ...args],
     cwd: workspace,
-    env,
+    env: isolatedEnv(env),
     stdout: "piped",
     stderr: "piped",
   });
@@ -83,6 +90,8 @@ Deno.test("CLI reports missing workflow and Bash preflight failures", () =>
     ).output();
     equal(missing.code, 2);
     assert(text(missing.stderr).includes("missing.yml"));
+    assert(!text(missing.stderr).includes("mci run"));
+    assert(!text(missing.stderr).includes("CI did not pass"));
 
     await Deno.writeTextFile(
       `${workspace}/ci.yml`,
@@ -95,6 +104,7 @@ Deno.test("CLI reports missing workflow and Bash preflight failures", () =>
     ).output();
     equal(noBash.code, 2);
     assert(text(noBash.stderr).includes("bash was not found"));
+    assert(!text(noBash.stderr).includes("mci run"));
   }));
 
 Deno.test("CLI check prints plan but never executes it", () =>
@@ -131,6 +141,35 @@ Deno.test({
     }),
 });
 
+Deno.test({
+  name: "CLI run records a session receipt before workflow validation",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      const home = await Deno.makeTempDir({ prefix: "mci receipt CLI " });
+      try {
+        const result = await command(
+          workspace,
+          ["run", "missing.yml", "--job", "check"],
+          { MCI_HOME: home, MCI_SESSION_ID: "cli-validation" },
+        ).output();
+        equal(result.code, 2);
+        assert(text(result.stderr).includes("CI did not pass"));
+        assert(text(result.stderr).includes("mci run missing.yml --job check"));
+        const receipts = unwrap(
+          await readSessionReceipts("cli-validation", home),
+        );
+        equal(receipts.length, 1);
+        equal(receipts[0]?.command, "run");
+        equal(receipts[0]?.workflow, `${workspace}/missing.yml`);
+        equal(receipts[0]?.outcome.kind, "error");
+        equal(receipts[0]?.outcome.code, 2);
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    }),
+});
+
 Deno.test("CLI ci without a job returns 2 and saves nothing", () =>
   inWorkspace(async (workspace) => {
     await Deno.writeTextFile(`${workspace}/ci.yml`, fixture("      - run: echo hello"));
@@ -152,6 +191,7 @@ Deno.test({
         );
         const result = await command(workspace, ["ci", "ci.yml", "--job", "check"], {
           MCI_HOME: directory,
+          MCI_SESSION_ID: "cli-pass",
         }).output();
         equal(result.code, 0);
         assert(text(result.stdout).includes("hello"), text(result.stderr));
@@ -162,6 +202,11 @@ Deno.test({
         assert(
           (await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`)).includes("hello"),
         );
+        const receipts = unwrap(await readSessionReceipts("cli-pass", directory));
+        equal(receipts.length, 1);
+        equal(receipts[0]?.outcome.kind, "success");
+        equal(receipts[0]?.outcome.requestId, status.value.repositories[0]?.latest?.id);
+        equal(receipts[0]?.outcome.log, status.value.repositories[0]?.latest?.log);
       });
     }),
 });
@@ -178,12 +223,24 @@ Deno.test({
         equal(direct.code, 1);
         const result = await command(workspace, ["ci", "ci.yml", "--job", "check"], {
           MCI_HOME: directory,
+          MCI_SESSION_ID: "cli-failure",
         }).output();
         equal(result.code, direct.code);
         const status = await rpc({ version: 1, op: "status" }, directory);
         assert(status.ok);
         equal(status.value.repositories[0]?.latest?.kind, "failure");
         equal(status.value.repositories[0]?.latest?.code, 1);
+        const terminal = status.value.repositories[0]?.latest;
+        assert(terminal !== null && terminal !== undefined);
+        const stderr = text(result.stderr);
+        assert(stderr.includes("CI did not pass"));
+        assert(stderr.includes(terminal.id));
+        assert(stderr.includes(terminal.log));
+        const receipts = unwrap(await readSessionReceipts("cli-failure", directory));
+        equal(receipts.length, 1);
+        equal(receipts[0]?.outcome.kind, "failure");
+        equal(receipts[0]?.outcome.requestId, terminal.id);
+        equal(receipts[0]?.outcome.log, terminal.log);
       });
     }),
 });
@@ -210,12 +267,18 @@ Deno.test({
         );
         const result = await command(workspace, ["ci", "ci.yml", "--job", "check"], {
           MCI_HOME: directory,
+          MCI_SESSION_ID: "validation-error",
         }).output();
         equal(result.code, 2);
         assert(text(result.stderr).includes("unsupported-field"));
         equal(await Deno.readTextFile(`${workspace}/.mci/ci/status.json`), saved);
         equal(await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`), log);
         assert(!await exists(`${workspace}/unreachable`));
+        equal(
+          (unwrap(await readSessionReceipts("validation-error", directory)))[0]
+            ?.outcome.kind,
+          "error",
+        );
       });
     }),
 });
@@ -233,14 +296,47 @@ Deno.test({
       try {
         const result = await command(workspace, ["ci", "ci.yml", "--job", "check"], {
           MCI_HOME: directory,
+          MCI_SESSION_ID: "missing-daemon",
         }).output();
         equal(result.code, 1);
         assert(text(result.stderr).includes("Daemon unavailable"));
         assert(!await exists(`${workspace}/unreachable`));
+        const receipts = unwrap(await readSessionReceipts("missing-daemon", directory));
+        equal(receipts.length, 1);
+        equal(receipts[0]?.outcome.kind, "error");
       } finally {
         await Deno.remove(directory, { recursive: true });
       }
     }),
+});
+
+Deno.test({
+  name: "macOS killed CI client leaves its session receipt pending",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace((workspace) =>
+      withDaemon(workspace, async (directory) => {
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture("      - run: |\n          touch ready\n          sleep 30"),
+        );
+        const child = command(workspace, ["ci", "ci.yml", "--job", "check"], {
+          MCI_HOME: directory,
+          MCI_SESSION_ID: "killed-client",
+        }).spawn();
+        const output = child.output();
+        try {
+          await waitFor(() => exists(`${workspace}/ready`));
+        } finally {
+          child.kill("SIGKILL");
+        }
+        await output;
+        const receipts = unwrap(await readSessionReceipts("killed-client", directory));
+        equal(receipts.length, 1);
+        equal(receipts[0]?.outcome.kind, "pending");
+        equal(receipts[0]?.finished, null);
+      })
+    ),
 });
 
 Deno.test({
@@ -472,7 +568,7 @@ jobs:
             parentPath,
           ],
           cwd: workspace,
-          env: { MCI_HOME: directory },
+          env: isolatedEnv({ MCI_HOME: directory }),
           stdin: "null",
           stdout: "null",
           stderr: "null",
