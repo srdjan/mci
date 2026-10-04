@@ -5,6 +5,7 @@ date: 2026-10-04
 artifact_contract: ce-unified-plan/v1
 product_contract_source: ce-plan-bootstrap
 execution: code
+source_baseline: 44044f93a657d5cef644e020a427eb663f971ab7
 ---
 
 # Light-FP in Local CI - Plan
@@ -57,7 +58,9 @@ This work covers plugin activation, necessary layer declarations, limited lint
 corrections, documentation, and local verification. Broad refactors, dependency upgrades
 unrelated to Light-FP, and changes to daemon or monitor behavior remain outside scope.
 Blanket adapter declarations, file exclusions, rule disabling, and a violation baseline
-will not substitute for domain enforcement.
+will not substitute for domain enforcement. The accepted migration limits in
+`plans/hardening-pruning-list.md` remain outside this lint integration. These limits cover
+a concurrent legacy adapter and file replacement between the log check and copy.
 
 ## Planning Contract
 
@@ -73,11 +76,25 @@ separate command or hook would duplicate the existing gate. The current path is
 `.githooks/pre-commit` to `deno task ci`, then `ci/local-ci.yml` to `deno task verify`.
 The `verify` task already runs `deno lint`.
 
-**Decision 3: Existing diagnostics.** The recommendation is responsibility-based layer
-declarations and limited corrections. Pure modules remain in the domain layer. Effectful
-modules may receive adapter declarations with explicit reasons. `src/result.ts` may use
-the prelude declaration because it converts exceptions into Result values. Any necessary
-new helper must directly support a reported violation and preserve the public API.
+**Decision 3: Existing diagnostics.** The recommendation is explicit layer declarations
+based on current module responsibilities. A parser refactor would expand this integration.
+The declarations preserve the synchronous public API and existing behavior.
+
+`src/daemon-store.ts`, `src/daemon.ts`, `src/process.ts`, `src/runner.ts`,
+`src/runtime.ts`, `src/worker.ts`, and `src/workspace.ts` receive adapter declarations.
+These modules own filesystem, process, clock, signal, or runtime operations.
+`tests/helpers.ts` receives an adapter declaration because it owns test effects. Its
+filename does not match the plugin's automatic test suffixes.
+
+`src/result.ts` receives the prelude declaration because it converts exceptions into
+Result values. `src/protocol.ts` remains domain code. Any correction to that module must
+preserve its decoding behavior.
+
+`src/workflow.ts` receives an adapter declaration because it adapts the third-party YAML
+parser through exception handling and visitor callbacks. This declaration also exempts
+validation functions in the same file. Extracting those functions into a separate domain
+module remains outside scope. Any new helper must directly support a measured diagnostic
+and preserve the public API.
 
 ### Evidence and Deferred Measurements
 
@@ -85,9 +102,31 @@ The installed Deno version is 2.9.7. The configured hook path is `.githooks`. Th
 published package version is 0.7.5. No Light-FP run occurs during planning. The diagnostic
 count and execution duration need measurement during implementation.
 
-`src/workflow.ts` contains `try` around third-party YAML parsing. `src/daemon.ts` contains
-mutable runtime records and OS operations. These observations identify review targets, not
-a measured diagnostic list.
+The reviewed source baseline is `44044f9`. The CI configuration matches the original plan.
+The source review includes directory validation before missing-log creation.
+
+`src/workflow.ts` contains parser exception handling, visitor callbacks, discarded calls,
+and a primitive cast. `src/protocol.ts` has a discarded collection update.
+`tests/helpers.ts` contains filesystem operations, timers, and exceptions. These
+observations guide classification; they are not measured diagnostics.
+
+### Behavior to Preserve
+
+The current legacy migration validates request directories before creating a missing
+`latest.log`. It then copies that empty log into the immutable request log and publishes
+`latest.json`. Finished legacy records retain their terminal result. Running records
+become interrupted.
+
+A directory or symbolic link at `latest.log` blocks the repository. The error identifies
+the blocking path. The block leaves `latest.json` absent and preserves `status.json`. Lint
+corrections must preserve these outcomes. Fixing the accepted copy race remains outside
+scope.
+
+A symbolic-link `.mci` blocks migration before log creation. The daemon creates neither
+`latest.log` nor `latest.json` through that link.
+
+`planWorkflow` remains synchronous and returns validation failures as Result values. The
+`attempt` and `message` helpers retain their existing error conversion behavior.
 
 ## Implementation Units
 
@@ -100,14 +139,17 @@ a measured diagnostic list.
 **Files:** `deno.json`, `deno.lock` if dependency resolution changes it, and `README.md`.
 Source candidates are `src/result.ts`, `src/workflow.ts`, `src/protocol.ts`,
 `src/daemon.ts`, `src/daemon-store.ts`, `src/process.ts`, `src/runner.ts`,
-`src/runtime.ts`, `src/worker.ts`, and `src/workspace.ts`. Existing tests for changed
-public behavior belong to the same unit. Any new helper or test file needs a documented
-connection to an actual diagnostic.
+`src/runtime.ts`, `src/worker.ts`, `src/workspace.ts`, and `tests/helpers.ts`. Existing
+coverage includes `tests/daemon_test.ts`, `tests/workflow_test.ts`,
+`tests/protocol_test.ts`, `tests/command_test.ts`, `tests/process_test.ts`, and
+`tests/workspace_test.ts`. Tests change only when a logic correction needs additional
+public API coverage. Any new helper or test file needs a documented connection to an
+actual diagnostic.
 
 **Approach:** Register the pinned plugin, then measure diagnostics from the repository
-root. Classify each affected module before selecting a correction. Apply only the
-corrections required by Decision 3. Document the plugin and its existing CI path in the
-development section of `README.md`.
+root. Apply the layer choices in Decision 3 before selecting a logic correction. Apply
+only corrections required by remaining diagnostics. Document the plugin and its existing
+CI path in the development section of `README.md`.
 
 **Execution note:** Start with a sub-minute lint check before attempting the complete CI
 pipeline. Use a temporary domain file to prove enforcement, then remove that file before
@@ -119,6 +161,14 @@ workflow. After removal, lint and complete CI pass. If a correction changes logi
 existing public API tests must preserve its behavior. Add a focused behavior test only
 when existing tests cannot establish that preservation. Configuration and declaration
 changes need runtime evidence, not tests that duplicate configuration text.
+
+**Preservation coverage:** The missing-log test in `tests/daemon_test.ts` covers finished
+and running records. It requires empty request and compatibility logs, plus `latest.json`.
+The non-regular-log test covers directories and symbolic links. It requires a blocking
+error with the exact log path, no `latest.json`, and an unchanged `status.json`. The
+symbolic-link `.mci` test requires blocking without a log or result in the link target.
+The YAML tests in `tests/workflow_test.ts` protect parsing and validation Results. The
+decoder tests in `tests/protocol_test.ts` protect domain corrections.
 
 **Verification:** Inspect every changed line, confirm the negative check identifies
 Light-FP, and confirm the cleaned repository passes the existing gate.
@@ -133,7 +183,9 @@ rather than an unavailable daemon or unregistered checkout.
 After temporary file removal, `deno task ci` must pass formatting, lint, type checks,
 tests, and the monitor check. The daemon must run, and this checkout must be registered
 before CI evidence is collected. The local implementation commit must also pass the
-existing pre-commit hook. No probe file or recording artifact enters the commit.
+existing pre-commit hook. The compatibility tests identified in U1 must retain their
+current outcomes. Historical counts in `VERIFICATION.md` do not establish a Light-FP
+baseline. No probe file or recording artifact enters the commit.
 
 ## Definition of Done
 
@@ -145,6 +197,8 @@ the user owns any push.
 ## Sources
 
 Repository evidence comes from `deno.json`, `ci/local-ci.yml`, `.githooks/pre-commit`,
-`README.md`, and the source candidates above. The
+`README.md`, and the source candidates above. Current migration behavior and evidence
+appear in `docs/design.md`, `tests/daemon_test.ts`, and `VERIFICATION.md`.
+`plans/hardening-pruning-list.md` records the accepted migration limits. The
 [published package documentation](https://jsr.io/@srdjan/light-fp-lint) defines
 configuration and layer behavior.
