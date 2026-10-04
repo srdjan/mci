@@ -260,10 +260,22 @@ Deno.test({
           "      - run: |\n          trap 'echo stopped > stopped; exit 0' TERM\n          echo $$ > active-pid\n          touch ready\n          while :; do sleep 0.02; done",
         ),
       );
+      const receiptHome = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-runner-" });
+      const inherited = {
+        ...Deno.env.toObject(),
+        MCI_HOME: receiptHome,
+        MCI_SESSION_ID: "runner-recovery-test",
+      };
       const command = (file: string) =>
         new Deno.Command(Deno.execPath(), {
           args: cliSourceArgs(["run", file, "--job", "check"]),
           cwd: workspace,
+          env: {
+            ...inherited,
+            MCI_SESSION_ID: "",
+            CODEX_SESSION_ID: "",
+            CODEX_THREAD_ID: "",
+          },
           stdout: "piped",
           stderr: "piped",
         });
@@ -296,6 +308,10 @@ Deno.test({
         assert(await exists(`${workspace}/recovered`));
         assert(!await exists(`${workspace}/.mci/run.json`));
         await output;
+        assert(
+          !await exists(`${receiptHome}/sessions`),
+          "Recovery fixture must not create session receipts",
+        );
       } finally {
         if (pid !== undefined) {
           stopGroup(pid);
@@ -304,6 +320,7 @@ Deno.test({
           owner.kill("SIGKILL");
         }
         await output;
+        await Deno.remove(receiptHome, { recursive: true });
       }
     }),
 });
