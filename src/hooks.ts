@@ -29,6 +29,8 @@ const command = async (
   const output = await captureCommand(executable, { args: [...args] }, {
     timeoutMs: 120000,
     reapMs: 1000,
+    maxStdoutBytes: 1024 * 1024,
+    maxStderrBytes: 1024 * 1024,
   });
   if (!output.ok) return output;
   return ok({

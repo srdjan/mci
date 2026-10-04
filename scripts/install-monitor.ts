@@ -1,5 +1,5 @@
 // @light-fp adapter
-import { captureCommand } from "../src/command.ts";
+import { captureCommand, type CommandCapturePolicy } from "../src/command.ts";
 import { rpc } from "../src/client.ts";
 import { attempt, err, message, ok, type Result } from "../src/result.ts";
 import { cliVersion } from "../src/runtime.ts";
@@ -233,8 +233,18 @@ export const installMonitor = async (
   return ok({ bundle: destination, workspace: workspace.value, warnings: swapped.value });
 };
 
-const deadline = { timeoutMs: 10_000, reapMs: 2_000 } as const;
-const buildDeadline = { timeoutMs: 600_000, reapMs: 5_000 } as const;
+const deadline = {
+  timeoutMs: 10_000,
+  reapMs: 2_000,
+  maxStdoutBytes: 1024 * 1024,
+  maxStderrBytes: 1024 * 1024,
+} as const;
+const buildDeadline = {
+  timeoutMs: 600_000,
+  reapMs: 5_000,
+  maxStdoutBytes: 16 * 1024 * 1024,
+  maxStderrBytes: 16 * 1024 * 1024,
+} as const;
 const outputTail = (stdout: Uint8Array): string => {
   const text = new TextDecoder().decode(stdout).trim();
   return text.length > 2000 ? `...${text.slice(-2000)}` : text;
@@ -243,7 +253,7 @@ const outputTail = (stdout: Uint8Array): string => {
 const runChecked = async (
   command: string,
   args: readonly string[],
-  policy: { readonly timeoutMs: number; readonly reapMs: number } = deadline,
+  policy: CommandCapturePolicy = deadline,
 ): Promise<Result<Uint8Array>> => {
   const captured = await captureCommand(command, { args: [...args] }, policy);
   if (!captured.ok) return captured;

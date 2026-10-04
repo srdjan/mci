@@ -6,7 +6,12 @@ import { attempt, err, ok, type Result } from "./result.ts";
 const bundleName = "mci Monitor.app";
 const ownerValue = "meeci";
 const knownBrews = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"] as const;
-const commandPolicy = { timeoutMs: 120000, reapMs: 1000 } as const;
+const commandPolicy = {
+  timeoutMs: 120000,
+  reapMs: 1000,
+  maxStdoutBytes: 1024 * 1024,
+  maxStderrBytes: 1024 * 1024,
+} as const;
 
 export type SetupOptions = {
   readonly sourceBundle: string;
@@ -123,7 +128,12 @@ const nativeSetupCapabilities: SetupCapabilities = {
     const stopped = await captureCommand(
       "/usr/bin/pkill",
       { args: ["-f", pattern] },
-      { timeoutMs: 5000, reapMs: 1000 },
+      {
+        timeoutMs: 5000,
+        reapMs: 1000,
+        maxStdoutBytes: 1024 * 1024,
+        maxStderrBytes: 1024 * 1024,
+      },
     );
     if (!stopped.ok) return stopped;
     return stopped.value.status.code <= 1

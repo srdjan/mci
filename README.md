@@ -155,6 +155,10 @@ runner bounds its subsequent wait for the direct child. Cleanup errors preserve 
 original execution detail and make the run fail. Process identity inspection also has a
 deadline and bounded cleanup.
 
+Captured helper commands allow 1 MiB per output stream. The source monitor build allows 16
+MiB per stream. A MiB is 1,048,576 bytes. Output beyond a budget fails the helper and
+starts bounded cleanup. Workflow steps continue to stream their output.
+
 The `mci` task monitors its native Deno task parent. If that parent exits, the CLI cancels
 the active job and cleans the workspace. Standalone execution uses the usual OS signals
 and job deadline.

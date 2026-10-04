@@ -113,7 +113,12 @@ export const inspectProcessIdentity = async (
       clearEnv: true,
       env: { LC_ALL: "C", TZ: "UTC" },
     },
-    { timeoutMs: nativePolicy.graceMs, reapMs: nativePolicy.reapMs },
+    {
+      timeoutMs: nativePolicy.graceMs,
+      reapMs: nativePolicy.reapMs,
+      maxStdoutBytes: 1024 * 1024,
+      maxStderrBytes: 1024 * 1024,
+    },
   );
   if (!inspected.ok) return err(`Unable to inspect process ${pid}: ${inspected.error}`);
   const output = new TextDecoder().decode(inspected.value.stdout);

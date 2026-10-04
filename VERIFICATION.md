@@ -1,5 +1,38 @@
 # Verification
 
+## Command capture byte limits
+
+On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 208
+tests with one opposite-platform test ignored. The native monitor passed 309 checks.
+Formatting, linting, type checking, layer checking, and suppression checking passed.
+
+Eleven new public command tests cover independent stdout and stderr limits. Checks also
+cover exact budgets, multibyte output, zero budgets, and invalid budgets before launch.
+The overflow regression failed before the source change in 17 ms. The old module accepted
+five stdout bytes under a four-byte budget.
+
+The main agent ran all 15 command tests after the changes. Those tests passed in 101 ms.
+The slowest test took 29 ms on that run. The cleanup tests confirm direct child reaping
+and pipe closure after the direct child exits. The descendant fixture waits for its known
+direct parent to disappear before producing excess output.
+
+The main agent reran a generated-output probe with exact byte budgets. It captured 1,024,
+1,048,576, and 16,777,216 bytes on each stream without truncation. Those runs took 12.33,
+8.17, and 58 ms respectively. A closure probe passed 30 captures, then 1,500 captures
+after only the repetition count changed. The larger run took 3,811.32 ms.
+
+An independent review found no supported defect in retained byte limits, overflow races,
+or cleanup. The final lock-state check selects reader cancellation while a pipe remains
+locked. The module uses stream cancellation after the reader releases its lock.
+
+Ordinary helpers allow 1 MiB per stream. The source monitor build allows 16 MiB per
+stream. These values are policy budgets, not measured maxima. Caller measurements and
+their limits appear in `docs/command-capture-plan.md`. The measurements exclude clean
+builds and deliberate compiler failures. The byte budgets do not bound total process
+memory or workflow log growth.
+
+These checks cover source execution on this host. The installed binary remains unchanged.
+
 ## Hook rollback diagnostics
 
 On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 197

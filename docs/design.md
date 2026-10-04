@@ -205,10 +205,20 @@ for at most the reap period. A group that disappears counts as clean. Otherwise 
 original error remains. The module sends no other signal to a reaped PID. Run cleanup and
 recovery use the same rule.
 
-Native process inspection uses bounded command capture. If inspection times out, the
-capture module kills its subprocess, bounds reaping, and closes its output pipe.
-Registration failure keeps its original diagnostic. Confirmed group cleanup and reaping
-allow the process module to clear the record even after registration fails.
+Native process inspection uses bounded command capture. If inspection times out or exceeds
+an output budget, the capture module starts bounded cleanup. The module kills its live
+direct child, bounds reaping, and closes both output pipes. Registration failure keeps its
+original diagnostic. Confirmed group cleanup and reaping allow the process module to clear
+the record even after registration fails.
+
+Capture policies require independent byte budgets for stdout and stderr. Ordinary helpers
+allow 1 MiB per stream. The source monitor's Swift build allows 16 MiB per stream. A MiB
+is 1,048,576 bytes. These budgets limit retained bytes, not total process memory.
+
+An exact budget remains valid. The first chunk beyond the remaining budget causes a
+capture failure. The diagnostic names the command, stream, and byte budget. The module
+retains that diagnostic if cleanup also fails. The module rejects invalid budgets before
+spawning the command. Workflow output continues to stream through the runner.
 
 The `mci` task sets an internal marker for parent supervision. The CLI captures its parent
 PID and checks the current parent during execution. Parent death cancels the job through
