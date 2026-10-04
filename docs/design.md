@@ -131,14 +131,14 @@ An interrupted atomic write leaves a `.write-*` or `.copy-*` file. Older daemons
 `.latest-*` files. At startup, before the listener opens, the daemon removes regular files
 with these three prefixes from the service directory, `.mci/ci`, and `.mci/ci/requests`.
 Only the daemon that holds `daemon.lock` writes these prefixes, so the cleanup cannot
-remove a file in use. The daemon keeps other names, such as `.status-*` from a direct run.
-A removal failure in the service directory stops the daemon at startup. A removal failure
-in a repository blocks that repository, as other retention failures do.
+remove a file in use. The daemon keeps other names, such as `.status-*` from an earlier
+direct CI run. A removal failure in the service directory stops the daemon at startup. A
+removal failure in a repository blocks that repository, as other retention failures do.
 
 After a worker exits, the daemon waits at most 2000 ms for its output to close. It then
 cancels the readers. A request whose output stays open after that fails unless it was
-cancelled. An earlier probe of the CI adapter measured stream EOF within 0.09 ms of child
-exit. The 2000 ms value matches the process grace period.
+cancelled. An earlier probe of the removed CI adapter measured stream EOF within 0.09 ms
+of child exit. The 2000 ms value matches the process grace period.
 
 A signal to a worker that already exited is not a failure. The daemon tracks worker exit
 and skips the signal. At shutdown, only a cancelled result becomes INTERRUPTED. A worker

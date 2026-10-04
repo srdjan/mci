@@ -14,7 +14,7 @@ describes the resulting behavior. This list does not reopen those findings.
 native monitor checks passed. Formatting, linting, and type checking also passed.
 
 H1 to H5 shipped in commits 85480a0, 17c1b48, 4f195c7, 13cae87, and fd13acb. H6 shipped
-after them. `VERIFICATION.md` records each.
+after them. P1 shipped after H6. `VERIFICATION.md` records each.
 
 Effort describes scope, not elapsed time. Small means one boundary and its checks. Medium
 means coordinated changes across boundaries. Change risk describes what a fix or removal
@@ -24,35 +24,9 @@ can break.
 
 | Order | Item                                         | Category | Effect                                                             | Effort | Change risk | Confidence          |
 | ----- | -------------------------------------------- | -------- | ------------------------------------------------------------------ | ------ | ----------- | ------------------- |
-| 1     | P1: Remove the unused direct CI logger       | Pruning  | Tests maintain a logger that the current CLI does not call         | Medium | Low         | High: caller search |
-| 2     | P2: Remove the unused monitor status decoder | Pruning  | Checks maintain the old status contract beside the daemon contract | Medium | Medium      | High: caller search |
+| 1     | P2: Remove the unused monitor status decoder | Pruning  | Checks maintain the old status contract beside the daemon contract | Medium | Medium      | High: caller search |
 
 ## Pruning details
-
-### P1: Remove the unused direct CI logger
-
-Evidence: `src/ci.ts` contains 499 lines. Only `tests/ci_test.ts:1` and
-`tests/monitor_fixtures_test.ts:1` import this module. The current CI path calls `submit`
-in `src/cli.ts:63-71` and executes through the daemon.
-
-The old logger maintains another lock, status writer, output drain, and cancellation path.
-Its tests exercise a mechanism outside the current CLI path.
-
-The proposed removal deletes `runLoggedCi` and checks that only cover this unused logger.
-It retains the daemon parent-death check in `tests/ci_test.ts:41-145` and moves that check
-to a current CLI or daemon test file.
-
-That check currently calls the old `runShell` helper at `tests/ci_test.ts:133`. The
-proposed change replaces that assertion with a second daemon submission that confirms
-workspace reuse after cancellation.
-
-Removal of the old status decoder follows the monitor pruning item below. The daemon must
-retain legacy status import in `src/daemon-store.ts:533-557` and legacy registry import in
-`src/daemon-store.ts:393-409`.
-
-Verification checks the import graph and runs `deno task verify`. Current CLI checks must
-continue to cover success, failure, SIGINT, parent death, and saved output. No reduction
-in elapsed test time is claimed; that needs measurement.
 
 ### P2: Remove the unused monitor status decoder
 
@@ -62,15 +36,18 @@ in legacy checks.
 
 The old contracts reside in `monitor/Sources/MonitorCore/CiStatus.swift` and
 `monitor/Sources/MonitorCore/MonitorError.swift`. Their checks reside in
-`monitor/Sources/MonitorChecks/DecodeChecks.swift`, `tests/monitor_fixtures_test.ts`, and
-`tests/fixtures/monitor/decode/`.
+`monitor/Sources/MonitorChecks/DecodeChecks.swift`, `tests/monitor_fixtures_test.ts`,
+`tests/fixtures/monitor/decode/`, and `tests/ci_test.ts`. The last file keeps one
+`readCiStatus` test, and P2 deletes the file.
 
 The proposed removal deletes the unused status types, decoders, file reader, and checks.
-It moves `parseTimestamp` to a retained utility and keeps its calendar checks.
+It also deletes `src/ci.ts`, whose only remaining function is `readCiStatus`. It moves
+`parseTimestamp` to a retained utility and keeps its calendar checks.
 `DaemonProtocol.swift` and `DisplayState.swift` still call that utility.
 
 The removal must retain daemon snapshot fixtures, snapshot checks, log reader checks, and
-display checks. The removal must also retain legacy import in the daemon store.
+display checks. The removal must also retain legacy status import in
+`src/daemon-store.ts:267-300` and `src/daemon-store.ts:533-557`.
 
 Verification runs `deno task verify` and checks every remaining monitor caller. The change
 risk concerns accidental removal of timestamp parsing or current fixture coverage. A lower
@@ -108,8 +85,8 @@ Whether macOS returns a transient `accept()` error such as ECONNABORTED needs me
 
 ## Next action and ownership
 
-The repository maintainer owns selection of the next implementation unit. H1 to H6
-shipped. The maintainer selects the next unit from P1 and P2.
+The repository maintainer owns selection of the next implementation unit. H1 to H6 and P1
+shipped. The maintainer selects the next unit from P2.
 
 Each accepted unit needs its own checks and local commit on `main`. The repository
 maintainer owns pushes and repository backups.

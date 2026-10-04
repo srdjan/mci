@@ -1,5 +1,13 @@
-import { assert, equal, exists, fixture, inWorkspace, waitFor } from "./helpers.ts";
-import { rpc } from "../src/client.ts";
+import {
+  assert,
+  equal,
+  exists,
+  fixture,
+  inWorkspace,
+  unwrap,
+  waitFor,
+} from "./helpers.ts";
+import { rpc, submit } from "../src/client.ts";
 import { withDaemon } from "./daemon_helpers.ts";
 import { cliSourceArgs } from "../src/runtime.ts";
 import denoConfig from "../deno.json" with { type: "json" };
@@ -17,6 +25,15 @@ const command = (
     stderr: "piped",
   });
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+const capturedEnv = () => ({ PATH: Deno.env.get("PATH") ?? "/bin:/usr/bin" });
+
+const killIfPresent = (send: () => void): void => {
+  try {
+    send();
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  }
+};
 
 const taskCommand = async (
   workspace: string,
@@ -409,4 +426,115 @@ Deno.test({
         await output;
       }
     }),
+});
+
+Deno.test({
+  name: "macOS daemon CI cancels its workflow when the disposable parent dies",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace((workspace) =>
+      withDaemon(workspace, async (directory) => {
+        await Deno.mkdir(`${workspace}/ci`);
+        await Deno.writeTextFile(
+          `${workspace}/ci/local-ci.yml`,
+          `defaults:
+  run:
+    shell: bash
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - run: |
+          trap 'printf stopped > stopped; exit 143' TERM
+          echo $$ > job.pid
+          touch ready
+          while :; do :; done
+`,
+        );
+        const childArgs = cliSourceArgs(["ci", "ci/local-ci.yml", "--job", "check"]);
+        const parentSource = `const child = new Deno.Command(${
+          JSON.stringify(Deno.execPath())
+        }, {
+      args: ${JSON.stringify(childArgs)}, cwd: ${JSON.stringify(workspace)},
+      stdin: "null", stdout: "null", stderr: "null",
+    }).spawn();
+    await Deno.writeTextFile("logger.pid", String(child.pid));
+    await child.status;`;
+        const parentPath = `${workspace}/parent.ts`;
+        await Deno.writeTextFile(parentPath, parentSource);
+        const parent = new Deno.Command(Deno.execPath(), {
+          args: [
+            "run",
+            "--quiet",
+            "--permission-set=mci",
+            "--config",
+            `${Deno.cwd()}/deno.json`,
+            parentPath,
+          ],
+          cwd: workspace,
+          env: { MCI_HOME: directory },
+          stdin: "null",
+          stdout: "null",
+          stderr: "null",
+        }).spawn();
+        let parentSettled = false;
+        const parentStatus = parent.status.then((status) => {
+          parentSettled = true;
+          return status;
+        });
+        try {
+          await waitFor(() => exists(`${workspace}/ready`));
+          parent.kill("SIGKILL");
+          await parentStatus;
+          await waitFor(async () => {
+            const status = await rpc({ version: 1, op: "status" }, directory);
+            return status.ok &&
+              status.value.repositories[0]?.latest?.kind === "cancelled";
+          });
+          equal(await Deno.readTextFile(`${workspace}/stopped`), "stopped");
+          assert(!await exists(`${workspace}/.mci/run.json`));
+          const current = unwrap(await rpc({ version: 1, op: "status" }, directory));
+          const status = current.repositories[0]?.latest;
+          assert(status !== null && status !== undefined);
+          equal(status.code, 143);
+          // The daemon saves cancellation before the client exits.
+          const logger = Number(await Deno.readTextFile(`${workspace}/logger.pid`));
+          await waitFor(() =>
+            Promise.resolve().then(() => {
+              try {
+                Deno.kill(logger, 0);
+                return false;
+              } catch (error) {
+                return error instanceof Deno.errors.NotFound;
+              }
+            })
+          );
+          const reused = await submit(
+            {
+              version: 1,
+              op: "submit",
+              path: workspace,
+              workflow: "ci/reuse.yml",
+              job: "check",
+              source: fixture("      - run: touch reused"),
+              env: capturedEnv(),
+            },
+            new AbortController().signal,
+            directory,
+          );
+          assert(reused.ok, reused.ok ? "" : reused.error);
+          equal(reused.value.kind, "success");
+          assert(await exists(`${workspace}/reused`));
+        } finally {
+          if (!parentSettled) {
+            killIfPresent(() => parent.kill("SIGTERM"));
+          }
+          await parentStatus;
+          if (await exists(`${workspace}/logger.pid`)) {
+            const pid = Number(await Deno.readTextFile(`${workspace}/logger.pid`));
+            killIfPresent(() => Deno.kill(pid, "SIGTERM"));
+          }
+        }
+      })
+    ),
 });

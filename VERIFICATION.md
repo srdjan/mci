@@ -1,5 +1,47 @@
 # Verification
 
+## Direct CI logger removal
+
+On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 217
+tests with one opposite-platform test ignored. The native monitor passed 309 checks.
+Formatting, linting, and type checking passed.
+
+The change removes `runLoggedCi` and its private helpers from `src/ci.ts`. The file shrank
+from 499 lines to 115 lines. The CLI submits CI to the daemon, and no source file called
+`runLoggedCi`. The module keeps `readCiStatus` and its decoders, because the monitor
+fixture test and one status reader test still use them. The daemon store did not change.
+
+`tests/ci_test.ts` held 15 tests. Thirteen tests covered only the removed logger, and the
+change deletes them. One test, "CI status reader distinguishes missing and invalid
+records", stays in place. The Deno suite fell from 230 to 217 passed tests, which matches
+the 13 deleted tests.
+
+The test "daemon CI cancels its workflow when the disposable parent dies" moved to
+`tests/cli_test.ts`. Its name now starts with "macOS", as in the other darwin-only CLI
+tests. The final assertion changed. It called the removed logger to prove that the
+workspace was free. It now submits a second daemon job and requires the terminal kind
+"success" and the file `reused` in the workspace. The moved test passed in 494 ms.
+
+A mutation check changed the second job to `run: exit 3`. The moved test failed with
+`expected "success", received "failure"`. The change was reverted, and the test passed
+again.
+
+The import graph check ran this command:
+
+`grep -rn "ci.ts\|readCiStatus\|runLoggedCi" src scripts tests monitor --exclude-dir=.build`
+
+The command printed 18 lines. In `src` and `tests`, 7 lines matched: the `readCiStatus`
+definition in `src/ci.ts`, 3 lines in `tests/monitor_fixtures_test.ts`, and 3 lines in
+`tests/ci_test.ts`. These lines are the two retained users of `readCiStatus`. No
+`runLoggedCi` name and no `scripts` file matched. In `monitor`, 11 Swift lines matched: 7
+calls in `DecodeChecks.swift`, and 4 definitions or comments in `CiStatus.swift` and
+`MonitorError.swift`. These Swift lines belong to the status decoder that pruning item P2
+removes.
+
+This verification has limits. The grep checks names, not dynamic imports. The reuse
+assertion proves that a second job runs after a cancelled job. It does not measure the
+time to release the workspace. No change in elapsed test time is claimed.
+
 ## Daemon readiness in restart tests
 
 On 2026-10-04, one full `deno task verify` run failed "daemon restart marks an accepted
@@ -356,16 +398,19 @@ commit. The hook resolves the correct repository root in both cases.
 In the earlier design, the pre-commit hook called `deno task ci`. The logging adapter
 executed the local YAML, which calls `deno task verify` directly. The adapter recorded
 stdout, stderr, exit status, and failures beneath `.mci/ci/`. The saved files remain
-gitignored. The `deno task ci` task now submits to the daemon. Fifteen public tests cover
-stream forwarding, exit preservation, failed sinks, launch failure, writer exclusion,
-status validation, cancellation, linked log preservation, and publication failure. Two
-tests start a detached background process that holds the output pipes after the command
-exits. One test confirms that the adapter cuts the held streams after the output grace
-period and reports failure. The other test cancels after the command exits and confirms
-that the adapter returns at once with cancelled status. Both tests confirm that the lock
-is released. The adapter lifecycle test runs `mci ci` without the task marker and kills
-its disposable parent. It confirms workflow cancellation, journal cleanup, cancelled
-status, and successful writer reuse.
+gitignored. The `deno task ci` task now submits to the daemon. Fifteen public tests
+covered stream forwarding, exit preservation, failed sinks, launch failure, writer
+exclusion, status validation, cancellation, linked log preservation, and publication
+failure. Two tests started a detached background process that held the output pipes after
+the command exited. One test confirmed that the adapter cut the held streams after the
+output grace period and reported failure. The other test cancelled after the command
+exited and confirmed that the adapter returned at once with cancelled status. Both tests
+confirmed that the lock was released. The adapter lifecycle test ran `mci ci` without the
+task marker and killed its disposable parent. It confirmed workflow cancellation, journal
+cleanup, cancelled status, and successful writer reuse.
+
+A later change removed the adapter and its tests. The lifecycle test moved to
+`tests/cli_test.ts` and now confirms a second daemon submission.
 
 CLI tests run `mci ci` from source. A passing job saves pass status and its output. A
 failing step returns the same code as `mci run`. A validation error returns 2 before
