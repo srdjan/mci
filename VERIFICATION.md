@@ -20,6 +20,13 @@ commit, this test failed because `latest.log` did not exist. The block test now 
 covers a symbolic link and requires an unchanged `status.json`. After the fix, the
 complete Deno suite passed 248 tests, with 1 test ignored.
 
+A second review found that the import created the empty log before it checked the `.mci`
+directories. If `.mci` was a symbolic link, the daemon created `latest.log` in the link
+target and then blocked the repository. The daemon now checks the directories first. A new
+test links `.mci` to another directory and requires no `latest.log` there. This test
+failed before the fix and passed after it. The block test now requires the log path in the
+message. After the fix, the complete Deno suite passed 249 tests, with 1 test ignored.
+
 ## CI failure communication in Codex
 
 On 2026-10-04, the complete local CI gate passed 242 Deno tests and 242 native monitor

@@ -1644,7 +1644,9 @@ Deno.test("registration blocks a legacy CI status whose log is not a regular fil
         const repository = await repositoryOf(directory);
         equal(repository?.latest, null);
         assert(
-          repository?.blocked?.includes("legacy CI log must be a real file") === true,
+          repository?.blocked?.includes(
+            `legacy CI log must be a real file: ${workspace}/.mci/ci/latest.log`,
+          ) === true,
           `${legacy.name}: received ${repository?.blocked}`,
         );
         assert(!await exists(`${workspace}/.mci/ci/latest.json`));
@@ -1656,3 +1658,24 @@ Deno.test("registration blocks a legacy CI status whose log is not a regular fil
     });
   }
 });
+
+Deno.test("registration creates no legacy log through a symlinked .mci", () =>
+  inWorkspace(async (workspace) => {
+    const elsewhere = `${workspace}/elsewhere`;
+    await Deno.mkdir(`${elsewhere}/ci`, { recursive: true });
+    await Deno.writeTextFile(
+      `${elsewhere}/ci/status.json`,
+      JSON.stringify(legacyFinished),
+    );
+    await Deno.symlink(elsewhere, `${workspace}/.mci`);
+    await withDaemon(workspace, async (directory) => {
+      const repository = await repositoryOf(directory);
+      equal(repository?.latest, null);
+      assert(
+        repository?.blocked?.includes("must be a real directory") === true,
+        `received ${repository?.blocked}`,
+      );
+      assert(!await exists(`${elsewhere}/ci/latest.log`));
+      assert(!await exists(`${elsewhere}/ci/latest.json`));
+    });
+  }));
