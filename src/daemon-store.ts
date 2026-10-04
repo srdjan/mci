@@ -330,6 +330,27 @@ const decodeLegacyTerminal = (
   });
 };
 
+/** True while a legacy CI adapter holds its exclusive lock. Never creates the lock. */
+const legacyAdapterActive = async (path: string): Promise<Result<boolean>> => {
+  const found = await metadata(path);
+  if (!found.ok) return found;
+  if (found.value === null || !found.value.isFile || found.value.isSymlink) {
+    return ok(false);
+  }
+  const opened = await attempt(() => Deno.open(path, { read: true }));
+  if (!opened.ok) return opened;
+  const lock = opened.value;
+  const locked = await attempt(() => lock.tryLock(true));
+  const released = locked.ok && locked.value
+    ? await attempt(() => lock.unlock())
+    : ok(undefined);
+  const closed = await attempt(() => lock.close());
+  if (!locked.ok) return locked;
+  if (!released.ok) return released;
+  if (!closed.ok) return closed;
+  return ok(!locked.value);
+};
+
 const requestDirectory = (path: string): string => `${path}/.mci/ci/requests`;
 
 const presentDirectory = async (path: string): Promise<Result<boolean>> => {
@@ -541,6 +562,10 @@ export const openDaemonStore = async (
         `${repository.path}/.mci/ci/latest.log`,
       );
       if (!decoded.ok || decoded.value === null) return decoded;
+      // The legacy adapter held this lock for its whole run. Import after it ends.
+      const active = await legacyAdapterActive(`${repository.path}/.mci/ci/lock`);
+      if (!active.ok) return active;
+      if (active.value) return ok(null);
       const foundLog = await metadata(decoded.value.log);
       if (!foundLog.ok) return foundLog;
       if (

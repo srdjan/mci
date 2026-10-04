@@ -52,10 +52,6 @@ startup at the next login retain their existing evidence limits.
 The earlier manual record did not establish exact update latency, interrupted-state
 latency, deleted-watch recovery, or picker cancellation.
 
-The legacy `status.json` import does not detect a legacy adapter that still runs during an
-upgrade. The daemon then imports a partial run and ignores the later status. This limit is
-accepted because it needs an earlier binary to run during the upgrade.
-
 The legacy log import checks `latest.log` and then copies it by path. A process that runs
 as the same user can replace the file with a symbolic link between the two steps. This
 risk is accepted because such a process can already read the user's files.

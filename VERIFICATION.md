@@ -1,5 +1,21 @@
 # Verification
 
+## Legacy import while the legacy adapter runs
+
+On 2026-10-04, the legacy `status.json` import gained a check for a running legacy
+adapter. The adapter held an exclusive lock on `.mci/ci/lock` for its whole run. Before
+the import, the daemon tries that lock without waiting and without creating the file.
+While another process holds the lock, the daemon skips the import and keeps `status.json`.
+
+A new test holds the lock and registers a repository with a running legacy record. It
+requires no latest result, no block, no `latest.json`, and an unchanged `status.json`. It
+failed before the change because the daemon imported the record as interrupted. After the
+test releases the lock, a new daemon imports the record. The 55 tests in
+`tests/daemon_test.ts` and `tests/daemon_race_test.ts` passed after the change.
+
+The test holds the lock in the test process. The daemon uses a separate file handle in the
+same process, and the lock conflict held on macOS. No earlier binary ran in this check.
+
 ## Run removal without a request directory
 
 On 2026-10-04, a review found that `removeRun` in `src/daemon-store.ts` matched the text

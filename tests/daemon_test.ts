@@ -1679,3 +1679,35 @@ Deno.test("registration creates no legacy log through a symlinked .mci", () =>
       assert(!await exists(`${elsewhere}/ci/latest.json`));
     });
   }));
+
+Deno.test("registration skips a legacy CI status while the legacy adapter holds its lock", () =>
+  inWorkspace(async (workspace) => {
+    const running = { ...legacyFinished, state: "running", finished: null, code: null };
+    await writeLegacy(workspace, running, "partial output\n");
+    const lock = await Deno.open(`${workspace}/.mci/ci/lock`, {
+      create: true,
+      read: true,
+      write: true,
+    });
+    try {
+      assert(await lock.tryLock(true));
+      await withDaemon(workspace, async (directory) => {
+        const repository = await repositoryOf(directory);
+        equal(repository?.blocked, null);
+        equal(repository?.latest, null);
+        assert(!await exists(`${workspace}/.mci/ci/latest.json`));
+        equal(
+          JSON.parse(await Deno.readTextFile(`${workspace}/.mci/ci/status.json`)),
+          running,
+        );
+      });
+      await lock.unlock();
+      await withDaemon(workspace, async (directory) => {
+        const latest = (await repositoryOf(directory))?.latest;
+        assert(latest !== null && latest !== undefined);
+        equal(latest.kind, "interrupted");
+      });
+    } finally {
+      lock.close();
+    }
+  }));

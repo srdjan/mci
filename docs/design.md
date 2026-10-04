@@ -339,11 +339,12 @@ The daemon imports the earlier registry only when its own registry does not exis
 repository without `latest.json`, the daemon imports a version 1 `status.json` from the
 legacy CI adapter. A missing legacy `latest.log` counts as an empty log, and the daemon
 creates that empty file. A legacy log that is not a regular file blocks the repository.
-The import does not check whether an earlier binary still runs the legacy adapter. If one
-runs during an upgrade, the daemon imports its partial run as interrupted and ignores its
-later status. The adapter wrote its running status before it replaced `latest.log`. The
-imported log can then be empty or belong to the previous run. Removing the `status.json`
-projection requires a compatibility decision.
+The legacy adapter held an exclusive lock on `.mci/ci/lock` for its whole run. While
+another process holds that lock, the daemon skips the import and keeps `status.json`. A
+later registration or daemon start imports the final status. A running record without that
+lock comes from a stopped adapter and becomes INTERRUPTED. The adapter wrote its running
+status before it replaced `latest.log`, so that log can be empty or belong to the previous
+run. Removing the `status.json` projection requires a compatibility decision.
 
 `mci hooks install` validates one job and rejects recursive CI calls. It adds a stable
 `mci:ci` Deno task and selects the packaged hook through an absolute Homebrew path. Git
