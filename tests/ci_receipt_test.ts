@@ -99,6 +99,34 @@ Deno.test("CI receipts use the selected session and canonical workflow identity"
     }
   }));
 
+Deno.test("CI receipts keep missing workflow identity after creation through a symlink", () =>
+  inWorkspace(async (workspace) => {
+    const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-identity-" });
+    try {
+      await Deno.mkdir(`${workspace}/actual`);
+      await Deno.symlink(`${workspace}/actual`, `${workspace}/alias`);
+      await withSessionEnvironment({ MCI_SESSION_ID: "missing-identity" }, async () => {
+        const input = {
+          workspace,
+          workflow: "alias/nested/ci.yml",
+          job: "check",
+          command: "run" as const,
+          home,
+        };
+        const missing = unwrap(await beginReceipt(input));
+        assert(missing !== null);
+        await Deno.mkdir(`${workspace}/actual/nested`);
+        await Deno.writeTextFile(`${workspace}/actual/nested/ci.yml`, "created");
+        const created = unwrap(await beginReceipt(input));
+        assert(created !== null);
+        equal(missing.workflow, created.workflow);
+        equal(created.workflow, `${workspace}/actual/nested/ci.yml`);
+      });
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  }));
+
 Deno.test("CI receipt session selection uses the documented precedence", async () => {
   await withSessionEnvironment({
     MCI_SESSION_ID: "mci",

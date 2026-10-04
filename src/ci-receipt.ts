@@ -314,11 +314,23 @@ const canonicalIdentity = async (
   const realWorkspace = await attempt(() => Deno.realPath(workspace));
   if (!realWorkspace.ok) return err(`Workspace identity failed: ${realWorkspace.error}`);
   const candidate = normalizedAbsolute(realWorkspace.value, workflow);
-  const realWorkflow = await attempt(() => Deno.realPath(candidate));
-  return ok({
-    workspace: realWorkspace.value,
-    workflow: realWorkflow.ok ? realWorkflow.value : candidate,
-  });
+  let ancestor = candidate;
+  const suffix: string[] = [];
+  while (true) {
+    const resolved = await attempt(() => Deno.realPath(ancestor));
+    if (resolved.ok) {
+      return ok({
+        workspace: realWorkspace.value,
+        workflow: normalizedAbsolute(resolved.value, suffix.join("/")),
+      });
+    }
+    if (ancestor === "/") {
+      return ok({ workspace: realWorkspace.value, workflow: candidate });
+    }
+    const separator = ancestor.lastIndexOf("/");
+    suffix.unshift(ancestor.slice(separator + 1));
+    ancestor = separator === 0 ? "/" : ancestor.slice(0, separator);
+  }
 };
 
 const pendingOutcome = (): CiReceiptOutcome => ({
