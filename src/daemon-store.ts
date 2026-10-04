@@ -546,15 +546,18 @@ export const openDaemonStore = async (
       if (
         foundLog.value !== null && (!foundLog.value.isFile || foundLog.value.isSymlink)
       ) {
-        return err("legacy CI log must be a real file");
+        return err(`legacy CI log must be a real file: ${decoded.value.log}`);
+      }
+      // A missing legacy log counts as an empty log, as in terminal recovery. The
+      // exclusive create never replaces a log that a legacy adapter renamed in.
+      if (foundLog.value === null) {
+        const created = await createPrivateFile(decoded.value.log);
+        if (!created.ok) return created;
       }
       const allocated = await prepareRequestDirectory(repository.path);
       if (!allocated.ok) return allocated;
       const immutableLog = `${allocated.value}/${decoded.value.id}.log`;
-      // A missing legacy log counts as an empty log, as in terminal recovery.
-      const copied = foundLog.value === null
-        ? await atomicBytes(immutableLog, new Uint8Array(), true)
-        : await atomicCopy(decoded.value.log, immutableLog);
+      const copied = await atomicCopy(decoded.value.log, immutableLog);
       if (!copied.ok) return copied;
       const terminal = { ...decoded.value, log: immutableLog };
       const recorded = await atomicJson(

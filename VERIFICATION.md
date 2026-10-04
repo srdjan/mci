@@ -10,8 +10,15 @@ blocks the repository.
 
 A new test imports a record without a log and requires an empty copied log and a written
 `latest.json`. It failed before the change and passed after it. A second new test makes
-`latest.log` a directory and requires the block. The ten registration tests in
-`tests/daemon_test.ts` passed after the change.
+`latest.log` a directory and requires the block. The ten tests in `tests/daemon_test.ts`
+that match `--filter registration` passed after the change.
+
+A review then found that this import left `.mci/ci/latest.log` missing. The daemon now
+creates the empty legacy log with an exclusive create and copies it as before. The import
+test now also covers a running record and requires an empty `latest.log`. At the earlier
+commit, this test failed because `latest.log` did not exist. The block test now also
+covers a symbolic link and requires an unchanged `status.json`. After the fix, the
+complete Deno suite passed 248 tests, with 1 test ignored.
 
 ## CI failure communication in Codex
 

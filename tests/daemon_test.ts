@@ -1593,32 +1593,66 @@ Deno.test("daemon startup imports the legacy CI status of a legacy registry work
     }
   }));
 
-Deno.test("registration imports a legacy CI status without a log as an empty log", () =>
-  inWorkspace(async (workspace) => {
-    await writeLegacy(workspace, legacyFinished, null);
-    await withDaemon(workspace, async (directory) => {
-      const repository = await repositoryOf(directory);
-      equal(repository?.blocked, null);
-      const latest = repository?.latest;
-      assert(latest !== null && latest !== undefined);
-      equal(latest.kind, "success");
-      equal(latest.log, `${workspace}/.mci/ci/requests/${latest.id}.log`);
-      equal(await Deno.readTextFile(latest.log), "");
-      assert(await exists(`${workspace}/.mci/ci/latest.json`));
+Deno.test("registration imports a legacy CI status without a log as an empty log", async () => {
+  const cases = [
+    { record: legacyFinished, kind: "success" },
+    {
+      record: { ...legacyFinished, state: "running", finished: null, code: null },
+      kind: "interrupted",
+    },
+  ] as const;
+  for (const legacy of cases) {
+    await inWorkspace(async (workspace) => {
+      await writeLegacy(workspace, legacy.record, null);
+      await withDaemon(workspace, async (directory) => {
+        const repository = await repositoryOf(directory);
+        equal(repository?.blocked, null);
+        const latest = repository?.latest;
+        assert(latest !== null && latest !== undefined, `${legacy.kind}: no latest`);
+        equal(latest.kind, legacy.kind);
+        equal(latest.log, `${workspace}/.mci/ci/requests/${latest.id}.log`);
+        equal(await Deno.readTextFile(latest.log), "");
+        equal(await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`), "");
+        const reference: unknown = JSON.parse(
+          await Deno.readTextFile(`${workspace}/.mci/ci/latest.json`),
+        );
+        equal(reference, latest);
+      });
     });
-  }));
+  }
+});
 
-Deno.test("registration blocks a legacy CI status whose log is not a regular file", () =>
-  inWorkspace(async (workspace) => {
-    await writeLegacy(workspace, legacyFinished, null);
-    await Deno.mkdir(`${workspace}/.mci/ci/latest.log`);
-    await withDaemon(workspace, async (directory) => {
-      const repository = await repositoryOf(directory);
-      equal(repository?.latest, null);
-      assert(
-        repository?.blocked?.includes("legacy CI log must be a real file") === true,
-        `received ${repository?.blocked}`,
-      );
-      assert(!await exists(`${workspace}/.mci/ci/latest.json`));
+Deno.test("registration blocks a legacy CI status whose log is not a regular file", async () => {
+  const cases = [
+    {
+      name: "directory",
+      make: (path: string): Promise<void> => Deno.mkdir(path),
+    },
+    {
+      name: "symlink",
+      make: async (path: string): Promise<void> => {
+        await Deno.writeTextFile(`${path}.target`, "linked output\n");
+        await Deno.symlink(`${path}.target`, path);
+      },
+    },
+  ];
+  for (const legacy of cases) {
+    await inWorkspace(async (workspace) => {
+      await writeLegacy(workspace, legacyFinished, null);
+      await legacy.make(`${workspace}/.mci/ci/latest.log`);
+      await withDaemon(workspace, async (directory) => {
+        const repository = await repositoryOf(directory);
+        equal(repository?.latest, null);
+        assert(
+          repository?.blocked?.includes("legacy CI log must be a real file") === true,
+          `${legacy.name}: received ${repository?.blocked}`,
+        );
+        assert(!await exists(`${workspace}/.mci/ci/latest.json`));
+        equal(
+          JSON.parse(await Deno.readTextFile(`${workspace}/.mci/ci/status.json`)),
+          legacyFinished,
+        );
+      });
     });
-  }));
+  }
+});
