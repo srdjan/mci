@@ -634,10 +634,11 @@ export const openDaemonStore = async (
     },
     removeRun: async (path, id) => {
       const directory = requestDirectory(path);
+      const present = await presentDirectory(directory);
+      if (!present.ok) return present;
+      if (!present.value) return ok(undefined);
       const entries = await attempt(() => Array.fromAsync(Deno.readDir(directory)));
-      if (!entries.ok) {
-        return entries.error.includes("NotFound") ? ok(undefined) : entries;
-      }
+      if (!entries.ok) return entries;
       const failures: string[] = [];
       for (const entry of entries.value) {
         if (!entry.name.startsWith(`${id}.`) && !entry.name.startsWith(`${id}-`)) {

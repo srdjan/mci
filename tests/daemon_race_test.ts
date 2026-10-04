@@ -684,3 +684,19 @@ Deno.test({
       equal(latest.kind, "success");
     }),
 });
+
+Deno.test("run removal treats a missing request directory as already removed", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-service-" });
+    try {
+      const paths = servicePaths(directory);
+      assert(paths.ok);
+      const store = await openDaemonStore(paths.value);
+      assert(store.ok, store.ok ? "" : store.error);
+      assert(!await exists(`${workspace}/.mci/ci/requests`));
+      const removed = await store.value.removeRun(workspace, "absent-request");
+      assert(removed.ok, removed.ok ? "" : removed.error);
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));

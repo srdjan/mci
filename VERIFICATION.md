@@ -1,5 +1,18 @@
 # Verification
 
+## Run removal without a request directory
+
+On 2026-10-04, a review found that `removeRun` in `src/daemon-store.ts` matched the text
+"NotFound" in the error message. The message holds only the operating system text, so a
+missing `.mci/ci/requests` directory became a retention failure. That failure blocks the
+repository.
+
+A new store test calls `removeRun` for a workspace without a request directory. It failed
+before the change with "No such file or directory (os error 2)". `removeRun` now checks
+the directory first. It treats a missing directory as removed and rejects a symbolic link.
+The 54 tests in `tests/daemon_test.ts` and `tests/daemon_race_test.ts` passed after the
+change.
+
 ## Legacy import without a log
 
 On 2026-10-04, the daemon changed its import of a version 1 `status.json` without
