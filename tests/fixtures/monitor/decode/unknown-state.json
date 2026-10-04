@@ -1,6 +1,0 @@
-{
-  "text": "{\"version\":1,\"state\":\"paused\",\"pid\":4242,\"started\":\"2026-10-03T10:00:00.000Z\",\"finished\":\"2026-10-03T10:00:12.400Z\",\"code\":0}",
-  "expected": {
-    "error": "shape"
-  }
-}

@@ -1,5 +1,42 @@
 # Verification
 
+## Monitor status decoder removal
+
+On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 215
+tests with one opposite-platform test ignored. The native monitor passed 242 checks.
+Formatting, linting, and type checking passed.
+
+The monitor app reads daemon snapshots, and no app code called the old status decoder. The
+change removes `CiStatus`, `CiState`, `LoggerIdentity`, `decodeStatus`, `statusPath`, and
+`readCiStatus` from `monitor/Sources/MonitorCore/CiStatus.swift`. It removes `StatusError`
+in `monitor/Sources/MonitorCore/MonitorError.swift`. It deletes both files. It also
+deletes `monitor/Sources/MonitorChecks/DecodeChecks.swift`, `src/ci.ts`,
+`tests/ci_test.ts`, `tests/monitor_fixtures_test.ts`, and the 59 files in
+`tests/fixtures/monitor/`. The daemon store and `tests/fixtures/daemon/` did not change.
+
+The native checks fell from 309 to 242. The 67 removed checks are 60 decode fixture checks
+and 7 status file checks. The Deno suite fell from 217 to 215 passed tests. The two
+removed tests are "CI status reader distinguishes missing and invalid records" and
+"monitor decode fixtures match readCiStatus".
+
+`parseTimestamp` and its two private helpers moved to
+`monitor/Sources/MonitorCore/Timestamp.swift`. The function bodies and doc comments are
+unchanged. The calendar checks moved to
+`monitor/Sources/MonitorChecks/TimestampChecks.swift`. The timestamp checks stay at 18: 6
+valid and 12 invalid texts. `DaemonProtocol.swift`, `DisplayState.swift`, and
+`SnapshotChecks.swift` still call `parseTimestamp`.
+
+The import graph check ran this command:
+
+`grep -rn "CiStatus\|StatusError\|decodeStatus\|readCiStatus\|statusPath\|ci\.ts\|fixtures/monitor\|checkDecodeFixtures\|checkStatusFiles" src scripts tests monitor --exclude-dir=.build`
+
+The command printed no lines.
+
+This verification has limits. The grep checks names, not dynamic imports. The lower check
+counts remove coverage of the old status contract only. The legacy `status.json` import in
+`src/daemon-store.ts` has no direct test before or after this change. The deleted fixtures
+tested `src/ci.ts`, not that import.
+
 ## Direct CI logger removal
 
 On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 217
