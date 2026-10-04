@@ -19,6 +19,11 @@ also requires the Xcode Command Line Tools.
 Build the package from this checkout. Create the local tap, then copy the generated
 formula into the tap.
 
+Package archive names include their full SHA-256 checksum. The generated formula points to
+that archive. The packager replaces the formula after it prepares both artifacts. Earlier
+archives remain available for copied formulas. The repository maintainer owns archive
+removal.
+
 ```sh
 deno task package
 brew tap-new --no-git local/meeci

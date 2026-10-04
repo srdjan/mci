@@ -278,6 +278,23 @@ available. `VERIFICATION.md` records observed coverage and keeps evidence limits
 `scripts/package.ts` compiles the CLI and builds the signed monitor bundle. It writes a
 local archive and `dist/tap/Formula/mci.rb`.
 
+The packager creates tar output under a unique private path. It computes the archive
+checksum and prepares complete formula text before publication. The published archive
+filename includes the full SHA-256 checksum. Publication never replaces an existing
+checksum-named archive. An existing archive must be a real regular file with matching
+contents.
+
+The packager publishes the complete archive before replacing the formula. One rename
+beside `dist/tap/Formula/mci.rb` switches the formula to the new archive. A checksum,
+preparation, archive publication, or formula switch failure preserves the earlier formula
+and its archive.
+
+Concurrent publishers prepare separate files. Each formula switch names an already
+published matching archive. The last switch wins. Earlier archives remain available for
+copied formulas. A failed switch can leave an unreferenced complete archive. The
+repository maintainer owns archive removal. Power-loss durability retains its existing
+evidence limits.
+
 The formula installs the CLI, stores the monitor under `libexec`, and defines `mci daemon`
 as a Homebrew service.
 

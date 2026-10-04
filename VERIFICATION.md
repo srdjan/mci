@@ -1,5 +1,41 @@
 # Verification
 
+## Matching package artifacts
+
+On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 222
+tests with one opposite-platform test ignored. The native monitor passed 309 checks.
+Formatting, linting, type checking, layer checking, and suppression checking passed.
+
+Fourteen new public tests call `publishPackageWith` in temporary directories. Checks cover
+checksum failure, partial formula preparation, archive publication failure, and formula
+switch failure. Failure fixtures start with a matching earlier archive and formula.
+Success checks parse the formula URL and hash the referenced file.
+
+Further checks cover duplicate content, conflicting files, directories, and symlinks.
+Checks also cover source symlinks, literal characters in file URLs, concurrent formula
+switches, and private cleanup failures. Earlier published archives remain available.
+
+The first regression failed before the publication change in 19 ms. The old publisher
+changed archive bytes before formula preparation failed. A second regression failed in 20
+ms after review found cleanup after the formula switch. The corrected publisher cleans the
+private source before that switch. No fallible operation follows a successful switch.
+
+The main agent ran all 16 package tests after the correction. Those tests passed in 47 ms.
+The slowest test took 9 ms on that run. An independent review found no remaining defect
+after the cleanup correction.
+
+A native tar failure probe changed a stable archive and left its earlier formula
+unchanged. The same failure against a private candidate preserved the earlier matching
+pair. A native publication check used valid compressed tar archives in a temporary
+directory. The formula checksum matched the published archive. Duplicate publication
+preserved the archive inode. A later publication retained the earlier archive and created
+a distinct matching archive.
+
+These checks cover publication and source execution. They do not rebuild or reinstall the
+full package. The installed binary and monitor remain unchanged. Power-loss durability and
+external archive modification remain outside the checked contract. Failed switches can
+leave complete unreferenced archives; the repository maintainer owns archive removal.
+
 ## Command capture byte limits
 
 On 2026-10-04, `deno task verify` passed on Apple Silicon macOS. The Deno suite passed 208

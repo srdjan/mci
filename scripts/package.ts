@@ -17,11 +17,36 @@ export type PackageResult = {
   readonly formula: string;
 };
 
+export type PackageMetadata = {
+  readonly root: string;
+  readonly version: string;
+  readonly architecture: "arm64" | "x86_64";
+};
+
+export type ArchivePublication = "created" | "exists";
+
+export type PackagePublicationCapabilities = {
+  readonly checksum: (path: string) => Promise<Result<string>>;
+  readonly writeFormula: (path: string, text: string) => Promise<Result<void>>;
+  readonly publishArchive: (
+    preparedArchive: string,
+    publishedArchive: string,
+  ) => Promise<Result<ArchivePublication>>;
+  readonly replaceFormula: (
+    preparedFormula: string,
+    formula: string,
+  ) => Promise<Result<void>>;
+  readonly cleanup: (path: string) => Promise<Result<void>>;
+};
+
 const bundleName = "mci Monitor.app";
 const ownerValue = "meeci";
 
 const rubyString = (value: string): string =>
   value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+
+const fileUrl = (path: string): string =>
+  `file://${path.split("/").map(encodeURIComponent).join("/")}`;
 
 export const formulaText = (
   version: string,
@@ -105,6 +130,11 @@ const verifyApp = async (path: string): Promise<Result<void>> => {
 };
 
 const checksum = async (path: string): Promise<Result<string>> => {
+  const info = await attempt(() => Deno.lstat(path));
+  if (!info.ok) return err(`${path} is not available: ${info.error}`);
+  if (!info.value.isFile || info.value.isSymlink) {
+    return err(`${path} must be a real regular file.`);
+  }
   const bytes = await attempt(() => Deno.readFile(path));
   if (!bytes.ok) return bytes;
   const digest = await attempt(() => crypto.subtle.digest("SHA-256", bytes.value));
@@ -113,6 +143,132 @@ const checksum = async (path: string): Promise<Result<string>> => {
     [...new Uint8Array(digest.value)].map((byte) => byte.toString(16).padStart(2, "0"))
       .join(""),
   );
+};
+
+export const nativePackagePublicationCapabilities: PackagePublicationCapabilities = {
+  checksum,
+  writeFormula: (path, text) =>
+    attempt(() => Deno.writeTextFile(path, text, { createNew: true })),
+  publishArchive: async (preparedArchive, publishedArchive) => {
+    try {
+      await Deno.link(preparedArchive, publishedArchive);
+      return ok("created");
+    } catch (error) {
+      return error instanceof Deno.errors.AlreadyExists
+        ? ok("exists")
+        : err(message(error));
+    }
+  },
+  replaceFormula: (preparedFormula, formula) =>
+    attempt(() => Deno.rename(preparedFormula, formula)),
+  cleanup: async (path) => {
+    try {
+      await Deno.remove(path);
+      return ok(undefined);
+    } catch (error) {
+      return error instanceof Deno.errors.NotFound ? ok(undefined) : err(message(error));
+    }
+  },
+};
+
+const cleanupPrivate = async (
+  paths: readonly string[],
+  capabilities: PackagePublicationCapabilities,
+): Promise<readonly string[]> => {
+  const outcomes = await Promise.all(paths.map(async (path) => ({
+    path,
+    result: await capabilities.cleanup(path),
+  })));
+  return outcomes.flatMap(({ path, result }) =>
+    result.ok ? [] : [`Private file remains at ${path}: cleanup failed: ${result.error}`]
+  );
+};
+
+const failAfterCleanup = async <T>(
+  detail: string,
+  privatePaths: readonly string[],
+  capabilities: PackagePublicationCapabilities,
+): Promise<Result<T>> => {
+  const cleanupFailures = await cleanupPrivate(privatePaths, capabilities);
+  return err([detail, ...cleanupFailures].join("\n"));
+};
+
+export const publishPackageWith = async (
+  preparedArchive: string,
+  metadata: PackageMetadata,
+  capabilities: PackagePublicationCapabilities,
+): Promise<Result<PackageResult>> => {
+  const dist = `${metadata.root}/dist`;
+  const formula = `${dist}/tap/Formula/mci.rb`;
+  const hash = await capabilities.checksum(preparedArchive);
+  if (!hash.ok) {
+    return failAfterCleanup(
+      `Cannot checksum the prepared release archive: ${hash.error}`,
+      [preparedArchive],
+      capabilities,
+    );
+  }
+  const stem = `mci-${metadata.version}-darwin-${metadata.architecture}`;
+  const archive = `${dist}/${stem}-${hash.value}.tar.gz`;
+  if (preparedArchive === archive) {
+    return err(`The prepared archive must use a private path: ${preparedArchive}`);
+  }
+  const preparedFormula = `${formula}.${crypto.randomUUID()}.tmp`;
+  const text = formulaText(
+    metadata.version,
+    fileUrl(archive),
+    hash.value,
+  );
+  const written = await capabilities.writeFormula(preparedFormula, text);
+  if (!written.ok) {
+    return failAfterCleanup(
+      `Cannot prepare ${formula}: ${written.error}`,
+      [preparedFormula, preparedArchive],
+      capabilities,
+    );
+  }
+  const published = await capabilities.publishArchive(preparedArchive, archive);
+  if (!published.ok) {
+    return failAfterCleanup(
+      `Cannot publish the release archive: ${published.error}`,
+      [preparedFormula, preparedArchive],
+      capabilities,
+    );
+  }
+  if (published.value === "exists") {
+    const existingHash = await capabilities.checksum(archive);
+    if (!existingHash.ok) {
+      return failAfterCleanup(
+        `Cannot use the existing release archive: ${existingHash.error}`,
+        [preparedFormula, preparedArchive],
+        capabilities,
+      );
+    }
+    if (existingHash.value !== hash.value) {
+      return failAfterCleanup(
+        `The existing release archive has checksum ${existingHash.value}, expected ${hash.value}.`,
+        [preparedFormula, preparedArchive],
+        capabilities,
+      );
+    }
+  }
+  const sourceCleanup = await capabilities.cleanup(preparedArchive);
+  if (!sourceCleanup.ok) {
+    return failAfterCleanup(
+      `Private file remains at ${preparedArchive}: cleanup failed: ${sourceCleanup.error}`,
+      [preparedFormula],
+      capabilities,
+    );
+  }
+  const replaced = await capabilities.replaceFormula(preparedFormula, formula);
+  if (!replaced.ok) {
+    return failAfterCleanup(
+      `Cannot replace ${formula}: ${replaced.error}`,
+      [preparedFormula],
+      capabilities,
+    );
+  }
+  return ok({ archive, checksum: hash.value, formula });
 };
 
 /** Build current release artifacts and package them for local Homebrew installation. */
@@ -127,9 +283,7 @@ export const packageRelease = async (
   const dist = `${options.root}/dist`;
   const formulaDirectory = `${dist}/tap/Formula`;
   const stem = `mci-${options.version}-darwin-${options.architecture}`;
-  const archive = `${dist}/${stem}.tar.gz`;
   const staging = `${dist}/.${stem}-${crypto.randomUUID()}`;
-  const formula = `${formulaDirectory}/mci.rb`;
   const prepared = await attempt(async () => {
     await Deno.mkdir(`${staging}/bin`, { recursive: true });
     await Deno.mkdir(`${staging}/libexec/hooks`, { recursive: true });
@@ -211,21 +365,37 @@ export const packageRelease = async (
     await cleanup();
     return stagedApp;
   }
+  const preparedArchive = await attempt(() =>
+    Deno.makeTempFile({
+      dir: dist,
+      prefix: `.${stem}-`,
+      suffix: ".tar.gz",
+    })
+  );
+  if (!preparedArchive.ok) {
+    await cleanup();
+    return err(`Cannot prepare the release archive: ${preparedArchive.error}`);
+  }
   const archived = await run("/usr/bin/tar", [
     "-czf",
-    archive,
+    preparedArchive.value,
     "-C",
     staging,
     ".",
   ]);
   await cleanup();
-  if (!archived.ok) return err(`Cannot create the release archive: ${archived.error}`);
-  const hash = await checksum(archive);
-  if (!hash.ok) return err(`Cannot checksum the release archive: ${hash.error}`);
-  const text = formulaText(options.version, new URL(archive, "file://").href, hash.value);
-  const written = await attempt(() => Deno.writeTextFile(formula, text));
-  if (!written.ok) return err(`Cannot write ${formula}: ${written.error}`);
-  return ok({ archive, checksum: hash.value, formula });
+  if (!archived.ok) {
+    return failAfterCleanup(
+      `Cannot create the release archive: ${archived.error}`,
+      [preparedArchive.value],
+      nativePackagePublicationCapabilities,
+    );
+  }
+  return publishPackageWith(
+    preparedArchive.value,
+    options,
+    nativePackagePublicationCapabilities,
+  );
 };
 
 const root = decodeURIComponent(new URL("../", import.meta.url).pathname).replace(
