@@ -338,8 +338,10 @@ service that setup started.
 The daemon imports the earlier registry only when its own registry does not exist. For a
 repository without `latest.json`, the daemon imports a version 1 `status.json` from the
 legacy CI adapter. A missing legacy `latest.log` counts as an empty log. A legacy log that
-is not a regular file blocks the repository. Removing the `status.json` projection
-requires a compatibility decision.
+is not a regular file blocks the repository. The import does not check whether an earlier
+binary still runs the legacy adapter. If one runs during an upgrade, the daemon imports
+its partial run as interrupted and ignores its later status. Removing the `status.json`
+projection requires a compatibility decision.
 
 `mci hooks install` validates one job and rejects recursive CI calls. It adds a stable
 `mci:ci` Deno task and selects the packaged hook through an absolute Homebrew path. Git
