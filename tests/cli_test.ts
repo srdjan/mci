@@ -142,6 +142,71 @@ Deno.test({
 });
 
 Deno.test({
+  name: "CLI receipt storage failure prevents execution or overrides job success",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-storage-" });
+      const env = { MCI_HOME: home, MCI_SESSION_ID: "storage-contract" };
+      try {
+        await Deno.mkdir(`${home}/outside`);
+        await Deno.symlink(`${home}/outside`, `${home}/sessions`);
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture("      - run: touch passed"),
+        );
+        const creation = await command(
+          workspace,
+          ["run", "ci.yml", "--job", "check"],
+          env,
+        ).output();
+        equal(creation.code, 1);
+        assert(text(creation.stderr).includes("CI receipt creation failed"));
+        assert(!await exists(`${workspace}/passed`));
+        await Deno.remove(`${home}/sessions`);
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture(
+            '      - run: |\n          touch passed\n          mv "$MCI_HOME/sessions" "$MCI_HOME/saved-sessions"\n          ln -s "$MCI_HOME/saved-sessions" "$MCI_HOME/sessions"',
+          ),
+        );
+        const completion = await command(
+          workspace,
+          ["run", "ci.yml", "--job", "check"],
+          env,
+        ).output();
+        equal(completion.code, 1);
+        assert(await exists(`${workspace}/passed`));
+        assert(text(completion.stdout).includes("success: all selected steps passed"));
+        assert(text(completion.stderr).includes("CI receipt update failed"));
+        assert(text(completion.stderr).includes("CI result is unresolved"));
+        assert(!(await readSessionReceipts("storage-contract", home)).ok);
+        await Deno.remove(`${home}/sessions`);
+        await Deno.rename(`${home}/saved-sessions`, `${home}/sessions`);
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture(
+            '      - run: |\n          mv "$MCI_HOME/sessions" "$MCI_HOME/saved-sessions"\n          ln -s "$MCI_HOME/saved-sessions" "$MCI_HOME/sessions"\n          touch ready\n          sleep 30',
+          ),
+        );
+        const child = command(workspace, ["run", "ci.yml", "--job", "check"], env)
+          .spawn();
+        const output = child.output();
+        try {
+          await waitFor(() => exists(`${workspace}/ready`));
+        } finally {
+          child.kill("SIGINT");
+        }
+        const cancelled = await output;
+        equal(cancelled.code, 130);
+        assert(text(cancelled.stderr).includes("CI receipt update failed"));
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    }),
+});
+
+Deno.test({
   name: "CLI run records a session receipt before workflow validation",
   ignore: Deno.build.os !== "darwin",
   fn: () =>
@@ -218,9 +283,17 @@ Deno.test({
     inWorkspace(async (workspace) => {
       await withDaemon(workspace, async (directory) => {
         await Deno.writeTextFile(`${workspace}/ci.yml`, fixture("      - run: exit 3"));
-        const direct = await command(workspace, ["run", "ci.yml", "--job", "check"])
-          .output();
+        const direct = await command(workspace, ["run", "ci.yml", "--job", "check"], {
+          MCI_HOME: directory,
+          MCI_SESSION_ID: "direct-failure",
+        }).output();
         equal(direct.code, 1);
+        const directReceipts = unwrap(
+          await readSessionReceipts("direct-failure", directory),
+        );
+        equal(directReceipts.length, 1);
+        equal(directReceipts[0]?.outcome.kind, "failure");
+        assert(typeof directReceipts[0]?.finished === "string");
         const result = await command(workspace, ["ci", "ci.yml", "--job", "check"], {
           MCI_HOME: directory,
           MCI_SESSION_ID: "cli-failure",
@@ -409,31 +482,50 @@ Deno.test({
   ignore: Deno.build.os !== "darwin",
   fn: () =>
     inWorkspace(async (workspace) => {
-      await Deno.writeTextFile(
-        `${workspace}/ci.yml`,
-        fixture("      - run: echo ok > success"),
-      );
-      equal(
-        (await command(workspace, ["run", "ci.yml", "--job", "check"]).output()).code,
-        0,
-      );
-      assert(await exists(`${workspace}/success`));
-      await Deno.writeTextFile(
-        `${workspace}/ci.yml`,
-        fixture(
-          "      - run: |\n          touch ready\n          sleep 30\n      - run: touch skipped",
-        ),
-      );
-      const child = command(workspace, ["run", "ci.yml", "--job", "check"]).spawn();
-      const output = child.output();
+      const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-direct-" });
+      const env = { MCI_HOME: home, MCI_SESSION_ID: "direct-completion" };
       try {
-        await waitFor(() => exists(`${workspace}/ready`));
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture("      - run: echo ok > success"),
+        );
+        equal(
+          (await command(workspace, ["run", "ci.yml", "--job", "check"], env).output())
+            .code,
+          0,
+        );
+        assert(await exists(`${workspace}/success`));
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture(
+            "      - run: |\n          touch ready\n          sleep 30\n      - run: touch skipped",
+          ),
+        );
+        const child = command(workspace, ["run", "ci.yml", "--job", "check"], env)
+          .spawn();
+        const output = child.output();
+        try {
+          await waitFor(() => exists(`${workspace}/ready`));
+        } finally {
+          child.kill("SIGINT");
+        }
+        const result = await output;
+        equal(result.code, 130);
+        assert(!await exists(`${workspace}/skipped`));
+        const receipts = unwrap(await readSessionReceipts("direct-completion", home));
+        equal(receipts.length, 2);
+        equal(receipts.map((entry) => entry.outcome.kind).sort(), [
+          "cancelled",
+          "success",
+        ]);
+        assert(receipts.every((entry) => entry.finished !== null));
+        equal(
+          receipts.find((entry) => entry.outcome.kind === "cancelled")?.outcome.code,
+          130,
+        );
       } finally {
-        child.kill("SIGINT");
+        await Deno.remove(home, { recursive: true });
       }
-      const result = await output;
-      equal(result.code, 130);
-      assert(!await exists(`${workspace}/skipped`));
     }),
 });
 

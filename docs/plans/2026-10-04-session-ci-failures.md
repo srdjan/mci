@@ -33,10 +33,13 @@ Receipts contain no inherited environment or transcript content.
 
 A public `mci codex hook` command reads the Codex event from standard input. The adapter
 handles `PostToolUse`, `SessionStart`, `UserPromptSubmit`, and `Stop`. The adapter reads
-only the event's session receipts. Failures remain pending until a later passing
-invocation covers the same workspace, workflow, and job. A success that began before the
-failure finished cannot clear that failure. The adapter does not use command matching or a
-result age limit.
+receipts for an explicit `MCI_SESSION_ID` override or the event's session identifier. An
+override must exist before Codex starts so tools and hooks receive the same value. The
+adapter ignores inherited Codex identifiers. A runtime probe confirmed that hook processes
+retain parent identifiers while tools receive the current session identifiers. Failures
+remain pending until a later passing invocation covers the same workspace, workflow, and
+job. A success that began before the failure finished cannot clear that failure. The
+adapter does not use command matching or a result age limit.
 
 The adapter sends `systemMessage` for the user and `additionalContext` for the agent. The
 adapter deduplicates routine warnings by receipt identifier.

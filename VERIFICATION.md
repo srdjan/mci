@@ -1,5 +1,74 @@
 # Verification
 
+## CI failure communication in Codex
+
+On 2026-10-04, the complete local CI gate passed 242 Deno tests and 242 native monitor
+checks. One opposite-platform test was ignored. Formatting, linting, and type checking
+passed. The workflow completed in 29.32 seconds. This gate preceded the final
+session-override regression.
+
+The initial focused receipt, CLI, and adapter checks passed 29 tests in three seconds.
+After the missing-path correction, 15 receipt and adapter tests passed in 962
+milliseconds. Further CLI and adapter coverage passed 26 tests in three seconds. The
+checks assert final direct-run receipts and concurrent warning deduplication.
+
+The final focused receipt, CLI, and adapter checks passed 35 tests in three seconds. One
+opposite-platform test was ignored. Receipt storage tests confirm refusal before
+execution, failure after successful execution, and preservation of a nonzero cancellation
+code.
+
+A disposable Codex session received stale parent identifiers. Tool commands received the
+current session identifiers, but hook processes retained the parent identifiers. The
+failure receipt matched the event's session identifier. This probe completed in 50.58
+seconds. An override regression failed before the adapter honored `MCI_SESSION_ID`. After
+the fix, the adapter reported the failure and requested repair. It still ignored inherited
+Codex identifiers.
+
+A disposable Codex 0.160.0 session ran a deliberately failing job. The captured
+`PostToolUse` response contained a user warning and detailed repair context. The agent
+reported the failure, repaired the fixture, and passed the matching rerun. The final
+`Stop` response was empty. This probe completed in 19.45 seconds.
+
+A second disposable session tested `Stop` without `PostToolUse`. The agent first reported
+failure without repair. The hook requested continuation. The agent then repaired the
+fixture and passed the matching rerun. This probe completed in 23.03 seconds.
+
+A third session retained failure after the authorized repair could not fix the job. The
+first `Stop` requested continuation. The second `Stop` returned `continue: false`. The
+agent reported the repair blocker. This probe completed in 35.36 seconds.
+
+All three sessions used gpt-5.6-sol with high effort. The probes bypassed hook trust only
+for the disposable sessions. Normal installation retains Codex's trust requirement.
+
+The native CLI compiled successfully. A temporary workspace tested its failure warning,
+matching-pass clearance, and installer. The installer selected the stable Homebrew path.
+These checks did not update the installed package.
+
+Nine independent Sol review passes and separate finding validation completed. Corrections
+resolved all actionable findings. Review retained one advisory about duplicated validation
+of terminal kinds. No independent review used another model family.
+
+Review found that a missing workflow under a symlink changed identity after file creation.
+A public receipt test reproduced the mismatch before the fix. The CLI now resolves the
+deepest existing parent before it appends missing path parts.
+
+A future-start receipt test reproduced an invalid final time before the clock fix. The CLI
+now clamps the final time to the recorded start. The stored result remains decodable. This
+test uses a controlled receipt timestamp; it does not change the host clock.
+
+The runner recovery test initially inherited the coding session and left pending test
+receipts. A regression assertion failed before the test cleared session identifiers. After
+isolation, the recovery test passed in 165 milliseconds and left no receipt storage. The
+two known test receipts were removed from the active session.
+
+The source adapter installed successfully in this checkout. A second install produced the
+same configuration. The installer removed the exact legacy handler and retained hook trust
+settings. The user must review the new definitions before normal hook execution.
+
+The JSON transport proves hook output and agent communication. It does not prove the
+warning's visual presentation in the Codex desktop app. The session hooks request repair
+and continuation. They do not enforce a universal lock on tool calls.
+
 ## Legacy status import coverage
 
 On 2026-10-04, the legacy import tests in `tests/daemon_test.ts` gained coverage for the

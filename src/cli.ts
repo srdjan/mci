@@ -6,6 +6,7 @@ import {
   type CiReceiptOutcome,
   finishReceipt,
 } from "./ci-receipt.ts";
+import { codexCommand } from "./codex.ts";
 import { runDaemon } from "./daemon.ts";
 import { doctor, installHook } from "./hooks.ts";
 import { setup } from "./install.ts";
@@ -24,6 +25,7 @@ Usage: mci <check|run|ci> <workflow.yml> --job <id>
        mci logs <repository-id-or-path> [--follow]
        mci doctor [repository-id-or-path]
        mci hooks install <repository> --workflow <file> --job <id>
+       mci codex hook | mci codex install <repository>
 
 Run from the workspace root. check executes no workflow commands.
 ci requires a registered repository and a running daemon. It waits for its request.
@@ -219,6 +221,8 @@ export const main = async (args: readonly string[]): Promise<number> => {
     console.log("Installed the pre-commit hook and its Deno task.");
     return 0;
   }
+  const codex = await codexCommand(args);
+  if (codex !== null) return codex;
   const managed = await managementCommand(args, rpc);
   if (managed !== null) return managed;
   const [command, file, flag, job] = args;
