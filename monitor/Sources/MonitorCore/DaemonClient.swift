@@ -28,7 +28,7 @@ public struct DaemonClient: Sendable {
     }
 
     public static var defaultDirectory: String {
-        NSHomeDirectory() + "/Library/Application Support/meeci"
+        NSHomeDirectory() + "/Library/Application Support/mci"
     }
 
     public var socketPath: String { directory + "/daemon.sock" }

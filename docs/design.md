@@ -444,8 +444,9 @@ attention count covers unavailable, error, missing, interrupted, and failed repo
 
 Both installers stage the bundle next to the destination. They replace
 `~/Applications/mci Monitor.app` only when the destination is a real folder whose
-`Info.plist` carries `MCIInstaller = meeci`. Each moves the old bundle aside, moves the
-new one into place, and restores the old one if that move fails.
+`Info.plist` carries `MCIInstaller = mci`. Each installer moves the old bundle aside, then
+moves the new bundle into place. If that move fails, the installer restores the old
+bundle.
 
 `deno task monitor:install` builds the app, signs it ad hoc, verifies the signature, and
 registers the repository through the daemon. It requires a running daemon. On a reinstall,

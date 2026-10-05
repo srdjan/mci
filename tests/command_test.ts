@@ -45,12 +45,12 @@ Deno.test("captureCommand returns status and both output streams", async () => {
 
 Deno.test("captureCommand returns a launch failure", async () => {
   const result = await captureCommand(
-    "/missing/meeci-command",
+    "/missing/mci-command",
     {},
     capturePolicy(1024, 1024, 10, 10),
   );
   assert(!result.ok);
-  assert(result.error.includes("Unable to launch command /missing/meeci-command"));
+  assert(result.error.includes("Unable to launch command /missing/mci-command"));
 });
 
 Deno.test("captureCommand kills and reaps a timed out command", async () => {

@@ -52,7 +52,7 @@ const fakeCapabilities = (overrides: Overrides = {}): Fake => {
   const capabilities = {
     readOwner: () => {
       calls.push("owner");
-      return Promise.resolve(ok("meeci"));
+      return Promise.resolve(ok("mci"));
     },
     verifySignature: () => {
       calls.push("signature");
@@ -140,7 +140,7 @@ Deno.test("setup refuses a foreign destination before it copies files", async ()
     await Deno.writeTextFile(`${scene.destination}/marker`, "foreign");
     const fake = fakeCapabilities({
       readOwner: (bundle) =>
-        Promise.resolve(ok(bundle === scene.source ? "meeci" : "other")),
+        Promise.resolve(ok(bundle === scene.source ? "mci" : "other")),
     });
     const result = await setupWith(scene.options, fake.capabilities);
     assert(!result.ok && result.error.includes("not owned"));

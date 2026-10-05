@@ -14,7 +14,7 @@
         "job": "check",
         "started": "2026-10-03T18:00:10.000Z",
         "step": "test",
-        "log": "/tmp/meeci/logs/run-new.log"
+        "log": "/tmp/mci/logs/run-new.log"
       },
       "latest": {
         "id": "run-old",
@@ -28,7 +28,7 @@
         "completed": 2,
         "total": 3,
         "detail": "test",
-        "log": "/tmp/meeci/logs/run-old.log"
+        "log": "/tmp/mci/logs/run-old.log"
       },
       "blocked": null
     },
@@ -49,7 +49,7 @@
         "completed": 3,
         "total": 3,
         "detail": "",
-        "log": "/tmp/meeci/logs/run-pass.log"
+        "log": "/tmp/mci/logs/run-pass.log"
       },
       "blocked": "configuration changed"
     }

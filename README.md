@@ -26,9 +26,9 @@ removal.
 
 ```sh
 deno task package
-brew tap-new --no-git local/meeci
-cp dist/tap/Formula/mci.rb "$(brew --repo local/meeci)/Formula/mci.rb"
-brew install local/meeci/mci
+brew tap-new --no-git local/mci
+cp dist/tap/Formula/mci.rb "$(brew --repo local/mci)/Formula/mci.rb"
+brew install local/mci/mci
 mci setup
 ```
 
@@ -81,13 +81,20 @@ not affect requests from other clients.
 After a daemon restart, an unfinished request that began becomes INTERRUPTED. The daemon
 drops a queued request that never began. It retries neither.
 
+The daemon and monitor use `~/Library/Application Support/mci` for shared state. Existing
+installations do not migrate state automatically. Before an upgrade, stop the service.
+Move the previous state directory to this location. If the installed monitor has a
+different `MCIInstaller` value, move its bundle aside before `mci setup`.
+
+After renaming a repository folder, register its new path with `mci register`.
+
 To update a same-version local package, build and copy the formula again. Then reinstall
 the formula, restart the service, and refresh the monitor app.
 
 ```sh
 deno task package
-cp dist/tap/Formula/mci.rb "$(brew --repo local/meeci)/Formula/mci.rb"
-brew reinstall local/meeci/mci
+cp dist/tap/Formula/mci.rb "$(brew --repo local/mci)/Formula/mci.rb"
+brew reinstall local/mci/mci
 brew services restart mci
 mci setup
 ```

@@ -10,7 +10,7 @@ export type ServicePaths = {
 };
 export const servicePaths = (home?: string): Result<ServicePaths> => {
   const directory = home ?? Deno.env.get("MCI_HOME") ??
-    `${Deno.env.get("HOME") ?? ""}/Library/Application Support/meeci`;
+    `${Deno.env.get("HOME") ?? ""}/Library/Application Support/mci`;
   if (
     !directory.startsWith("/") || directory.includes("\0") ||
     (!home && !Deno.env.get("MCI_HOME") && !Deno.env.get("HOME")?.startsWith("/"))

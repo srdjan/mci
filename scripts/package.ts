@@ -40,7 +40,7 @@ export type PackagePublicationCapabilities = {
 };
 
 const bundleName = "mci Monitor.app";
-const ownerValue = "meeci";
+const ownerValue = "mci";
 
 const rubyString = (value: string): string =>
   value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');

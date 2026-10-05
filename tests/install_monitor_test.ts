@@ -164,7 +164,7 @@ Deno.test("fresh install builds, stages, signs, registers, and opens", async () 
     equal(plist, infoPlist("9.8.7"));
     for (
       const line of [
-        "<key>CFBundleIdentifier</key>\n  <string>dev.meeci.monitor</string>",
+        "<key>CFBundleIdentifier</key>\n  <string>dev.mci.monitor</string>",
         "<key>CFBundleName</key>\n  <string>mci Monitor</string>",
         "<key>CFBundleDisplayName</key>\n  <string>mci Monitor</string>",
         "<key>CFBundleExecutable</key>\n  <string>MonitorApp</string>",
@@ -174,7 +174,7 @@ Deno.test("fresh install builds, stages, signs, registers, and opens", async () 
         "<key>LSUIElement</key>\n  <true/>",
         "<key>LSMinimumSystemVersion</key>\n  <string>14.0</string>",
         "<key>NSHighResolutionCapable</key>\n  <true/>",
-        "<key>MCIInstaller</key>\n  <string>meeci</string>",
+        "<key>MCIInstaller</key>\n  <string>mci</string>",
       ]
     ) assert(plist.includes(line), `Info.plist lacks ${line}`);
     assert(!await exists(scene.registry));
@@ -221,7 +221,7 @@ Deno.test("reinstall replaces an owned bundle and leaves no staging or backup", 
   });
 });
 
-Deno.test("a bundle without the meeci key is refused and left untouched", async () => {
+Deno.test("a bundle without the mci key is refused and left untouched", async () => {
   const foreign = [
     `<plist><dict><key>CFBundleName</key><string>Other</string></dict></plist>`,
     `<plist><dict><key>MCIInstaller</key><string>someone</string></dict></plist>`,
@@ -231,7 +231,7 @@ Deno.test("a bundle without the meeci key is refused and left untouched", async 
       await writeBundle(scene.destination, plist, "foreign");
       const fake = fakeCapabilities(scene.root);
       const result = await installMonitor(scene.options, fake.capabilities);
-      assert(!result.ok && result.error.includes("was not installed by meeci"));
+      assert(!result.ok && result.error.includes("was not installed by mci"));
       equal(await readMarker(scene.destination), "foreign");
       equal(await Deno.readTextFile(`${scene.destination}/Contents/Info.plist`), plist);
       equal(await names(scene.applications), ["mci Monitor.app"]);

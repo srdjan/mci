@@ -493,8 +493,8 @@ linting, type checking, and architecture checks passed.
 The Deno suite passed 155 tests with one opposite-platform test ignored. The native
 monitor suite passed 309 checks.
 
-The final archive built successfully and installed through the local Homebrew tap.
-`brew test local/meeci/mci` passed. The Homebrew daemon restarted successfully. Setup also
+The final archive built successfully and installed through the local Homebrew tap. The
+Homebrew formula test passed. The Homebrew daemon restarted successfully. Setup also
 started a stopped service after reading Homebrew state.
 
 Two temporary repositories ran Deno tasks concurrently through the installed daemon. The

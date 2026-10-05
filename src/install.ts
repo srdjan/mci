@@ -4,7 +4,7 @@ import { captureCommand } from "./command.ts";
 import { attempt, err, ok, type Result } from "./result.ts";
 
 const bundleName = "mci Monitor.app";
-const ownerValue = "meeci";
+const ownerValue = "mci";
 const knownBrews = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"] as const;
 const commandPolicy = {
   timeoutMs: 120000,

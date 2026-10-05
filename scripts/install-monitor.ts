@@ -7,7 +7,7 @@ import { canonicalDirectory } from "./registry.ts";
 
 const bundleName = "mci Monitor.app";
 const executableName = "MonitorApp";
-const ownerValue = "meeci";
+const ownerValue = "mci";
 const usage = "usage: deno task monitor:install [workspace]";
 
 export type MonitorOptions = {
@@ -46,7 +46,7 @@ const escapeXml = (value: string): string =>
     .replaceAll('"', "&quot;");
 
 const plistEntries = (version: string): readonly (readonly [string, string])[] => [
-  ["CFBundleIdentifier", `<string>dev.meeci.monitor</string>`],
+  ["CFBundleIdentifier", `<string>dev.mci.monitor</string>`],
   ["CFBundleName", `<string>mci Monitor</string>`],
   ["CFBundleDisplayName", `<string>mci Monitor</string>`],
   ["CFBundleExecutable", `<string>${executableName}</string>`],
@@ -96,7 +96,7 @@ const assemble = async (
     await Deno.writeTextFile(`${staging}/Contents/Info.plist`, infoPlist(version));
   });
 
-/** The destination is replaceable when it is a real folder that meeci installed. */
+/** The destination is replaceable when it is a real folder that mci installed. */
 const checkDestination = async (
   destination: string,
   capabilities: MonitorCapabilities,
@@ -109,7 +109,7 @@ const checkDestination = async (
   const key = await capabilities.readInstallerKey(destination);
   if (!key.ok || key.value !== ownerValue) {
     return err(
-      `${destination} was not installed by meeci (MCIInstaller is not "${ownerValue}"). ` +
+      `${destination} was not installed by mci (MCIInstaller is not "${ownerValue}"). ` +
         `It is left unchanged.`,
     );
   }
