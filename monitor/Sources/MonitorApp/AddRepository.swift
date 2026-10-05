@@ -17,7 +17,7 @@ final class AddRepositoryPresenter {
         chooser.canChooseFiles = false
         chooser.allowsMultipleSelection = false
         chooser.prompt = "Add"
-        chooser.message = "Choose a repository folder to monitor"
+        chooser.message = "Choose a repository folder. mci will monitor the folder and install the pre-commit hook for ci/local-ci.yml and job check."
         panel = chooser
         chooser.begin { [weak self] response in
             MainActor.assumeIsolated {

@@ -426,6 +426,15 @@ times.
 The app can register or unregister a repository through daemon requests. Unregistration
 fails while that repository has accepted requests.
 
+After folder registration succeeds, the app invokes the installed CLI to install the
+managed pre-commit hook. The menu action selects `ci/local-ci.yml` and job `check`. The
+app finds the CLI through the stable Homebrew paths and passes arguments directly. The
+command runs outside the main actor with a deadline of 120 seconds.
+
+The CLI owns hook validation, conflict detection, and rollback. If hook installation
+fails, the app keeps the registered repository and shows the hook error. Status refreshes
+preserve that error. A subsequent successful action clears it.
+
 The monitor does not submit or cancel CI. It opens repositories and reads selected spool
 logs without changing them.
 

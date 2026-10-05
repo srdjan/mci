@@ -317,6 +317,13 @@ less .mci/ci/latest.log
 The menu bar app observes daemon snapshots and status. It can register or unregister a
 repository, open a repository, and open saved logs.
 
+When you add a folder, the app registers the repository, then installs its managed
+pre-commit hook. The menu action uses `ci/local-ci.yml` and job `check`. Hook installation
+adds the `mci:ci` task and sets the Git hook path for the selected worktree.
+
+If hook installation fails, the folder stays registered and the app shows the error. For
+another workflow or job, use `mci hooks install` with the required arguments.
+
 The monitor never starts CI. It shows the active request, queue count, and latest
 completed result for each repository.
 

@@ -13,6 +13,7 @@ final class MonitorModel {
     var combined: CombinedState { combinedState(rows, daemonAvailable: daemonAvailable) }
 
     @ObservationIgnored private let client: DaemonClient
+    @ObservationIgnored private let hookInstaller: HookInstaller
     @ObservationIgnored private var watcher: DirectoryWatcher?
     @ObservationIgnored private var refreshing = false
     @ObservationIgnored private var refreshAgain = false
@@ -20,8 +21,9 @@ final class MonitorModel {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var actionUncertain = false
 
-    init(client: DaemonClient = DaemonClient()) {
+    init(client: DaemonClient = DaemonClient(), hookInstaller: HookInstaller = HookInstaller()) {
         self.client = client
+        self.hookInstaller = hookInstaller
     }
 
     func start() {
@@ -45,7 +47,18 @@ final class MonitorModel {
     func add(path: String) {
         Task { [weak self] in
             guard let self else { return }
-            await apply(await client.register(path: path))
+            switch await client.register(path: path) {
+            case .failure(let error):
+                await apply(.failure(error))
+            case .success(let snapshot):
+                actionError = nil
+                actionUncertain = false
+                use(snapshot: snapshot, daemonAvailable: true)
+                if case .failure(let error) = await hookInstaller.install(repository: path) {
+                    actionError = "Repository registered. Hook installation failed: \(error.message)"
+                    actionUncertain = false
+                }
+            }
         }
     }
 
