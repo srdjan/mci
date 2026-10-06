@@ -351,6 +351,18 @@ adds the `mci:ci` task and sets the Git hook path for the selected worktree.
 If hook installation fails, the folder stays registered and the app shows the error. For
 another workflow or job, use `mci hooks install` with the required arguments.
 
+The monitor checks each repository's effective pre-commit hook and Deno task. A missing
+hook shows `Hook installation required` beside the run history. `Retry hook installation`
+repeats setup for `ci/local-ci.yml` and job `check`. The retry action does not start CI.
+
+An inspection failure shows its own error instead of claiming that the hook is missing.
+`Retry hook check` repeats that read-only inspection. The monitor checks again after
+restart and during status refresh. Offline rows keep the last hook check and disable
+retry.
+
+Hook installation preserves `deno.json` when its managed task already matches. A folder
+must be the Git worktree root; the installer checks that root before local configuration.
+
 The monitor never starts CI. It shows the active request, queue count, and latest
 completed result for each repository.
 

@@ -88,10 +88,12 @@ public struct RowState: Equatable, Sendable {
     public let queued: Int
     public let active: DaemonActive?
     public let latest: DaemonTerminal?
+    public let hookReadiness: HookReadiness?
 
     public init(
         workspace: String, kind: DisplayKind, lastRun: Date? = nil, code: Int? = nil,
-        duration: TimeInterval? = nil, detail: String? = nil
+        duration: TimeInterval? = nil, detail: String? = nil,
+        hookReadiness: HookReadiness? = nil
     ) {
         self.repositoryID = workspace
         self.workspace = workspace
@@ -104,11 +106,12 @@ public struct RowState: Equatable, Sendable {
         self.queued = 0
         self.active = nil
         self.latest = nil
+        self.hookReadiness = hookReadiness
     }
 
     public init(
         repository: DaemonRepository, kind: DisplayKind, lastRun: Date?,
-        duration: TimeInterval?, detail: String?
+        duration: TimeInterval?, detail: String?, hookReadiness: HookReadiness? = nil
     ) {
         self.repositoryID = repository.id
         self.workspace = repository.path
@@ -121,6 +124,7 @@ public struct RowState: Equatable, Sendable {
         self.queued = repository.queued
         self.active = repository.active
         self.latest = repository.latest
+        self.hookReadiness = hookReadiness
     }
 
     public var selectedLog: String? { active?.log ?? latest?.log }
@@ -145,7 +149,12 @@ public struct CombinedState: Equatable, Sendable {
 public func combinedState(_ rows: [RowState], daemonAvailable: Bool = true) -> CombinedState {
     let kind = daemonAvailable
         ? rows.map(\.kind).min { $0.urgency < $1.urgency } ?? .noRuns : .unavailable
-    return CombinedState(kind: kind, attention: rows.filter { $0.kind.needsAttention }.count)
+    let hookIssue = rows.contains { $0.hookReadiness?.needsAttention == true }
+    let combinedKind = daemonAvailable && hookIssue && kind.urgency > DisplayKind.error.urgency
+        ? .error : kind
+    return CombinedState(
+        kind: combinedKind,
+        attention: rows.filter { $0.kind.needsAttention || $0.hookReadiness?.needsAttention == true }.count)
 }
 
 private func terminalDisplayKind(_ kind: TerminalKind) -> DisplayKind {
@@ -173,7 +182,9 @@ private func terminalDetail(_ terminal: DaemonTerminal, duration: TimeInterval?)
 }
 
 /// Builds a row from daemon authority. A stale snapshot contributes completed history only.
-public func rowState(repository: DaemonRepository, daemonAvailable: Bool) -> RowState {
+public func rowState(
+    repository: DaemonRepository, daemonAvailable: Bool, hookReadiness: HookReadiness? = nil
+) -> RowState {
     let repository = daemonAvailable
         ? repository
         : DaemonRepository(
@@ -187,37 +198,38 @@ public func rowState(repository: DaemonRepository, daemonAvailable: Bool) -> Row
     if !isDirectory(repository.path) {
         return RowState(
             repository: repository, kind: .missing, lastRun: finished, duration: duration,
-            detail: "The repository folder is missing or is not a folder.")
+            detail: "The repository folder is missing or is not a folder.", hookReadiness: hookReadiness)
     }
     if !daemonAvailable {
         let kind = latest.map { terminalDisplayKind($0.kind) } ?? .unavailable
         return RowState(
             repository: repository, kind: kind, lastRun: finished, duration: duration,
-            detail: latestDetail)
+            detail: latestDetail, hookReadiness: hookReadiness)
     }
     if let blocked = repository.blocked {
         return RowState(
             repository: repository, kind: .error, lastRun: finished, duration: duration,
-            detail: blocked)
+            detail: blocked, hookReadiness: hookReadiness)
     }
     if let active = repository.active {
         return RowState(
             repository: repository, kind: .running, lastRun: parseTimestamp(active.started),
-            duration: duration, detail: active.step)
+            duration: duration, detail: active.step, hookReadiness: hookReadiness)
     }
     if repository.queued > 0 {
         let noun = repository.queued == 1 ? "job" : "jobs"
         return RowState(
             repository: repository, kind: .queued, lastRun: finished, duration: duration,
-            detail: "\(repository.queued) \(noun) queued")
+            detail: "\(repository.queued) \(noun) queued", hookReadiness: hookReadiness)
     }
     if let latest {
         return RowState(
             repository: repository, kind: terminalDisplayKind(latest.kind), lastRun: finished,
-            duration: duration, detail: latestDetail)
+            duration: duration, detail: latestDetail, hookReadiness: hookReadiness)
     }
     return RowState(
-        repository: repository, kind: .noRuns, lastRun: nil, duration: nil, detail: nil)
+        repository: repository, kind: .noRuns, lastRun: nil, duration: nil, detail: nil,
+        hookReadiness: hookReadiness)
 }
 
 public func terminalSummary(_ terminal: DaemonTerminal, now: Date) -> String {
@@ -237,4 +249,13 @@ public func terminalSummary(_ terminal: DaemonTerminal, now: Date) -> String {
         code, duration,
     ]
     return parts.compactMap { $0 }.joined(separator: " \u{00B7} ")
+}
+
+extension HookReadiness {
+    public var needsAttention: Bool {
+        switch self {
+        case .installed: false
+        case .required, .checkFailed: true
+        }
+    }
 }
