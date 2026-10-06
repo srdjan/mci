@@ -323,6 +323,49 @@ Deno.test("hook installation preserves a matching custom deno.json", async () =>
   });
 });
 
+Deno.test("hook installation repeats through the stable Homebrew symlink", async () => {
+  await withRepository(async (repository, prefix) => {
+    const cellar = prefix.replace("/opt/mci", "/Cellar/mci/0.3.0");
+    await Deno.mkdir(cellar.slice(0, cellar.lastIndexOf("/")), { recursive: true });
+    await Deno.rename(prefix, cellar);
+    await Deno.symlink(cellar, prefix);
+    const configPath = `${repository}/deno.json`;
+    const before = customConfig(prefix);
+    await Deno.writeTextFile(configPath, before);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      unwrap(
+        await installHookWith(
+          repository,
+          ".github/workflows/ci.yml",
+          "check",
+          capabilities(prefix),
+        ),
+      );
+      equal(await Deno.readTextFile(configPath), before);
+      equal(
+        await readGit(repository, ["config", "--worktree", "--get", "core.hooksPath"]),
+        `${prefix}/libexec/hooks`,
+      );
+    }
+    await runGit(repository, [
+      "config",
+      "--local",
+      "core.hooksPath",
+      `${cellar}/libexec/hooks`,
+    ]);
+    const gitBefore = await Deno.readTextFile(`${repository}/.git/config`);
+    const refused = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      capabilities(prefix),
+    );
+    assert(!refused.ok && refused.error.includes("shared core.hooksPath"));
+    equal(await Deno.readTextFile(`${repository}/.git/config`), gitBefore);
+    equal(await Deno.readTextFile(configPath), before);
+  });
+});
+
 Deno.test("later Git failure preserves a matching custom deno.json", async () => {
   await withRepository(async (repository, prefix) => {
     const configPath = `${repository}/deno.json`;

@@ -266,6 +266,12 @@ export const installHookWith = async (
     return err(`The stable Homebrew binary is not available at ${binary}.`);
   }
   const hooksPath = `${prefix.value}/libexec/hooks`;
+  const canonicalHooksPath = await attempt(() => Deno.realPath(hooksPath));
+  if (!canonicalHooksPath.ok) {
+    return err(
+      `Cannot resolve the packaged hooks directory: ${canonicalHooksPath.error}`,
+    );
+  }
   const packagedHookPath = `${hooksPath}/${hookName}`;
   const packagedHookState = await regularFile(packagedHookPath);
   if (!packagedHookState.ok || packagedHookState.value !== "file") {
@@ -323,7 +329,8 @@ export const installHookWith = async (
   if (
     commonConfigured.ok &&
     (commonConfigured.value === legacyHookDirectory ||
-      commonConfigured.value === hooksPath)
+      commonConfigured.value === hooksPath ||
+      commonConfigured.value === canonicalHooksPath.value)
   ) {
     return err(
       `The shared core.hooksPath uses the managed ${commonConfigured.value} path. ` +
@@ -368,7 +375,7 @@ export const installHookWith = async (
   if (!activeHooks.ok) {
     return err(`Cannot resolve the active Git hooks directory: ${activeHooks.error}`);
   }
-  if (configured.ok && activeHooks.value !== hooksPath) {
+  if (configured.ok && activeHooks.value !== canonicalHooksPath.value) {
     return err(`core.hooksPath already names ${configured.value}.`);
   }
   const activeHookPath = `${activeHooks.value}/${hookName}`;
