@@ -26,8 +26,14 @@ jobs:
   check:
     runs-on: macos-latest
     steps:
-      - name: Verify repository
-        run: deno task verify
+      - name: Run fmt:check
+        run: deno task fmt:check
+      - name: Run lint
+        run: deno task lint
+      - name: Run check
+        run: deno task check
+      - name: Run test
+        run: deno task test
 `;
 
 const sourceHook = `#!/usr/bin/env bash
@@ -261,7 +267,7 @@ Deno.test("hook setup generates the canonical workflow and repeats without chang
     await Deno.remove(`${repository}/.github`, { recursive: true });
     await Deno.writeTextFile(
       `${repository}/deno.json`,
-      '{"tasks":{"verify":"deno fmt --check"}}\n',
+      '{"tasks":{"test":"deno test","check":"deno check .","lint":"deno lint","fmt:check":"deno fmt --check"}}\n',
     );
 
     unwrap(await setupHookWith(repository, capabilities(prefix)));
@@ -312,7 +318,7 @@ Deno.test("hook setup preserves an existing workflow byte for byte", async () =>
     await Deno.writeTextFile(workflowPath, existing);
     await Deno.writeTextFile(
       `${repository}/deno.json`,
-      '{"tasks":{"verify":"deno test"}}\n',
+      '{"tasks":{"test":"deno test"}}\n',
     );
 
     unwrap(await setupHookWith(repository, capabilities(prefix)));
@@ -320,15 +326,16 @@ Deno.test("hook setup preserves an existing workflow byte for byte", async () =>
   });
 });
 
-Deno.test("hook setup rejects a missing verify task without mutation", async () => {
+Deno.test("hook setup rejects a repository without standard tasks", async () => {
   await withRepository(async (repository, prefix) => {
     await Deno.remove(`${repository}/.github`, { recursive: true });
     const configPath = `${repository}/deno.json`;
+    await Deno.writeTextFile(configPath, '{"tasks":{"build":"deno task bundle"}}\n');
     const beforeConfig = await Deno.readTextFile(configPath);
     const beforeGit = await Deno.readTextFile(`${repository}/.git/config`);
 
     const result = await setupHookWith(repository, capabilities(prefix));
-    assert(!result.ok && result.error.includes("verify"));
+    assert(!result.ok && result.error.includes("standard task"));
     equal(await Deno.readTextFile(configPath), beforeConfig);
     equal(await Deno.readTextFile(`${repository}/.git/config`), beforeGit);
     assert(!await exists(`${repository}/ci`));
@@ -336,31 +343,35 @@ Deno.test("hook setup rejects a missing verify task without mutation", async () 
   });
 });
 
-Deno.test("hook setup validates verify before Homebrew", async () => {
+Deno.test("hook setup validates standard tasks before Homebrew", async () => {
   await withRepository(async (repository, prefix) => {
     await Deno.remove(`${repository}/.github`, { recursive: true });
+    await Deno.writeTextFile(
+      `${repository}/deno.json`,
+      '{"tasks":{"build":"deno task bundle"}}\n',
+    );
     const delegated = capabilities(prefix);
     const result = await setupHookWith(repository, {
       ...delegated,
       brewPrefix: () => Promise.resolve(err("Homebrew must not run")),
     });
-    assert(!result.ok && result.error.includes("verify"));
+    assert(!result.ok && result.error.includes("standard task"));
     assert(!result.ok && !result.error.includes("Homebrew must not run"));
   });
 });
 
-Deno.test("hook setup rejects direct and indirect recursive verify tasks", async () => {
+Deno.test("hook setup rejects direct and indirect recursive selected tasks", async () => {
   for (
     const tasks of [
-      { verify: "mci ci ci/local-ci.yml --job check" },
+      { test: "mci ci ci/local-ci.yml --job check" },
       {
-        verify: "'/opt/homebrew/opt/mci/bin/mci' ci 'ci/local-ci.yml' --job 'check'",
+        test: "'/opt/homebrew/opt/mci/bin/mci' ci 'ci/local-ci.yml' --job 'check'",
       },
       {
-        verify: '"/opt/homebrew/opt/mci/bin/mci" ci "ci/local-ci.yml" --job "check"',
+        test: '"/opt/homebrew/opt/mci/bin/mci" ci "ci/local-ci.yml" --job "check"',
       },
-      { verify: "deno task prepare", prepare: "deno task verify" },
-      { verify: "deno task prepare", prepare: "deno task ci", ci: "deno test" },
+      { test: "deno task prepare", prepare: "deno task test" },
+      { test: "deno task prepare", prepare: "deno task ci", ci: "deno test" },
     ]
   ) {
     await withRepository(async (repository, prefix) => {
@@ -381,13 +392,73 @@ Deno.test("hook setup rejects direct and indirect recursive verify tasks", async
   }
 });
 
+Deno.test("hook setup generates present standard tasks in canonical order", async () => {
+  await withRepository(async (repository, prefix) => {
+    await Deno.remove(`${repository}/.github`, { recursive: true });
+    await Deno.writeTextFile(
+      `${repository}/deno.json`,
+      '{"tasks":{"test":"deno test","fmt:check":"deno fmt --check"}}\n',
+    );
+
+    unwrap(await setupHookWith(repository, capabilities(prefix)));
+    equal(
+      await Deno.readTextFile(`${repository}/ci/local-ci.yml`),
+      generatedWorkflow.replace(
+        "      - name: Run lint\n        run: deno task lint\n      - name: Run check\n        run: deno task check\n",
+        "",
+      ),
+    );
+  });
+});
+
+Deno.test("hook setup rejects invalid present standard tasks before mutation", async () => {
+  for (const invalid of ["", "   ", null, 42]) {
+    await withRepository(async (repository, prefix) => {
+      await Deno.remove(`${repository}/.github`, { recursive: true });
+      await Deno.writeTextFile(
+        `${repository}/deno.json`,
+        `${JSON.stringify({ tasks: { test: invalid } })}\n`,
+      );
+      const beforeGit = await Deno.readTextFile(`${repository}/.git/config`);
+      const result = await setupHookWith(repository, {
+        ...capabilities(prefix),
+        brewPrefix: () => Promise.resolve(err("Homebrew must not run")),
+      });
+
+      assert(!result.ok && result.error.includes("nonempty string task named test"));
+      assert(!result.ok && !result.error.includes("Homebrew must not run"));
+      equal(await Deno.readTextFile(`${repository}/.git/config`), beforeGit);
+      assert(!await exists(`${repository}/ci`));
+      assert(!await exists(`${repository}/.gitignore`));
+    });
+  }
+});
+
+Deno.test("hook setup preserves optional workflow tasks byte for byte", async () => {
+  await withRepository(async (repository, prefix) => {
+    await Deno.mkdir(`${repository}/ci`);
+    const existing = workflow.replace(
+      "      - run: deno task test\n        shell: bash",
+      "      - run: |\n          deno task build\n          deno task browser\n        shell: bash",
+    );
+    await Deno.writeTextFile(`${repository}/ci/local-ci.yml`, existing);
+    await Deno.writeTextFile(
+      `${repository}/deno.json`,
+      '{"tasks":{"test":"deno test"}}\n',
+    );
+
+    unwrap(await setupHookWith(repository, capabilities(prefix)));
+    equal(await Deno.readTextFile(`${repository}/ci/local-ci.yml`), existing);
+  });
+});
+
 Deno.test("hook setup refuses a redirected ci directory", async () => {
   await withRepository(async (repository, prefix) => {
     const outside = await Deno.makeTempDir({ prefix: "mci setup outside " });
     try {
       await Deno.writeTextFile(
         `${repository}/deno.json`,
-        '{"tasks":{"verify":"deno test"}}\n',
+        '{"tasks":{"test":"deno test"}}\n',
       );
       await Deno.symlink(outside, `${repository}/ci`);
       const result = await setupHookWith(repository, capabilities(prefix));
@@ -404,7 +475,7 @@ Deno.test("hook setup requires explicit pre-push replacement and preserves its b
     await Deno.remove(`${repository}/.github`, { recursive: true });
     await Deno.writeTextFile(
       `${repository}/deno.json`,
-      '{"tasks":{"verify":"deno test"}}\n',
+      '{"tasks":{"test":"deno test"}}\n',
     );
     await Deno.mkdir(`${repository}/.githooks`);
     const prePush = `${repository}/.githooks/pre-push`;
@@ -440,7 +511,7 @@ Deno.test("hook setup migrates an equivalent repository-owned hook path", async 
   await withRepository(async (repository, prefix) => {
     await Deno.writeTextFile(
       `${repository}/deno.json`,
-      '{"tasks":{"verify":"deno test"}}\n',
+      '{"tasks":{"test":"deno test"}}\n',
     );
     await Deno.mkdir(`${repository}/.githooks`);
     await Deno.writeTextFile(
@@ -476,7 +547,7 @@ Deno.test("hook setup refuses unknown pre-commit and unrelated executable hooks"
     await withRepository(async (repository, prefix) => {
       await Deno.writeTextFile(
         `${repository}/deno.json`,
-        '{"tasks":{"verify":"deno test"}}\n',
+        '{"tasks":{"test":"deno test"}}\n',
       );
       await Deno.mkdir(`${repository}/.githooks`);
       await Deno.writeTextFile(`${repository}/.githooks/${hook}`, "#!/bin/sh\nexit 0\n");
@@ -499,7 +570,7 @@ Deno.test("hook setup ignores sample and nonexecutable hook files", async () => 
   await withRepository(async (repository, prefix) => {
     await Deno.writeTextFile(
       `${repository}/deno.json`,
-      '{"tasks":{"verify":"deno test"}}\n',
+      '{"tasks":{"test":"deno test"}}\n',
     );
     await Deno.mkdir(`${repository}/.githooks`);
     await Deno.writeTextFile(`${repository}/.githooks/pre-push`, "#!/bin/sh\nexit 0\n");
@@ -518,7 +589,7 @@ Deno.test("hook setup ignores sample and nonexecutable hook files", async () => 
   });
 });
 
-Deno.test("hook setup preserves an existing repository-owned mci hook", async () => {
+Deno.test("hook setup refuses the repository source hook without mutation", async () => {
   await withRepository(async (repository, prefix) => {
     await Deno.remove(`${repository}/.github`, { recursive: true });
     await Deno.mkdir(`${repository}/.githooks`);
@@ -526,20 +597,21 @@ Deno.test("hook setup preserves an existing repository-owned mci hook", async ()
     await Deno.chmod(`${repository}/.githooks/pre-commit`, 0o755);
     await Deno.writeTextFile(
       `${repository}/deno.json`,
-      '{"tasks":{"ci":"deno task verify"}}\n',
+      '{"tasks":{"ci":"deno task test","test":"deno test"}}\n',
     );
     await runGit(repository, ["config", "--local", "core.hooksPath", ".githooks"]);
     const beforeConfig = await Deno.readTextFile(`${repository}/deno.json`);
     const beforeGit = await Deno.readTextFile(`${repository}/.git/config`);
 
-    unwrap(await setupHookWith(repository, capabilities(prefix)));
+    const result = await setupHookWith(repository, capabilities(prefix));
+    assert(!result.ok && result.error.includes("unsupported pre-commit hook"));
     equal(await Deno.readTextFile(`${repository}/deno.json`), beforeConfig);
     equal(await Deno.readTextFile(`${repository}/.git/config`), beforeGit);
     assert(!await exists(`${repository}/ci`));
   });
 });
 
-Deno.test("hook setup replaces pre-push beside a supported source hook", async () => {
+Deno.test("hook setup refuses a source hook even with pre-push replacement", async () => {
   await withRepository(async (repository, prefix) => {
     await Deno.remove(`${repository}/.github`, { recursive: true });
     await Deno.mkdir(`${repository}/.githooks`);
@@ -551,19 +623,18 @@ Deno.test("hook setup replaces pre-push beside a supported source hook", async (
     await Deno.chmod(prePush, 0o755);
     await Deno.writeTextFile(
       `${repository}/deno.json`,
-      '{"tasks":{"ci":"deno task verify","verify":"deno test"}}\n',
+      '{"tasks":{"ci":"deno task test","test":"deno test"}}\n',
     );
     await runGit(repository, ["config", "--local", "core.hooksPath", ".githooks"]);
 
-    unwrap(
-      await setupHookWith(repository, capabilities(prefix), {
-        replacePrePush: true,
-      }),
-    );
+    const result = await setupHookWith(repository, capabilities(prefix), {
+      replacePrePush: true,
+    });
+    assert(!result.ok && result.error.includes("unsupported pre-commit hook"));
     equal(await Deno.readTextFile(prePush), prePushSource);
     equal(
-      await readGit(repository, ["config", "--worktree", "--get", "core.hooksPath"]),
-      `${prefix}/libexec/hooks`,
+      await readGit(repository, ["config", "--local", "--get", "core.hooksPath"]),
+      ".githooks",
     );
   });
 });
@@ -571,8 +642,8 @@ Deno.test("hook setup replaces pre-push beside a supported source hook", async (
 Deno.test("hook setup preserves deno.json changed before its task write", async () => {
   await withRepository(async (repository, prefix) => {
     const configPath = `${repository}/deno.json`;
-    await Deno.writeTextFile(configPath, '{"tasks":{"verify":"deno test"}}\n');
-    const replacement = '{"tasks":{"verify":"deno test"},"user":"concurrent edit"}\n';
+    await Deno.writeTextFile(configPath, '{"tasks":{"test":"deno test"}}\n');
+    const replacement = '{"tasks":{"test":"deno test"},"user":"concurrent edit"}\n';
     const delegated = capabilities(prefix);
     let changed = false;
     const result = await setupHookWith(repository, {
@@ -598,9 +669,9 @@ Deno.test("hook setup preserves deno.json changed before its task write", async 
 Deno.test("hook setup preserves deno.json changed before rollback", async () => {
   await withRepository(async (repository, prefix) => {
     const configPath = `${repository}/deno.json`;
-    await Deno.writeTextFile(configPath, '{"tasks":{"verify":"deno test"}}\n');
+    await Deno.writeTextFile(configPath, '{"tasks":{"test":"deno test"}}\n');
     const replacement =
-      '{"tasks":{"verify":"deno test"},"user":"concurrent rollback edit"}\n';
+      '{"tasks":{"test":"deno test"},"user":"concurrent rollback edit"}\n';
     const delegated = capabilities(prefix);
     const result = await setupHookWith(repository, {
       ...delegated,
@@ -623,7 +694,7 @@ Deno.test("hook setup rolls back a generated workflow after a late Git failure",
   await withRepository(async (repository, prefix) => {
     await Deno.remove(`${repository}/.github`, { recursive: true });
     const configPath = `${repository}/deno.json`;
-    await Deno.writeTextFile(configPath, '{"tasks":{"verify":"deno test"}}\n');
+    await Deno.writeTextFile(configPath, '{"tasks":{"test":"deno test"}}\n');
     await Deno.mkdir(`${repository}/.githooks`);
     const prePush = `${repository}/.githooks/pre-push`;
     await Deno.writeTextFile(prePush, "#!/bin/sh\nexit 0\n");
@@ -681,7 +752,7 @@ Deno.test("hook setup preserves a generated workflow changed before rollback", a
     await Deno.remove(`${repository}/.github`, { recursive: true });
     await Deno.writeTextFile(
       `${repository}/deno.json`,
-      '{"tasks":{"verify":"deno test"}}\n',
+      '{"tasks":{"test":"deno test"}}\n',
     );
     await Deno.mkdir(`${repository}/.githooks`);
     await runGit(repository, ["config", "--local", "core.hooksPath", ".githooks"]);
@@ -719,7 +790,7 @@ Deno.test("hook setup isolates migration to one linked worktree", async () => {
     await runGit(repository, ["worktree", "add", "--quiet", "--detach", installed]);
     await Deno.writeTextFile(
       `${installed}/deno.json`,
-      '{"tasks":{"verify":"deno test"}}\n',
+      '{"tasks":{"test":"deno test"}}\n',
     );
     await Deno.mkdir(`${installed}/.githooks`);
     await Deno.writeTextFile(`${installed}/.githooks/pre-push`, "#!/bin/sh\nexit 0\n");

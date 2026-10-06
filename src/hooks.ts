@@ -88,17 +88,12 @@ cd "$repo_root"
 exec deno task ${taskName}
 `;
 
-const sourceHookScript = `#!/usr/bin/env bash
-set -euo pipefail
-
-repo_root="$(git rev-parse --show-toplevel)"
-cd "$repo_root"
-exec deno task ci
-`;
-
 const setupWorkflow = "ci/local-ci.yml";
 const setupJob = "check";
-const setupWorkflowSource = `name: Local validation
+const standardTaskNames = ["fmt:check", "lint", "check", "test"] as const;
+
+const setupWorkflowSource = (tasks: readonly string[]): string =>
+  `name: Local validation
 on: workflow_dispatch
 defaults:
   run:
@@ -107,8 +102,11 @@ jobs:
   check:
     runs-on: macos-latest
     steps:
-      - name: Verify repository
-        run: deno task verify
+${
+    tasks.map((task) => `      - name: Run ${task}\n        run: deno task ${task}`).join(
+      "\n",
+    )
+  }
 `;
 
 const gitHookNames = new Set([
@@ -145,7 +143,6 @@ export type HookSetupOptions = {
 type HookMigration = {
   readonly configured: string | null;
   readonly activeHooks: string;
-  readonly allowSourceHook: boolean;
 };
 
 const recursiveStep = (script: string): boolean =>
@@ -194,33 +191,42 @@ const taskReferences = (script: string): readonly string[] => {
   return references;
 };
 
-const validateVerifyTask = (tasks: JsonObject): Result<void> => {
-  const verify = tasks.verify;
-  if (typeof verify !== "string" || !verify.trim() || verify.includes("\0")) {
-    return err("deno.json must define a nonempty string task named verify.");
-  }
+const validateTasks = (
+  tasks: JsonObject,
+  selected: readonly string[],
+): Result<void> => {
   const visited = new Set<string>();
   const visiting = new Set<string>();
-  const visit = (name: string): Result<void> => {
+  const visit = (name: string, selectedTask: string): Result<void> => {
     if (visiting.has(name)) {
-      return err(`The verify task has a recursive Deno task dependency through ${name}.`);
+      return err(
+        `The selected task ${selectedTask} has a recursive Deno task dependency through ${name}.`,
+      );
     }
     if (visited.has(name)) return ok(undefined);
     const script = tasks[name];
-    if (typeof script !== "string") return ok(undefined);
+    if (typeof script !== "string" || !script.trim() || script.includes("\0")) {
+      return err(`deno.json must define a nonempty string task named ${name}.`);
+    }
     if (recursiveStep(script)) {
-      return err(`The verify task reaches ${name}, which would recurse through mci CI.`);
+      return err(
+        `The selected task ${selectedTask} reaches ${name}, which would recurse through mci CI.`,
+      );
     }
     visiting.add(name);
     for (const dependency of taskReferences(script)) {
-      const checked = visit(dependency);
+      const checked = visit(dependency, selectedTask);
       if (!checked.ok) return checked;
     }
     visiting.delete(name);
     visited.add(name);
     return ok(undefined);
   };
-  return visit("verify");
+  for (const name of selected) {
+    const checked = visit(name, name);
+    if (!checked.ok) return checked;
+  }
+  return ok(undefined);
 };
 
 const requireDirectory = async (
@@ -697,7 +703,6 @@ const installHookWithPolicy = async (
       activeHookInfo.value.mode !== null && (activeHookInfo.value.mode & 0o111) === 0;
     if (
       activeHook.value !== hookScript &&
-      !(migration?.allowSourceHook === true && activeHook.value === sourceHookScript) &&
       !inactiveDuringMigration
     ) {
       return err(`${activeHookPath} already contains a foreign hook.`);
@@ -878,37 +883,13 @@ export const setupHookWith = async (
     return err(`Cannot resolve the active Git hooks directory: ${activeHooks.error}`);
   }
 
+  const selectedStandardTasks = standardTaskNames.filter((name) =>
+    Object.hasOwn(tasks, name)
+  );
+
   const repositoryHooks = `${real.value}/.githooks`;
   const repositoryHooksConfigured = configured.ok &&
     activeHooks.value === repositoryHooks;
-  if (repositoryHooksConfigured) {
-    const directory = await attempt(() => Deno.lstat(repositoryHooks));
-    const canonicalDirectory = directory.ok && directory.value.isDirectory &&
-        !directory.value.isSymlink
-      ? await attempt(() => Deno.realPath(repositoryHooks))
-      : null;
-    const repositoryOwned = canonicalDirectory?.ok === true &&
-      canonicalDirectory.value === repositoryHooks;
-    const sourcePath = `${repositoryHooks}/${hookName}`;
-    const sourceState = await regularFile(sourcePath);
-    if (!sourceState.ok) return sourceState;
-    if (repositoryOwned && sourceState.value === "file") {
-      const [source, info] = await Promise.all([
-        attempt(() => Deno.readTextFile(sourcePath)),
-        attempt(() => Deno.stat(sourcePath)),
-      ]);
-      const ci = tasks.ci;
-      if (
-        source.ok && source.value === sourceHookScript && info.ok &&
-        info.value.mode !== null && (info.value.mode & 0o111) !== 0 &&
-        typeof ci === "string" && ci.trim()
-      ) {
-        const active = await activeExecutableHooks(repositoryHooks);
-        if (!active.ok) return active;
-        if (active.value.every((name) => name === hookName)) return ok(undefined);
-      }
-    }
-  }
 
   const ciPath = `${real.value}/ci`;
   const ciState = await attempt(() => Deno.lstat(ciPath));
@@ -928,7 +909,12 @@ export const setupHookWith = async (
   if (!workflowState.ok) return workflowState;
   const generateWorkflow = workflowState.value === "absent";
   if (generateWorkflow) {
-    const verified = validateVerifyTask(tasks);
+    if (selectedStandardTasks.length === 0) {
+      return err(
+        "deno.json must define at least one standard task: fmt:check, lint, check, or test.",
+      );
+    }
+    const verified = validateTasks(tasks, selectedStandardTasks);
     if (!verified.ok) return verified;
   } else {
     const workflow = await attempt(() => Deno.readTextFile(workflowPath));
@@ -995,17 +981,13 @@ export const setupHookWith = async (
       const preCommitPath = `${activeHooks.value}/${hookName}`;
       const source = await attempt(() => Deno.readTextFile(preCommitPath));
       if (!source.ok) return err(`Cannot read ${preCommitPath}: ${source.error}`);
-      const ci = tasks.ci;
-      const supportedSource = source.value === sourceHookScript &&
-        typeof ci === "string" && ci.trim();
-      if (source.value !== hookScript && !supportedSource) {
+      if (source.value !== hookScript) {
         return err(`${preCommitPath} already contains an unsupported pre-commit hook.`);
       }
     }
     migration = {
       configured: configured.ok ? configured.value : null,
       activeHooks: activeHooks.value,
-      allowSourceHook: true,
     };
   }
   const ignorePlan = await planGitIgnore(real.value);
@@ -1017,7 +999,7 @@ export const setupHookWith = async (
     if (!directory.ok) return directory;
     const written = await writeNewAtomic(
       workflowPath,
-      setupWorkflowSource,
+      setupWorkflowSource(selectedStandardTasks),
       directory.value === "created",
     );
     if (!written.ok) {

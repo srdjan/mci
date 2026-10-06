@@ -12,7 +12,7 @@ private func hookError(_ result: Result<Void, HookInstallError>) -> HookInstallE
     return nil
 }
 
-private let sourceHook = """
+private let legacySourceHook = """
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -21,7 +21,14 @@ private let sourceHook = """
     exec deno task ci
     """ + "\n"
 
-private let managedHook = sourceHook.replacingOccurrences(of: "exec deno task ci\n", with: "exec deno task mci:ci\n")
+private let managedHook = """
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    repo_root="$(git rev-parse --show-toplevel)"
+    cd "$repo_root"
+    exec deno task mci:ci
+    """ + "\n"
 
 private func shellQuote(_ value: String) -> String {
     "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
@@ -247,21 +254,18 @@ private func shellQuote(_ value: String) -> String {
 
     runGit(inspected, "config", "core.hooksPath", ".githooks")
     let activeHook = inspected + "/.githooks/pre-commit"
-    writeFile(activeHook, sourceHook)
+    writeFile(activeHook, legacySourceHook)
     _ = chmod(activeHook, 0o755)
     writeFile(inspected + "/deno.json", #"{"tasks":{"ci":"deno task verify"}}"#)
-    equal(await inspector.inspect(repository: inspected), .installed, "source hook is installed")
-
-    writeFile(inspected + "/deno.json", #"{"tasks":{}}"#)
-    required(await inspector.inspect(repository: inspected), "source hook requires its task")
-    writeFile(inspected + "/deno.json", #"{"tasks":{"ci":7}}"#)
-    required(await inspector.inspect(repository: inspected), "source hook rejects a nonstring task")
-    writeFile(inspected + "/deno.json", #"{"tasks":{"ci":"deno task verify"}}"#)
-    _ = chmod(activeHook, 0o644)
-    required(await inspector.inspect(repository: inspected), "source hook must be executable")
-    _ = chmod(activeHook, 0o755)
+    equal(
+        await inspector.inspect(repository: inspected),
+        .required("The effective pre-commit hook is not supported by mci."),
+        "source hook is unsupported")
     writeFile(inspected + "/deno.json", "{")
-    checkFailed(await inspector.inspect(repository: inspected), "invalid JSON fails inspection")
+    equal(
+        await inspector.inspect(repository: inspected),
+        .required("The effective pre-commit hook is not supported by mci."),
+        "source hook stays unsupported with invalid configuration")
 
     let stableDirectory = root + "/formula's files/bin"
     let stableExecutable = stableDirectory + "/mci"
@@ -282,6 +286,13 @@ private func shellQuote(_ value: String) -> String {
     equal(
         await stableInspector.inspect(repository: inspected), .installed,
         "managed hook accepts quoted custom workflow and job")
+
+    writeFile(inspected + "/deno.json", "{")
+    checkFailed(await stableInspector.inspect(repository: inspected), "managed hook reports invalid configuration")
+    try? managedConfig?.write(to: URL(fileURLWithPath: inspected + "/deno.json"))
+    _ = chmod(managedHooks + "/pre-commit", 0o644)
+    required(await stableInspector.inspect(repository: inspected), "managed hook must be executable")
+    _ = chmod(managedHooks + "/pre-commit", 0o755)
 
     let formulaAlias = root + "/stable formula"
     let formulaDirectory = (stableDirectory as NSString).deletingLastPathComponent

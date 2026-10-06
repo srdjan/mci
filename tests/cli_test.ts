@@ -83,7 +83,7 @@ Deno.test("CLI help and version use the public configuration", () =>
     equal(text(version.stderr), "");
   }));
 
-Deno.test("CLI hook setup validates arguments and requires a verification task", () =>
+Deno.test("CLI hook setup validates arguments and requires a standard task", () =>
   inWorkspace(async (workspace) => {
     const invalid = await command(workspace, [
       "hooks",
@@ -105,7 +105,7 @@ Deno.test("CLI hook setup validates arguments and requires a verification task",
       stderr: "piped",
     }).output();
     equal(initialized.code, 0);
-    const config = '{"tasks":{"test":"deno test"}}\n';
+    const config = '{"tasks":{"build":"deno compile main.ts"}}\n';
     await Deno.writeTextFile(`${workspace}/deno.json`, config);
     const missing = await command(workspace, [
       "hooks",
@@ -114,7 +114,7 @@ Deno.test("CLI hook setup validates arguments and requires a verification task",
       "--replace-pre-push",
     ], { GIT_DIR: `${workspace}/.git`, GIT_WORK_TREE: workspace }).output();
     equal(missing.code, 1);
-    assert(text(missing.stderr).includes("verify"));
+    assert(text(missing.stderr).includes("fmt:check"));
     equal(text(missing.stdout), "");
     equal(await Deno.readTextFile(`${workspace}/deno.json`), config);
     assert(!await exists(`${workspace}/ci`));

@@ -355,10 +355,14 @@ configuration applies to the current worktree.
 
 `mci hooks setup` supplies the menu bar's automatic repository setup. It preserves an
 existing `ci/local-ci.yml` and validates job `check`. If that workflow is absent, it
-creates a workflow that calls the repository's existing `verify` task. Setup rejects a
-missing or recursive verification task before mutation. Setup adds `.mci/` to `.gitignore`
-when necessary. This entry keeps runtime files outside Git changes and Deno formatting.
-Setup restores the previous ignore file when installation fails.
+creates one step per defined standard Deno task. The order is `fmt:check`, `lint`,
+`check`, then `test`. An absent task is omitted. Setup requires at least one task and
+rejects empty, invalid, or recursive selected tasks before mutation. The repository
+workflow selects optional tasks, including builds and browser checks. The corresponding
+commands remain in `deno.json`. The YAML is the sole task-selection configuration. No
+repository name or path selects different behavior in mci. Setup adds `.mci/` to
+`.gitignore` when necessary. This entry keeps runtime files outside Git changes and Deno
+formatting. Setup restores the previous ignore file when installation fails.
 
 With `--replace-pre-push`, setup can replace repository-owned `.githooks` configuration
 for the selected worktree. The flag authorizes disabling that directory's pre-push hook.
@@ -366,6 +370,9 @@ Setup preserves the old hook files and shared Git settings. An unknown pre-commi
 another active hook blocks replacement. Setup removes a generated workflow when
 installation fails. The monitor retains installation errors across inspections until
 installation or inspection succeeds.
+
+All repositories use the same packaged-hook validation. A tracked source hook is not an
+installation exception. An unknown active pre-commit hook blocks automatic setup.
 
 If Git configuration fails after the task write, the installer attempts to restore the
 previous `deno.json` contents. If the installer enabled `extensions.worktreeConfig`, it

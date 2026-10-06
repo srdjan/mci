@@ -277,8 +277,8 @@ Git runs `.githooks/pre-commit` before each commit. The hook calls `deno task ci
 repository root. That task submits the local YAML to the daemon, which saves the output
 under `.mci/ci/`. The hook needs a running daemon and a registered checkout.
 
-The local YAML calls `deno task verify` directly. A failed check blocks the commit, and
-the checks include unstaged changes.
+The local YAML selects the four standard tasks and the optional `app:check` task. A failed
+check blocks the commit, and the checks include unstaged changes.
 
 Start the daemon and menu bar monitor from this checkout:
 
@@ -347,10 +347,11 @@ repository, open a repository, and open saved logs.
 When you add a folder, the app registers the repository, then configures pre-commit CI.
 The app calls `mci hooks setup` with `--replace-pre-push` for the selected worktree. Setup
 uses `ci/local-ci.yml` and job `check`. Setup preserves an existing workflow. If the
-workflow is absent, setup creates one that calls the existing `deno task verify`. The
-repository must define a nonempty `verify` task for that creation. Setup adds `.mci/` to
-`.gitignore` when that entry is absent. This entry excludes saved logs and runtime files
-from Git and Deno formatting.
+workflow is absent, setup selects defined tasks in this order: `fmt:check`, `lint`,
+`check`, and `test`. Setup creates one step per task and omits absent tasks. The
+repository must define at least one standard task. Each selected task must be a nonempty
+string. Setup adds `.mci/` to `.gitignore` when that entry is absent. This entry excludes
+saved logs and runtime files from Git and Deno formatting.
 
 Setup adds the `mci:ci` task and selects the packaged Homebrew hook for the worktree.
 Setup can replace repository-owned `.githooks` configuration and disable its pre-push
@@ -358,8 +359,31 @@ hook. Setup preserves the old hook files and shared Git settings. Sibling worktr
 their hooks. An unknown active pre-commit hook or another active hook blocks setup with a
 specific error. The command without `--replace-pre-push` refuses an active pre-push hook.
 
-Setup preserves the supported repository hook that calls `deno task ci` when no other hook
-is active. The mci checkout uses this source hook.
+The workflow selects the task set for each repository. Optional build, browser, or other
+tasks remain explicit steps in that file. Their commands belong in `deno.json`. For
+example, a repository can select type checks, tests, and an optional build:
+
+```yaml
+name: Local validation
+on: workflow_dispatch
+defaults:
+  run:
+    shell: bash
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - name: Type checks
+        run: deno task check
+      - name: Tests
+        run: deno task test
+      - name: Build
+        run: deno task build
+```
+
+Every repository managed through the menu uses the packaged hook. A tracked source hook is
+a custom hook and receives the same conflict result as another unknown active hook. The
+mci checkout selects the packaged hook through its local worktree configuration.
 
 If setup fails, the folder stays registered and the app retains the installation error
 during refresh. Successful installation or inspection clears that error. For another

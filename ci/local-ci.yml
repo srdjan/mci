@@ -8,5 +8,13 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
-      - name: Verify repository
-        run: deno task verify
+      - name: Formatting
+        run: deno task fmt:check
+      - name: Lint
+        run: deno task lint
+      - name: Type checks
+        run: deno task check
+      - name: Tests
+        run: deno task test
+      - name: Native checks
+        run: deno task app:check

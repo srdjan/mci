@@ -93,17 +93,15 @@ public struct HookInstaller: Sendable {
     }
 }
 
-private let sourceHook = """
+private let managedHook = """
     #!/usr/bin/env bash
     set -euo pipefail
 
     repo_root="$(git rev-parse --show-toplevel)"
     cd "$repo_root"
-    exec deno task ci
+    exec deno task mci:ci
     """ + "\n"
 
-private let managedHook = sourceHook.replacingOccurrences(
-    of: "exec deno task ci\n", with: "exec deno task mci:ci\n")
 private let outputLimit = UInt64(64 * 1_024)
 private let configLimit = UInt64(1_024 * 1_024)
 
@@ -231,6 +229,9 @@ private func inspectHook(
     case .failure(let error):
         return .checkFailed("The effective pre-commit hook could not be read: \(error.inspectionMessage)")
     }
+    guard hookText == managedHook else {
+        return .required("The effective pre-commit hook is not supported by mci.")
+    }
 
     let configPath = canonicalRepository + "/deno.json"
     switch fileState(configPath) {
@@ -264,23 +265,6 @@ private func inspectHook(
         return .checkFailed("The repository deno.json file must contain an object.")
     }
     let tasks = object["tasks"] as? [String: Any]
-
-    if hookText == sourceHook {
-        guard let sourcePath = resolve(canonicalRepository + "/.githooks/pre-commit"),
-            hookPath == sourcePath
-        else {
-            return .required("The source pre-commit hook is not repository-owned.")
-        }
-        guard let task = tasks?["ci"] as? String,
-            !task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            return .required("The source pre-commit hook requires a nonempty ci task.")
-        }
-        return .installed
-    }
-    guard hookText == managedHook else {
-        return .required("The effective pre-commit hook is not supported by mci.")
-    }
     guard let task = tasks?["mci:ci"] as? String else {
         return .required("The managed pre-commit hook requires the mci:ci task.")
     }
