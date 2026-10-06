@@ -13,11 +13,7 @@ struct PanelView: View {
             header
             Divider()
             if let message = model.message {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-                    .help(message)
+                ErrorNotice(message: message, clear: model.clearErrors)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
             }
@@ -86,8 +82,8 @@ struct PanelView: View {
             if let note = loginItem.note {
                 Text(note).font(.caption).foregroundStyle(.secondary)
             }
-            if let error = loginItem.error {
-                Text(error).font(.caption).foregroundStyle(.red).lineLimit(2).help(error)
+            if let error = loginItem.message {
+                ErrorNotice(message: error, clear: loginItem.clearError)
             }
 
             Button("Quit") { NSApplication.shared.terminate(nil) }

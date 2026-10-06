@@ -1,3 +1,4 @@
+import MonitorCore
 import Observation
 import ServiceManagement
 
@@ -7,7 +8,14 @@ import ServiceManagement
 @MainActor @Observable
 final class LoginItem {
     private(set) var status: SMAppService.Status = SMAppService.mainApp.status
-    private(set) var error: String?
+    private(set) var error: String? {
+        didSet { errorNotice = ErrorMessage(error) }
+    }
+    private var errorNotice = ErrorMessage()
+
+    var message: String? { errorNotice.visibleText }
+
+    func clearError() { errorNotice.clear() }
 
     var isOn: Bool { status == .enabled }
 

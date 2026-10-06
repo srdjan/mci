@@ -6,10 +6,21 @@ import Observation
 final class MonitorModel {
     private(set) var rows: [RowState] = []
     private(set) var daemonAvailable = false
-    private(set) var daemonError: String?
-    private(set) var actionError: String?
+    private(set) var daemonError: String? {
+        didSet { daemonNotice.update(daemonError) }
+    }
+    private(set) var actionError: String? {
+        didSet { actionNotice = ErrorMessage(actionError) }
+    }
+    private var daemonNotice = ErrorMessage()
+    private var actionNotice = ErrorMessage()
 
-    var message: String? { actionError ?? daemonError }
+    var message: String? { actionNotice.visibleText ?? daemonNotice.visibleText }
+
+    func clearErrors() {
+        daemonNotice.clear()
+        actionNotice.clear()
+    }
     var combined: CombinedState { combinedState(rows, daemonAvailable: daemonAvailable) }
 
     @ObservationIgnored private let client: DaemonClient
