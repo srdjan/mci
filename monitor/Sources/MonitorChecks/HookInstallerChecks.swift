@@ -75,6 +75,28 @@ private func shellQuote(_ value: String) -> String {
 }
 
 @MainActor func checkHookInstaller() async {
+    var status = HookStatus(readiness: .required("The effective pre-commit hook is absent."))
+    status.recordInstallation(.failure(.failed(exitCode: 23, stderr: "installation failed\n")))
+    equal(
+        status.displayedReadiness,
+        .required("The hook installer exited with status 23: installation failed"),
+        "installation failure replaces the observed readiness")
+    status.recordInspection(.checkFailed("Git could not inspect the hook."))
+    equal(
+        status.displayedReadiness,
+        .required("The hook installer exited with status 23: installation failed"),
+        "failed inspection preserves the installation failure")
+    status.recordInspection(.required("The effective pre-commit hook is absent."))
+    equal(
+        status.displayedReadiness,
+        .required("The hook installer exited with status 23: installation failed"),
+        "required inspection preserves the installation failure")
+    status.recordInspection(.installed)
+    equal(status.displayedReadiness, .installed, "installed inspection clears the installation failure")
+    status.recordInstallation(.failure(.timedOut))
+    status.recordInstallation(.success(()))
+    equal(status.displayedReadiness, nil, "successful installation clears the installation failure")
+
     let root = makeScratch()
     defer { removeScratch(root) }
 

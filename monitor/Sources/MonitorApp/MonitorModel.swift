@@ -39,7 +39,7 @@ final class MonitorModel {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var actionUncertain = false
     @ObservationIgnored private var repositories: [DaemonRepository] = []
-    @ObservationIgnored private var hookReadiness: [String: HookReadiness] = [:]
+    @ObservationIgnored private var hookStatuses: [String: HookStatus] = [:]
     private var hookOperations: [String: HookOperation] = [:]
 
     init(client: DaemonClient = DaemonClient(), hookInstaller: HookInstaller = HookInstaller()) {
@@ -121,12 +121,9 @@ final class MonitorModel {
                 containsRepository(id: row.repositoryID, path: row.workspace)
             else { return }
             hookOperations.removeValue(forKey: row.repositoryID)
-            switch result {
-            case .success:
-                hookReadiness.removeValue(forKey: row.repositoryID)
-            case .failure(let error):
-                hookReadiness[row.repositoryID] = .required(error.message)
-            }
+            var status = hookStatuses[row.repositoryID] ?? HookStatus()
+            status.recordInstallation(result)
+            hookStatuses[row.repositoryID] = status
             renderRows()
             refresh()
         }
@@ -189,7 +186,7 @@ final class MonitorModel {
                 case .failure:
                     for operation in hookOperations.values { operation.task.cancel() }
                     hookOperations.removeAll()
-                    hookReadiness.removeAll()
+                    hookStatuses.removeAll()
                     repositories = []
                     rows = []
                 }
@@ -202,7 +199,7 @@ final class MonitorModel {
         let paths = Dictionary(uniqueKeysWithValues: snapshot.repositories.map { ($0.id, $0.path) })
         for repository in repositories where paths[repository.id] != repository.path {
             hookOperations.removeValue(forKey: repository.id)?.task.cancel()
-            hookReadiness.removeValue(forKey: repository.id)
+            hookStatuses.removeValue(forKey: repository.id)
         }
         repositories = snapshot.repositories
         self.daemonAvailable = daemonAvailable
@@ -219,7 +216,9 @@ final class MonitorModel {
 
     private func renderRows() {
         rows = repositories.map {
-            rowState(repository: $0, daemonAvailable: daemonAvailable, hookReadiness: hookReadiness[$0.id])
+            rowState(
+                repository: $0, daemonAvailable: daemonAvailable,
+                hookReadiness: hookStatuses[$0.id]?.displayedReadiness)
         }
     }
 
@@ -232,11 +231,16 @@ final class MonitorModel {
                 let current = repositories.first(where: { $0.id == repository.id && $0.path == repository.path })
             else { return }
             hookOperations.removeValue(forKey: repository.id)
-            guard hookReadiness[repository.id] != readiness else { return }
-            hookReadiness[repository.id] = readiness
+            var status = hookStatuses[repository.id] ?? HookStatus()
+            let previousReadiness = status.displayedReadiness
+            status.recordInspection(readiness)
+            hookStatuses[repository.id] = status
+            guard previousReadiness != status.displayedReadiness else { return }
             rows = rows.map {
                 $0.repositoryID == repository.id
-                    ? rowState(repository: current, daemonAvailable: daemonAvailable, hookReadiness: readiness) : $0
+                    ? rowState(
+                        repository: current, daemonAvailable: daemonAvailable,
+                        hookReadiness: status.displayedReadiness) : $0
             }
         }
         hookOperations[repository.id] = HookOperation(
