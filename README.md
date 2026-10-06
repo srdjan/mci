@@ -280,14 +280,41 @@ under `.mci/ci/`. The hook needs a running daemon and a registered checkout.
 The local YAML calls `deno task verify` directly. A failed check blocks the commit, and
 the checks include unstaged changes.
 
-An installed Homebrew service also accepts requests from the source CLI. Without that
-service, run the source daemon in a separate terminal:
+Start the daemon and menu bar monitor from this checkout:
+
+```sh
+deno task start
+```
+
+The task reuses a running daemon or starts a daemon in the background. It registers this
+checkout and opens the monitor. If the monitor is absent, the task builds and installs it.
+The task returns after both components are ready. Repeated starts reuse the daemon and
+reopen the monitor. The monitor reads the same service directory as the daemon.
+
+The background daemon saves output to `~/Library/Application Support/mci/daemon.log`.
+`MCI_HOME` selects another service directory. One monitor app serves the user. Start
+switches that monitor to the selected directory. Stop quits the shared monitor and stops
+the daemon in the selected directory.
+
+Stop both components:
+
+```sh
+deno task stop
+```
+
+Stop waits for shutdown. It cancels active CI and drops queued requests across the
+daemon's registered repositories. Repeated stops succeed when both components are absent.
+For the default service directory, stop also disables a loaded mci Homebrew service.
+
+An installed Homebrew service also accepts requests from the source CLI. For a daemon in
+the foreground, use a separate terminal:
 
 ```sh
 deno task mci daemon
 ```
 
-Use another terminal to register this checkout and submit its local workflow:
+For a foreground daemon, register this checkout from another terminal. Then submit its
+local workflow:
 
 ```sh
 deno task mci register "$PWD"

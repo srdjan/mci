@@ -13,6 +13,8 @@
   },
   "tasks": {
     "mci": "MCI_TASK_PARENT=true deno run --quiet --permission-set=mci src/main.ts",
+    "start": "deno run --quiet --permission-set=mci scripts/service.ts start",
+    "stop": "deno run --quiet --permission-set=mci scripts/service.ts stop",
     "check": "deno check src/main.ts scripts/*.ts tests/*.ts",
     "test": "deno test --permission-set=mci",
     "verify": "deno fmt --check && deno lint && deno task check && deno task test && deno task app:check",

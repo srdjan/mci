@@ -30,6 +30,9 @@ the authority of the invoking user.
 | `paths.ts`        | Service directory and socket paths, including the `MCI_HOME` override          |
 | `main.ts`         | Process entry point: runs the CLI, reports a fatal error, and exits            |
 
+`scripts/service.ts` owns the source commands `deno task start` and `deno task stop`.
+Start returns after the daemon and monitor run. Stop waits for both components to stop.
+
 The menu bar app lives in the Swift package `monitor/`. `MonitorCore` decodes daemon
 snapshots, talks to the daemon socket, reads log tails, and maps repository states to
 display states.
@@ -464,6 +467,26 @@ open, or startup failure, it quits the new app, restores the previous bundle, an
 it. If restoration fails, the error names the retained backup. The command `mci setup`
 copies the packaged bundle and verifies its signature. Setup also requires a valid
 signature on an existing owned bundle.
+
+The source start command reuses a responding daemon or launches a detached daemon. The
+command saves daemon output and a process identity in the private service directory. The
+command registers the checkout and opens the monitor for that service directory. If the
+monitor is absent, the command builds and installs it.
+
+The command reopens a running monitor so the app reads the selected service directory. One
+installed monitor serves the user. Stop quits this shared monitor even when `MCI_HOME`
+selects another daemon directory.
+
+If the monitor has the former installer name, `meeci`, the command replaces it through the
+same installer. This migration requires a valid signature on the previous app. The
+installer restores the previous app if the replacement fails to start.
+
+The source stop command quits the installed monitor and stops the daemon with SIGTERM. The
+command checks the process identity before signaling and waits for termination. For the
+default service directory, stop first disables a loaded mci Homebrew service. This step
+prevents Homebrew from restarting the daemon. Custom service directories keep their
+Homebrew service unchanged. Stop cancels active requests and drops queued requests across
+registered repositories.
 
 ## Release responsibility
 

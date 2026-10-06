@@ -221,6 +221,62 @@ Deno.test("reinstall replaces an owned bundle and leaves no staging or backup", 
   });
 });
 
+const legacyPlist = () =>
+  infoPlist("1.0.0").replace("<string>mci</string>", "<string>meeci</string>");
+
+Deno.test("legacy monitor migration requires an explicit previous owner", async () => {
+  await withScene(async (scene) => {
+    await writeBundle(scene.destination, legacyPlist(), "old");
+    const refused = await installMonitor(
+      scene.options,
+      fakeCapabilities(scene.root).capabilities,
+    );
+    assert(!refused.ok);
+    equal(await readMarker(scene.destination), "old");
+    unwrap(
+      await installMonitor(
+        { ...scene.options, previousOwners: ["meeci"] },
+        fakeCapabilities(scene.root).capabilities,
+      ),
+    );
+    equal(unwrap(await installerKey(scene.destination)), "mci");
+    equal(await readMarker(scene.destination), "binary one");
+  });
+});
+
+Deno.test("legacy monitor migration restores the previous app after registration fails", async () => {
+  await withScene(async (scene) => {
+    await writeBundle(scene.destination, legacyPlist(), "old");
+    const result = await installMonitor(
+      { ...scene.options, previousOwners: ["meeci"] },
+      fakeCapabilities(scene.root, {
+        register: () => Promise.resolve(err("daemon unavailable")),
+      }).capabilities,
+    );
+    assert(!result.ok && result.error.includes("The old app was restored and opened."));
+    equal(unwrap(await installerKey(scene.destination)), "meeci");
+    equal(await readMarker(scene.destination), "old");
+    equal(await names(scene.applications), ["mci Monitor.app"]);
+  });
+});
+
+Deno.test("legacy monitor migration leaves an app with an invalid signature unchanged", async () => {
+  await withScene(async (scene) => {
+    await writeBundle(scene.destination, legacyPlist(), "old");
+    const result = await installMonitor(
+      { ...scene.options, previousOwners: ["meeci"] },
+      fakeCapabilities(scene.root, {
+        verify: (bundle) =>
+          Promise.resolve(
+            bundle === scene.destination ? err("signature mismatch") : ok(undefined),
+          ),
+      }).capabilities,
+    );
+    assert(!result.ok && result.error.includes("invalid signature"));
+    equal(await readMarker(scene.destination), "old");
+  });
+});
+
 Deno.test("a bundle without the mci key is refused and left untouched", async () => {
   const foreign = [
     `<plist><dict><key>CFBundleName</key><string>Other</string></dict></plist>`,

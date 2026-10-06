@@ -17,6 +17,7 @@ export type MonitorOptions = {
   readonly packageDir: string;
   readonly runningTimeoutMs?: number;
   readonly pollMs?: number;
+  readonly previousOwners?: readonly string[];
 };
 
 export type MonitorCapabilities = {
@@ -100,6 +101,7 @@ const assemble = async (
 const checkDestination = async (
   destination: string,
   capabilities: MonitorCapabilities,
+  previousOwners: readonly string[],
 ): Promise<Result<"absent" | "owned">> => {
   const info = await lstat(destination);
   if (info === null) return ok("absent");
@@ -107,11 +109,17 @@ const checkDestination = async (
     return err(`${destination} is not a real folder. It is left unchanged.`);
   }
   const key = await capabilities.readInstallerKey(destination);
-  if (!key.ok || key.value !== ownerValue) {
+  if (!key.ok || (key.value !== ownerValue && !previousOwners.includes(key.value))) {
     return err(
       `${destination} was not installed by mci (MCIInstaller is not "${ownerValue}"). ` +
         `It is left unchanged.`,
     );
+  }
+  if (key.value !== ownerValue) {
+    const verified = await capabilities.verify(destination);
+    if (!verified.ok) {
+      return err(`The previous app has an invalid signature: ${verified.error}`);
+    }
   }
   const executable = await lstat(`${destination}/Contents/MacOS/${executableName}`);
   if (executable === null || !executable.isFile) {
@@ -234,7 +242,11 @@ export const installMonitor = async (
   const verified = await capabilities.verify(staging);
   if (!verified.ok) return abandon(`Signature check failed: ${verified.error}`);
 
-  const state = await checkDestination(destination, capabilities);
+  const state = await checkDestination(
+    destination,
+    capabilities,
+    options.previousOwners ?? [],
+  );
   if (!state.ok) return abandon(state.error);
   if (state.value === "owned") {
     const quit = await capabilities.quit(executable);
