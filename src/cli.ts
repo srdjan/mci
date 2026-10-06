@@ -8,7 +8,7 @@ import {
 } from "./ci-receipt.ts";
 import { codexCommand } from "./codex.ts";
 import { runDaemon } from "./daemon.ts";
-import { doctor, installHook } from "./hooks.ts";
+import { doctor, installHook, setupHook } from "./hooks.ts";
 import { setup } from "./install.ts";
 import { managementCommand } from "./management.ts";
 import { attempt } from "./result.ts";
@@ -25,6 +25,7 @@ Usage: mci <check|run|ci> <workflow.yml> --job <id>
        mci logs <repository-id-or-path> [--follow]
        mci doctor [repository-id-or-path]
        mci hooks install <repository> --workflow <file> --job <id>
+       mci hooks setup <repository> [--replace-pre-push]
        mci codex hook | mci codex install <repository>
 
 Run from the workspace root. check executes no workflow commands.
@@ -202,6 +203,25 @@ export const main = async (args: readonly string[]): Promise<number> => {
       return 1;
     }
     console.log(result.value.join("\n"));
+    return 0;
+  }
+  if (
+    args[0] === "hooks" && args[1] === "setup" && args[2] &&
+    (args.length === 3 || (args.length === 4 && args[3] === "--replace-pre-push"))
+  ) {
+    const root = await attempt(() => Deno.realPath(args[2]!));
+    if (!root.ok) {
+      console.error(root.error);
+      return 2;
+    }
+    const result = await setupHook(root.value, {
+      replacePrePush: args[3] === "--replace-pre-push",
+    });
+    if (!result.ok) {
+      console.error(result.error);
+      return 1;
+    }
+    console.log("Configured pre-commit CI for this worktree.");
     return 0;
   }
   if (

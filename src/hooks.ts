@@ -88,11 +88,72 @@ cd "$repo_root"
 exec deno task ${taskName}
 `;
 
+const sourceHookScript = `#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+exec deno task ci
+`;
+
+const setupWorkflow = "ci/local-ci.yml";
+const setupJob = "check";
+const setupWorkflowSource = `name: Local validation
+on: workflow_dispatch
+defaults:
+  run:
+    shell: bash
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - name: Verify repository
+        run: deno task verify
+`;
+
+const gitHookNames = new Set([
+  "applypatch-msg",
+  "commit-msg",
+  "fsmonitor-watchman",
+  "post-applypatch",
+  "post-checkout",
+  "post-commit",
+  "post-index-change",
+  "post-merge",
+  "post-receive",
+  "post-rewrite",
+  "post-update",
+  "pre-applypatch",
+  "pre-auto-gc",
+  "pre-commit",
+  "pre-merge-commit",
+  "pre-push",
+  "pre-rebase",
+  "pre-receive",
+  "prepare-commit-msg",
+  "proc-receive",
+  "push-to-checkout",
+  "reference-transaction",
+  "sendemail-validate",
+  "update",
+]);
+
+export type HookSetupOptions = {
+  readonly replacePrePush?: boolean;
+};
+
+type HookMigration = {
+  readonly configured: string | null;
+  readonly activeHooks: string;
+  readonly allowSourceHook: boolean;
+};
+
 const recursiveStep = (script: string): boolean =>
   /(?:^|[\n;&|()])\s*deno\s+task(?:\s+--[^\s]+)*\s+(?:ci|mci:ci)(?:\s|$)/m.test(
     script,
   ) ||
-  /(?:^|[\n;&|()])\s*(?:[^\s;&|()]+\/)?mci\s+ci(?:\s|$)/m.test(script);
+  /(?:^|[\n;&|()])\s*(?:(?:[^\s;&|()]+\/)?mci|'(?:[^']*\/)?mci'|"(?:[^"]*\/)?mci")\s+ci(?:\s|$)/m
+    .test(script);
 
 const regularFile = async (path: string): Promise<Result<"absent" | "file">> => {
   const info = await attempt(() => Deno.lstat(path));
@@ -118,6 +179,238 @@ const readConfig = async (path: string): Promise<Result<JsonObject>> => {
     );
   }
   return object(parsed) ? ok(parsed) : err(`${path} must contain a JSON object.`);
+};
+
+const missingGitValue = (result: Result<string>): boolean =>
+  !result.ok && result.error.endsWith("exited with 1");
+
+const taskReferences = (script: string): readonly string[] => {
+  const references: string[] = [];
+  const pattern = /(?:^|[\n;&|()])\s*deno\s+task(?:\s+--[^\s]+)*\s+([^\s;&|()]+)/gm;
+  for (const match of script.matchAll(pattern)) {
+    const name = match[1]?.replace(/^['"]|['"]$/g, "");
+    if (name) references.push(name);
+  }
+  return references;
+};
+
+const validateVerifyTask = (tasks: JsonObject): Result<void> => {
+  const verify = tasks.verify;
+  if (typeof verify !== "string" || !verify.trim() || verify.includes("\0")) {
+    return err("deno.json must define a nonempty string task named verify.");
+  }
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+  const visit = (name: string): Result<void> => {
+    if (visiting.has(name)) {
+      return err(`The verify task has a recursive Deno task dependency through ${name}.`);
+    }
+    if (visited.has(name)) return ok(undefined);
+    const script = tasks[name];
+    if (typeof script !== "string") return ok(undefined);
+    if (recursiveStep(script)) {
+      return err(`The verify task reaches ${name}, which would recurse through mci CI.`);
+    }
+    visiting.add(name);
+    for (const dependency of taskReferences(script)) {
+      const checked = visit(dependency);
+      if (!checked.ok) return checked;
+    }
+    visiting.delete(name);
+    visited.add(name);
+    return ok(undefined);
+  };
+  return visit("verify");
+};
+
+const requireDirectory = async (
+  path: string,
+): Promise<Result<"existing" | "created">> => {
+  const state = await attempt(() => Deno.lstat(path));
+  if (state.ok) {
+    if (!state.value.isDirectory || state.value.isSymlink) {
+      return err(`${path} must be a regular directory.`);
+    }
+    const canonical = await attempt(() => Deno.realPath(path));
+    return !canonical.ok || canonical.value !== path
+      ? err(`${path} must not redirect outside the repository.`)
+      : ok("existing");
+  }
+  if (!state.error.includes("No such file")) {
+    return err(`Cannot inspect ${path}: ${state.error}`);
+  }
+  const created = await attempt(() => Deno.mkdir(path));
+  if (created.ok) return ok("created");
+  const raced = await attempt(() => Deno.lstat(path));
+  if (!raced.ok || !raced.value.isDirectory || raced.value.isSymlink) {
+    return err(`Cannot create ${path}: ${created.error}`);
+  }
+  const canonical = await attempt(() => Deno.realPath(path));
+  return !canonical.ok || canonical.value !== path
+    ? err(`${path} must not redirect outside the repository.`)
+    : ok("existing");
+};
+
+type CreatedFile = {
+  readonly kind: "created";
+  readonly path: string;
+  readonly directory: string;
+  readonly createdDirectory: boolean;
+  readonly device: number | null;
+  readonly inode: number | null;
+  readonly expectedContent: string;
+};
+
+const writeNewAtomic = async (
+  path: string,
+  content: string,
+  createdDirectory: boolean,
+): Promise<Result<CreatedFile>> => {
+  const temporary = `${path}.mci-${crypto.randomUUID()}.tmp`;
+  const created = await attempt(async () => {
+    await Deno.writeTextFile(temporary, content, { createNew: true });
+    const info = await Deno.lstat(temporary);
+    await Deno.link(temporary, path);
+    return {
+      kind: "created" as const,
+      path,
+      directory: path.slice(0, path.lastIndexOf("/")),
+      createdDirectory,
+      device: info.dev,
+      inode: info.ino,
+      expectedContent: content,
+    };
+  });
+  await attempt(() => Deno.remove(temporary));
+  return created.ok
+    ? ok(created.value)
+    : err(`Cannot create ${path} without overwriting it: ${created.error}`);
+};
+
+type GitIgnorePlan =
+  | { readonly kind: "none" }
+  | { readonly kind: "create"; readonly path: string; readonly content: string }
+  | {
+    readonly kind: "update";
+    readonly path: string;
+    readonly before: string;
+    readonly after: string;
+    readonly mode: number | null;
+  };
+
+type UpdatedFile = {
+  readonly kind: "updated";
+  readonly path: string;
+  readonly before: string;
+  readonly after: string;
+  readonly mode: number | null;
+};
+
+type AppliedGitIgnore = CreatedFile | UpdatedFile;
+
+const planGitIgnore = async (repository: string): Promise<Result<GitIgnorePlan>> => {
+  const path = `${repository}/.gitignore`;
+  const state = await regularFile(path);
+  if (!state.ok) return state;
+  if (state.value === "absent") return ok({ kind: "create", path, content: ".mci/\n" });
+  const [read, info] = await Promise.all([
+    attempt(() => Deno.readTextFile(path)),
+    attempt(() => Deno.lstat(path)),
+  ]);
+  if (!read.ok) return err(`Cannot read ${path}: ${read.error}`);
+  if (!info.ok) return err(`Cannot inspect ${path}: ${info.error}`);
+  if (read.value.split(/\r?\n/).some((line) => line === ".mci/" || line === "/.mci/")) {
+    return ok({ kind: "none" });
+  }
+  const separator = read.value.length === 0 || read.value.endsWith("\n") ? "" : "\n";
+  return ok({
+    kind: "update",
+    path,
+    before: read.value,
+    after: `${read.value}${separator}.mci/\n`,
+    mode: info.value.mode,
+  });
+};
+
+const applyGitIgnore = async (
+  plan: GitIgnorePlan,
+): Promise<Result<AppliedGitIgnore | null>> => {
+  if (plan.kind === "none") return ok(null);
+  if (plan.kind === "create") return await writeNewAtomic(plan.path, plan.content, false);
+  const current = await attempt(() => Deno.readTextFile(plan.path));
+  if (!current.ok || current.value !== plan.before) {
+    return err(`The repository .gitignore changed during hook setup.`);
+  }
+  const written = await writeAtomic(plan.path, plan.after, plan.mode ?? undefined);
+  return written.ok
+    ? ok({
+      kind: "updated",
+      path: plan.path,
+      before: plan.before,
+      after: plan.after,
+      mode: plan.mode,
+    })
+    : written;
+};
+
+const rollbackGitIgnore = async (change: AppliedGitIgnore): Promise<Result<void>> => {
+  if (change.kind === "created") return await rollbackCreatedFile(change);
+  const current = await attempt(() => Deno.readTextFile(change.path));
+  if (!current.ok || current.value !== change.after) {
+    return err(`The repository .gitignore changed before rollback.`);
+  }
+  return await writeAtomic(change.path, change.before, change.mode ?? undefined);
+};
+
+const rollbackCreatedFile = async (created: CreatedFile): Promise<Result<void>> => {
+  const [current, content] = await Promise.all([
+    attempt(() => Deno.lstat(created.path)),
+    attempt(() => Deno.readTextFile(created.path)),
+  ]);
+  if (
+    !current.ok || !content.ok || current.value.isSymlink || !current.value.isFile ||
+    current.value.dev !== created.device || current.value.ino !== created.inode ||
+    content.value !== created.expectedContent
+  ) {
+    return err(`The generated file at ${created.path} changed before rollback.`);
+  }
+  const removed = await attempt(() => Deno.remove(created.path));
+  if (!removed.ok) return err(`Cannot remove ${created.path}: ${removed.error}`);
+  if (created.createdDirectory) {
+    const directoryRemoved = await attempt(() => Deno.remove(created.directory));
+    if (!directoryRemoved.ok) {
+      return err(`Cannot remove ${created.directory}: ${directoryRemoved.error}`);
+    }
+  }
+  return ok(undefined);
+};
+
+const activeExecutableHooks = async (
+  directory: string,
+): Promise<Result<readonly string[]>> => {
+  const state = await attempt(() => Deno.lstat(directory));
+  if (!state.ok) {
+    return state.error.includes("No such file") ? ok([]) : err(state.error);
+  }
+  if (!state.value.isDirectory || state.value.isSymlink) {
+    return err(`${directory} is not a regular directory.`);
+  }
+  const found = await attempt(async () => {
+    const names: string[] = [];
+    for await (const entry of Deno.readDir(directory)) {
+      if (!gitHookNames.has(entry.name) || entry.name.endsWith(".sample")) continue;
+      const info = await Deno.lstat(`${directory}/${entry.name}`);
+      if (info.isSymlink) {
+        names.push(entry.name);
+        continue;
+      }
+      if (info.isFile && info.mode !== null && (info.mode & 0o111) !== 0) {
+        names.push(entry.name);
+      }
+    }
+    return names.sort();
+  });
+  return found.ok ? ok(found.value) : err(`Cannot inspect ${directory}: ${found.error}`);
 };
 
 const writeAtomic = async (
@@ -147,11 +440,12 @@ const rollbackFailure = (
     ? ""
     : `\nRollback failed for ${target}: ${result.error}\nRecovery: ${recovery}`;
 
-export const installHookWith = async (
+const installHookWithPolicy = async (
   repository: string,
   workflow: string,
   job: string,
   capabilities: HookCapabilities,
+  migration?: HookMigration,
 ): Promise<Result<void>> => {
   if (!repository.startsWith("/") || repository.includes("\0")) {
     return err("The repository path must be absolute.");
@@ -363,6 +657,14 @@ export const installHookWith = async (
   if (!configured.ok && !configured.error.endsWith("exited with 1")) {
     return err(`Cannot read effective core.hooksPath: ${configured.error}`);
   }
+  if (
+    migration !== undefined &&
+    (migration.configured === null
+      ? !missingGitValue(configured)
+      : !configured.ok || configured.value !== migration.configured)
+  ) {
+    return err("The effective core.hooksPath changed during hook setup.");
+  }
 
   const activeHooks = await capabilities.git([
     "-C",
@@ -375,7 +677,13 @@ export const installHookWith = async (
   if (!activeHooks.ok) {
     return err(`Cannot resolve the active Git hooks directory: ${activeHooks.error}`);
   }
-  if (configured.ok && activeHooks.value !== canonicalHooksPath.value) {
+  if (migration !== undefined && activeHooks.value !== migration.activeHooks) {
+    return err("The active Git hooks directory changed during hook setup.");
+  }
+  if (
+    configured.ok && activeHooks.value !== canonicalHooksPath.value &&
+    migration === undefined
+  ) {
     return err(`core.hooksPath already names ${configured.value}.`);
   }
   const activeHookPath = `${activeHooks.value}/${hookName}`;
@@ -384,23 +692,48 @@ export const installHookWith = async (
   if (activeHookState.value === "file") {
     const activeHook = await attempt(() => Deno.readTextFile(activeHookPath));
     if (!activeHook.ok) return err(`Cannot read ${activeHookPath}: ${activeHook.error}`);
-    if (activeHook.value !== hookScript) {
+    const activeHookInfo = await attempt(() => Deno.stat(activeHookPath));
+    const inactiveDuringMigration = migration !== undefined && activeHookInfo.ok &&
+      activeHookInfo.value.mode !== null && (activeHookInfo.value.mode & 0o111) === 0;
+    if (
+      activeHook.value !== hookScript &&
+      !(migration?.allowSourceHook === true && activeHook.value === sourceHookScript) &&
+      !inactiveDuringMigration
+    ) {
       return err(`${activeHookPath} already contains a foreign hook.`);
     }
   }
 
   const configUpdated = existingTask === undefined;
+  let configChange: UpdatedFile | undefined;
   if (configUpdated) {
     const nextConfig = {
       ...config.value,
       tasks: { ...(object(currentTasks) ? currentTasks : {}), [taskName]: task },
     };
-    const wroteConfig = await writeAtomic(
-      configPath,
-      `${JSON.stringify(nextConfig, null, 2)}\n`,
-    );
+    const currentConfig = await attempt(() => Deno.readTextFile(configPath));
+    if (!currentConfig.ok || currentConfig.value !== oldConfig.value) {
+      return err("The repository deno.json changed during hook setup.");
+    }
+    const after = `${JSON.stringify(nextConfig, null, 2)}\n`;
+    const wroteConfig = await writeAtomic(configPath, after);
     if (!wroteConfig.ok) return wroteConfig;
+    configChange = {
+      kind: "updated",
+      path: configPath,
+      before: oldConfig.value,
+      after,
+      mode: null,
+    };
   }
+  const restoreConfig = async (): Promise<Result<void>> => {
+    if (configChange === undefined) return ok(undefined);
+    const current = await attempt(() => Deno.readTextFile(configPath));
+    if (!current.ok || current.value !== configChange.after) {
+      return err("The repository deno.json changed before rollback.");
+    }
+    return await writeAtomic(configPath, configChange.before);
+  };
   let enabledWorktreeConfig = false;
   if (!worktreeConfigEnabled) {
     const enabled = await capabilities.git([
@@ -412,9 +745,7 @@ export const installHookWith = async (
       "true",
     ]);
     if (!enabled.ok) {
-      const restoredConfig = configUpdated
-        ? await writeAtomic(configPath, oldConfig.value)
-        : ok(undefined);
+      const restoredConfig = await restoreConfig();
       return err(
         `Cannot enable worktreeConfig: ${enabled.error}` +
           rollbackFailure(
@@ -428,7 +759,9 @@ export const installHookWith = async (
     }
     enabledWorktreeConfig = true;
   }
-  if (!worktreeConfigEnabled || worktreeConfigured?.ok === false) {
+  if (
+    migration !== undefined || !worktreeConfigEnabled || worktreeConfigured?.ok === false
+  ) {
     const set = await capabilities.git([
       "-C",
       real.value,
@@ -457,9 +790,7 @@ export const installHookWith = async (
           "--unset-all",
           "extensions.worktreeConfig",
         ]);
-      const restoredConfig = configUpdated
-        ? await writeAtomic(configPath, oldConfig.value)
-        : ok(undefined);
+      const restoredConfig = await restoreConfig();
       const extensionRecovery = worktreeExtension.ok
         ? "restore the prior extensions.worktreeConfig value and confirm the setting.\n" +
           `Command:\ngit -C ${shellQuote(real.value)} config --local ` +
@@ -486,6 +817,265 @@ export const installHookWith = async (
   }
   return ok(undefined);
 };
+
+export const installHookWith = (
+  repository: string,
+  workflow: string,
+  job: string,
+  capabilities: HookCapabilities,
+): Promise<Result<void>> =>
+  installHookWithPolicy(repository, workflow, job, capabilities);
+
+export const setupHookWith = async (
+  repository: string,
+  capabilities: HookCapabilities,
+  options: HookSetupOptions = {},
+): Promise<Result<void>> => {
+  if (!repository.startsWith("/") || repository.includes("\0")) {
+    return err("The repository path must be absolute.");
+  }
+  const real = await attempt(() => Deno.realPath(repository));
+  if (!real.ok) return err(`The repository is not available: ${real.error}`);
+  const root = await capabilities.git(["-C", real.value, "rev-parse", "--show-toplevel"]);
+  if (!root.ok) return err(`The path is not a Git repository: ${root.error}`);
+  const canonicalRoot = await attempt(() => Deno.realPath(root.value));
+  if (!canonicalRoot.ok || canonicalRoot.value !== real.value) {
+    return err("The repository path must be the Git worktree root.");
+  }
+
+  const configPath = `${real.value}/deno.json`;
+  const configFile = await regularFile(configPath);
+  if (!configFile.ok || configFile.value !== "file") {
+    return err("The repository must have a regular deno.json file.");
+  }
+  const config = await readConfig(configPath);
+  if (!config.ok) return config;
+  const currentTasks = config.value.tasks;
+  if (currentTasks !== undefined && !object(currentTasks)) {
+    return err("deno.json tasks must be an object.");
+  }
+  const tasks: JsonObject = object(currentTasks) ? currentTasks : {};
+
+  const configured = await capabilities.git([
+    "-C",
+    real.value,
+    "config",
+    "--get",
+    "core.hooksPath",
+  ]);
+  if (!configured.ok && !missingGitValue(configured)) {
+    return err(`Cannot read effective core.hooksPath: ${configured.error}`);
+  }
+  const activeHooks = await capabilities.git([
+    "-C",
+    real.value,
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "hooks",
+  ]);
+  if (!activeHooks.ok) {
+    return err(`Cannot resolve the active Git hooks directory: ${activeHooks.error}`);
+  }
+
+  const repositoryHooks = `${real.value}/.githooks`;
+  const repositoryHooksConfigured = configured.ok &&
+    activeHooks.value === repositoryHooks;
+  if (repositoryHooksConfigured) {
+    const directory = await attempt(() => Deno.lstat(repositoryHooks));
+    const canonicalDirectory = directory.ok && directory.value.isDirectory &&
+        !directory.value.isSymlink
+      ? await attempt(() => Deno.realPath(repositoryHooks))
+      : null;
+    const repositoryOwned = canonicalDirectory?.ok === true &&
+      canonicalDirectory.value === repositoryHooks;
+    const sourcePath = `${repositoryHooks}/${hookName}`;
+    const sourceState = await regularFile(sourcePath);
+    if (!sourceState.ok) return sourceState;
+    if (repositoryOwned && sourceState.value === "file") {
+      const [source, info] = await Promise.all([
+        attempt(() => Deno.readTextFile(sourcePath)),
+        attempt(() => Deno.stat(sourcePath)),
+      ]);
+      const ci = tasks.ci;
+      if (
+        source.ok && source.value === sourceHookScript && info.ok &&
+        info.value.mode !== null && (info.value.mode & 0o111) !== 0 &&
+        typeof ci === "string" && ci.trim()
+      ) {
+        const active = await activeExecutableHooks(repositoryHooks);
+        if (!active.ok) return active;
+        if (active.value.every((name) => name === hookName)) return ok(undefined);
+      }
+    }
+  }
+
+  const ciPath = `${real.value}/ci`;
+  const ciState = await attempt(() => Deno.lstat(ciPath));
+  if (ciState.ok) {
+    if (!ciState.value.isDirectory || ciState.value.isSymlink) {
+      return err(`${ciPath} must be a regular directory.`);
+    }
+    const canonicalCi = await attempt(() => Deno.realPath(ciPath));
+    if (!canonicalCi.ok || canonicalCi.value !== ciPath) {
+      return err(`${ciPath} must not redirect outside the repository.`);
+    }
+  } else if (!ciState.error.includes("No such file")) {
+    return err(`Cannot inspect ${ciPath}: ${ciState.error}`);
+  }
+  const workflowPath = `${real.value}/${setupWorkflow}`;
+  const workflowState = await regularFile(workflowPath);
+  if (!workflowState.ok) return workflowState;
+  const generateWorkflow = workflowState.value === "absent";
+  if (generateWorkflow) {
+    const verified = validateVerifyTask(tasks);
+    if (!verified.ok) return verified;
+  } else {
+    const workflow = await attempt(() => Deno.readTextFile(workflowPath));
+    if (!workflow.ok) return err(`Cannot read the workflow: ${workflow.error}`);
+    const plan = planWorkflow(workflow.value, setupJob);
+    if (!plan.ok) return err(`The workflow cannot run job ${setupJob}: ${plan.error}`);
+    if (plan.value.steps.some((step) => recursiveStep(step.script))) {
+      return err("The workflow job invokes mci CI and would recurse through the hook.");
+    }
+  }
+
+  const prefix = await capabilities.brewPrefix();
+  if (!prefix.ok) return prefix;
+  const binary = `${prefix.value}/bin/mci`;
+  const binaryState = await regularFile(binary);
+  if (!binaryState.ok || binaryState.value !== "file") {
+    return err(`The stable Homebrew binary is not available at ${binary}.`);
+  }
+  const hooksPath = `${prefix.value}/libexec/hooks`;
+  const canonicalHooksPath = await attempt(() => Deno.realPath(hooksPath));
+  if (!canonicalHooksPath.ok) {
+    return err(
+      `Cannot resolve the packaged hooks directory: ${canonicalHooksPath.error}`,
+    );
+  }
+  const packagedHookPath = `${hooksPath}/${hookName}`;
+  const packagedHookState = await regularFile(packagedHookPath);
+  if (!packagedHookState.ok || packagedHookState.value !== "file") {
+    return err(
+      packagedHookState.ok
+        ? `The packaged hook is absent at ${packagedHookPath}.`
+        : `The packaged hook is invalid: ${packagedHookState.error}`,
+    );
+  }
+  const packagedHook = await attempt(() => Deno.readTextFile(packagedHookPath));
+  if (!packagedHook.ok || packagedHook.value !== hookScript) {
+    return err(`The packaged hook at ${packagedHookPath} is not managed by mci.`);
+  }
+  const packagedInfo = await attempt(() => Deno.stat(packagedHookPath));
+  if (
+    !packagedInfo.ok || packagedInfo.value.mode === null ||
+    (packagedInfo.value.mode & 0o111) === 0
+  ) return err(`The packaged hook at ${packagedHookPath} is not executable.`);
+
+  let migration: HookMigration | undefined;
+  if (activeHooks.value !== canonicalHooksPath.value) {
+    if (configured.ok && !repositoryHooksConfigured) {
+      return err(`core.hooksPath already names ${configured.value}.`);
+    }
+    const active = await activeExecutableHooks(activeHooks.value);
+    if (!active.ok) return active;
+    for (const name of active.value) {
+      if (name === "pre-push") {
+        if (options.replacePrePush !== true) {
+          return err(
+            "The effective pre-push hook is active. Pass --replace-pre-push to replace it for this worktree.",
+          );
+        }
+        continue;
+      }
+      if (name !== hookName) {
+        return err(`The effective ${name} hook would be disabled by mci setup.`);
+      }
+      const preCommitPath = `${activeHooks.value}/${hookName}`;
+      const source = await attempt(() => Deno.readTextFile(preCommitPath));
+      if (!source.ok) return err(`Cannot read ${preCommitPath}: ${source.error}`);
+      const ci = tasks.ci;
+      const supportedSource = source.value === sourceHookScript &&
+        typeof ci === "string" && ci.trim();
+      if (source.value !== hookScript && !supportedSource) {
+        return err(`${preCommitPath} already contains an unsupported pre-commit hook.`);
+      }
+    }
+    migration = {
+      configured: configured.ok ? configured.value : null,
+      activeHooks: activeHooks.value,
+      allowSourceHook: true,
+    };
+  }
+  const ignorePlan = await planGitIgnore(real.value);
+  if (!ignorePlan.ok) return ignorePlan;
+
+  let generated: CreatedFile | undefined;
+  if (generateWorkflow) {
+    const directory = await requireDirectory(ciPath);
+    if (!directory.ok) return directory;
+    const written = await writeNewAtomic(
+      workflowPath,
+      setupWorkflowSource,
+      directory.value === "created",
+    );
+    if (!written.ok) {
+      if (directory.value === "created") await attempt(() => Deno.remove(ciPath));
+      return written;
+    }
+    generated = written.value;
+  }
+
+  const ignored = await applyGitIgnore(ignorePlan.value);
+  if (!ignored.ok) {
+    if (generated === undefined) return ignored;
+    const rolledBack = await rollbackCreatedFile(generated);
+    return err(
+      ignored.error + rollbackFailure(
+        rolledBack,
+        generated.path,
+        `remove ${
+          shellQuote(generated.path)
+        } after confirming that it is still generated by mci.`,
+      ),
+    );
+  }
+
+  const installed = await installHookWithPolicy(
+    real.value,
+    setupWorkflow,
+    setupJob,
+    capabilities,
+    migration,
+  );
+  if (installed.ok) return installed;
+  let detail = installed.error;
+  if (ignored.value !== null) {
+    const ignoredRollback = await rollbackGitIgnore(ignored.value);
+    detail += rollbackFailure(
+      ignoredRollback,
+      ignored.value.path,
+      `restore ${shellQuote(ignored.value.path)} to its prior contents and confirm it.`,
+    );
+  }
+  if (generated !== undefined) {
+    const workflowRollback = await rollbackCreatedFile(generated);
+    detail += rollbackFailure(
+      workflowRollback,
+      generated.path,
+      `remove ${
+        shellQuote(generated.path)
+      } after confirming that it is still generated by mci.`,
+    );
+  }
+  return err(detail);
+};
+
+export const setupHook = (
+  repository: string,
+  options: HookSetupOptions = {},
+): Promise<Result<void>> => setupHookWith(repository, nativeHookCapabilities, options);
 
 export const installHook = (
   repository: string,

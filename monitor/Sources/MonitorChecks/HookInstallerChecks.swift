@@ -115,7 +115,7 @@ private func shellQuote(_ value: String) -> String {
     check(hookError(successResult) == nil, "installer succeeds")
     equal(
         try? String(contentsOfFile: arguments, encoding: .utf8),
-        "hooks\ninstall\n\(repository)\n--workflow\nci/local-ci.yml\n--job\ncheck\n",
+        "hooks\nsetup\n\(repository)\n--replace-pre-push\n",
         "installer passes exact arguments")
 
     let missingBeforeSuccess = root + "/missing before success"

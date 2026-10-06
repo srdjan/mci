@@ -353,6 +353,20 @@ run. Removing the `status.json` projection requires a compatibility decision.
 `mci:ci` Deno task and selects the packaged hook through an absolute Homebrew path. Git
 configuration applies to the current worktree.
 
+`mci hooks setup` supplies the menu bar's automatic repository setup. It preserves an
+existing `ci/local-ci.yml` and validates job `check`. If that workflow is absent, it
+creates a workflow that calls the repository's existing `verify` task. Setup rejects a
+missing or recursive verification task before mutation. Setup adds `.mci/` to `.gitignore`
+when necessary. This entry keeps runtime files outside Git changes and Deno formatting.
+Setup restores the previous ignore file when installation fails.
+
+With `--replace-pre-push`, setup can replace repository-owned `.githooks` configuration
+for the selected worktree. The flag authorizes disabling that directory's pre-push hook.
+Setup preserves the old hook files and shared Git settings. An unknown pre-commit hook or
+another active hook blocks replacement. Setup removes a generated workflow when
+installation fails. The monitor retains installation errors across inspections until
+installation or inspection succeeds.
+
 If Git configuration fails after the task write, the installer attempts to restore the
 previous `deno.json` contents. If the installer enabled `extensions.worktreeConfig`, it
 attempts to restore the previous value or absence of that setting. One failed rollback

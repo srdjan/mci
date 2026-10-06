@@ -143,9 +143,7 @@ private func installHook(
     let result = runBounded(
         executable: executable,
         arguments: [
-            "hooks", "install", repository,
-            "--workflow", "ci/local-ci.yml",
-            "--job", "check",
+            "hooks", "setup", repository, "--replace-pre-push",
         ],
         timeoutMilliseconds: timeoutMilliseconds)
     switch result {

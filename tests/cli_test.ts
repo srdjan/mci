@@ -74,12 +74,50 @@ Deno.test("CLI help and version use the public configuration", () =>
     equal(help.code, 0);
     assert(text(help.stdout).includes(`mci ${denoConfig.version}`));
     assert(text(help.stdout).includes("<check|run|ci>"));
+    assert(text(help.stdout).includes("hooks setup <repository> [--replace-pre-push]"));
     equal(text(help.stderr), "");
 
     const version = await command(workspace, ["--version"]).output();
     equal(version.code, 0);
     equal(text(version.stdout).trim(), denoConfig.version);
     equal(text(version.stderr), "");
+  }));
+
+Deno.test("CLI hook setup validates arguments and requires a verification task", () =>
+  inWorkspace(async (workspace) => {
+    const invalid = await command(workspace, [
+      "hooks",
+      "setup",
+      workspace,
+      "--unknown",
+    ]).output();
+    equal(invalid.code, 2);
+    assert(text(invalid.stderr).includes("Usage:"));
+    assert(!await exists(`${workspace}/ci`));
+
+    const initialized = await new Deno.Command("/usr/bin/git", {
+      args: ["init", "--quiet", workspace],
+      clearEnv: true,
+      env: Object.fromEntries(
+        Object.entries(Deno.env.toObject()).filter(([name]) => !name.startsWith("GIT_")),
+      ),
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    equal(initialized.code, 0);
+    const config = '{"tasks":{"test":"deno test"}}\n';
+    await Deno.writeTextFile(`${workspace}/deno.json`, config);
+    const missing = await command(workspace, [
+      "hooks",
+      "setup",
+      workspace,
+      "--replace-pre-push",
+    ], { GIT_DIR: `${workspace}/.git`, GIT_WORK_TREE: workspace }).output();
+    equal(missing.code, 1);
+    assert(text(missing.stderr).includes("verify"));
+    equal(text(missing.stdout), "");
+    equal(await Deno.readTextFile(`${workspace}/deno.json`), config);
+    assert(!await exists(`${workspace}/ci`));
   }));
 
 Deno.test("CLI reports missing workflow and Bash preflight failures", () =>

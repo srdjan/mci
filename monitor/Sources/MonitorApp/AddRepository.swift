@@ -17,7 +17,7 @@ final class AddRepositoryPresenter {
         chooser.canChooseFiles = false
         chooser.allowsMultipleSelection = false
         chooser.prompt = "Add"
-        chooser.message = "Choose a repository folder. mci will monitor the folder and install the pre-commit hook for ci/local-ci.yml and job check."
+        chooser.message = "Choose a repository folder. mci creates missing CI configuration from deno task verify. Setup replaces the pre-push hook with pre-commit CI for this worktree."
         panel = chooser
         chooser.begin { [weak self] response in
             MainActor.assumeIsolated {
