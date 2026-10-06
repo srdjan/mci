@@ -157,6 +157,11 @@ const hookSetCommand = (prefix: string): string =>
 
 const extensionEnableCommand = "config\0--local\0extensions.worktreeConfig\0true";
 
+const customConfig = (prefix: string): string =>
+  `{\n  "tasks" : {\n    "test":"deno test",\n    "mci:ci" : ${
+    JSON.stringify(`'${prefix}/bin/mci' ci '.github/workflows/ci.yml' --job 'check'`)
+  }\n  },\n  "custom" : true\n}\n`;
+
 const assertFileRollbackFailure = (
   error: string,
   repository: string,
@@ -220,6 +225,132 @@ const assertGitRollbackFailure = async (
   if (prior === "absent") assert(!extension.ok);
   else assert(extension.ok && extension.value === "false");
 };
+
+Deno.test("hook installation rejects a non-Git directory before config reads", async () => {
+  const directory = await Deno.realPath(await Deno.makeTempDir({ prefix: "mci hook " }));
+  try {
+    const commands: string[] = [];
+    const result = await installHookWith(
+      directory,
+      ".github/workflows/ci.yml",
+      "check",
+      {
+        brewPrefix: () => Promise.resolve(err("unexpected Homebrew lookup")),
+        git: (args: readonly string[]): Promise<Result<string>> => {
+          commands.push(args.slice(2).join("\0"));
+          return fixtureGitResult(args);
+        },
+      },
+    );
+
+    assert(!result.ok && result.error.includes("not a Git repository"));
+    equal(commands, ["rev-parse\0--show-toplevel"]);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("hook installation rejects a nested directory before config reads", async () => {
+  await withRepository(async (repository, prefix) => {
+    const nested = `${repository}/nested`;
+    await Deno.mkdir(nested);
+    const commands: string[] = [];
+    const delegated = capabilities(prefix);
+    const result = await installHookWith(
+      nested,
+      ".github/workflows/ci.yml",
+      "check",
+      {
+        ...delegated,
+        git: (args: readonly string[]): Promise<Result<string>> => {
+          commands.push(args.slice(2).join("\0"));
+          return delegated.git(args);
+        },
+      },
+    );
+
+    assert(!result.ok && result.error.includes("Git worktree root"));
+    equal(commands, ["rev-parse\0--show-toplevel"]);
+  });
+});
+
+Deno.test("hook installation rejects a redirected worktree without mutation", async () => {
+  await withRepository(async (repository, prefix) => {
+    const redirected = `${repository}/redirected`;
+    await Deno.mkdir(redirected);
+    await runGit(repository, [
+      "config",
+      "--local",
+      "extensions.worktreeConfig",
+      "true",
+    ]);
+    await runGit(repository, ["config", "--local", "core.worktree", redirected]);
+    const configPath = `${repository}/deno.json`;
+    const gitConfigPath = `${repository}/.git/config`;
+    const configBefore = await Deno.readTextFile(configPath);
+    const gitConfigBefore = await Deno.readTextFile(gitConfigPath);
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      capabilities(prefix),
+    );
+
+    assert(!result.ok && result.error.includes("Git worktree root"));
+    equal(await Deno.readTextFile(configPath), configBefore);
+    equal(await Deno.readTextFile(gitConfigPath), gitConfigBefore);
+    assert(!await exists(`${repository}/.git/config.worktree`));
+  });
+});
+
+Deno.test("hook installation preserves a matching custom deno.json", async () => {
+  await withRepository(async (repository, prefix) => {
+    const configPath = `${repository}/deno.json`;
+    const before = customConfig(prefix);
+    await Deno.writeTextFile(configPath, before);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      unwrap(
+        await installHookWith(
+          repository,
+          ".github/workflows/ci.yml",
+          "check",
+          capabilities(prefix),
+        ),
+      );
+      equal(await Deno.readTextFile(configPath), before);
+    }
+  });
+});
+
+Deno.test("later Git failure preserves a matching custom deno.json", async () => {
+  await withRepository(async (repository, prefix) => {
+    const configPath = `${repository}/deno.json`;
+    const before = customConfig(prefix);
+    await Deno.writeTextFile(configPath, before);
+    const delegated = capabilities(prefix);
+    let configAtFailure: string | undefined;
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      {
+        ...delegated,
+        git: async (args: readonly string[]): Promise<Result<string>> => {
+          if (args.slice(2).join("\0") === hookSetCommand(prefix)) {
+            configAtFailure = await Deno.readTextFile(configPath);
+            return err("injected hook path failure");
+          }
+          return delegated.git(args);
+        },
+      },
+    );
+
+    assert(!result.ok && result.error.includes("injected hook path failure"));
+    equal(configAtFailure, before);
+    equal(await Deno.readTextFile(configPath), before);
+  });
+});
 
 Deno.test("hook installation writes one stable task and configures Git", async () => {
   await withRepository(async (repository, prefix) => {

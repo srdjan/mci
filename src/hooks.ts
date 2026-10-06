@@ -166,6 +166,26 @@ export const installHookWith = async (
 
   const real = await attempt(() => Deno.realPath(repository));
   if (!real.ok) return err(`The repository is not available: ${real.error}`);
+  const root = await capabilities.git(["-C", real.value, "rev-parse", "--show-toplevel"]);
+  let rootFailure: string | undefined;
+  if (root.ok) {
+    const canonicalRoot = await attempt(() => Deno.realPath(root.value));
+    if (!canonicalRoot.ok || canonicalRoot.value !== real.value) {
+      rootFailure = "The repository path must be the Git worktree root.";
+    }
+  } else {
+    rootFailure = `The path is not a Git repository: ${root.error}`;
+  }
+  if (rootFailure !== undefined) {
+    const marker = await attempt(() => Deno.lstat(`${real.value}/.git`));
+    const rootHasGitMarker = marker.ok && !marker.value.isSymlink &&
+      (marker.value.isFile || marker.value.isDirectory);
+    const gitDirectory = rootHasGitMarker
+      ? await capabilities.git(["-C", real.value, "rev-parse", "--git-dir"])
+      : root;
+    if (!rootHasGitMarker || !gitDirectory.ok) return err(rootFailure);
+  }
+
   const worktreeExtension = await capabilities.git([
     "-C",
     real.value,
@@ -217,13 +237,7 @@ export const installHookWith = async (
       );
     }
   }
-  const root = await capabilities.git(["-C", real.value, "rev-parse", "--show-toplevel"]);
-  if (!root.ok) return err(`The path is not a Git repository: ${root.error}`);
-  const canonicalRoot = await attempt(() => Deno.realPath(root.value));
-  if (!canonicalRoot.ok || canonicalRoot.value !== real.value) {
-    return err("The repository path must be the Git worktree root.");
-  }
-
+  if (rootFailure !== undefined) return err(rootFailure);
   const workflowPath = `${real.value}/${workflow}`;
   const canonicalWorkflow = await attempt(() => Deno.realPath(workflowPath));
   if (
@@ -368,15 +382,18 @@ export const installHookWith = async (
     }
   }
 
-  const nextConfig = {
-    ...config.value,
-    tasks: { ...(object(currentTasks) ? currentTasks : {}), [taskName]: task },
-  };
-  const configText = `${JSON.stringify(nextConfig, null, 2)}\n`;
-  const wroteConfig = oldConfig.value === configText
-    ? ok(undefined)
-    : await writeAtomic(configPath, configText);
-  if (!wroteConfig.ok) return wroteConfig;
+  const configUpdated = existingTask === undefined;
+  if (configUpdated) {
+    const nextConfig = {
+      ...config.value,
+      tasks: { ...(object(currentTasks) ? currentTasks : {}), [taskName]: task },
+    };
+    const wroteConfig = await writeAtomic(
+      configPath,
+      `${JSON.stringify(nextConfig, null, 2)}\n`,
+    );
+    if (!wroteConfig.ok) return wroteConfig;
+  }
   let enabledWorktreeConfig = false;
   if (!worktreeConfigEnabled) {
     const enabled = await capabilities.git([
@@ -388,7 +405,9 @@ export const installHookWith = async (
       "true",
     ]);
     if (!enabled.ok) {
-      const restoredConfig = await writeAtomic(configPath, oldConfig.value);
+      const restoredConfig = configUpdated
+        ? await writeAtomic(configPath, oldConfig.value)
+        : ok(undefined);
       return err(
         `Cannot enable worktreeConfig: ${enabled.error}` +
           rollbackFailure(
@@ -431,7 +450,9 @@ export const installHookWith = async (
           "--unset-all",
           "extensions.worktreeConfig",
         ]);
-      const restoredConfig = await writeAtomic(configPath, oldConfig.value);
+      const restoredConfig = configUpdated
+        ? await writeAtomic(configPath, oldConfig.value)
+        : ok(undefined);
       const extensionRecovery = worktreeExtension.ok
         ? "restore the prior extensions.worktreeConfig value and confirm the setting.\n" +
           `Command:\ngit -C ${shellQuote(real.value)} config --local ` +
