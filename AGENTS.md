@@ -15,5 +15,9 @@ started work and drops queued work. The daemon retries neither.
 The menu bar monitor app reads daemon snapshots and opens saved logs. The monitor must not
 start CI or add another automatic trigger.
 
+mci provides general tasks that repositories can select through configuration. Keep
+repository-specific commands and task choices in each repository's configuration. Do not
+add behavior selected by a repository name or path to mci.
+
 Work directly on local main. Commit each complete unit locally. Never push; the user owns
 repository backups.
