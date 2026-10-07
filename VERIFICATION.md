@@ -745,6 +745,21 @@ cache or only the kernel buffers.
 
 ## Evidence limits
 
+### Receipt path identity
+
+The public baseline regression selected the workspace workflow identity after
+`alias/../ci.yml` redirected to another workflow. The corrected focused suite passed 42
+tests and ignored one platform test. The integrated gate passed 348 Deno tests and 307
+native checks.
+
+The native CLI test executed the external workflow, left the workspace workflow
+unexecuted, and saved a matching success receipt. It required native process inspection
+outside the sandbox. Receipt tests cover dangling targets before and after creation,
+relative links, confirmed cycles, long non-cyclic chains, non-directory components, and
+native permission failure. The public Codex test confirms that unrelated success leaves a
+failure unresolved. These tests do not establish atomic selection during concurrent
+filesystem changes or migration of earlier incorrect identities.
+
 ### Source startup ownership
 
 Public service tests reproduced unchecked baseline signaling after readiness failure. The

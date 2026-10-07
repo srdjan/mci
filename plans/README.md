@@ -17,7 +17,7 @@ priorities shown to the user. Effort describes scope, rather than elapsed time. 
 | ----------------------------------------------- | ------------- | --------------------------------------------------- | -------- | ------ | ------------------------------------------------- | ------ |
 | [001](001-preserve-recorded-results.md)         | 1             | Preserve recorded results after projection failure. | High     | Medium | None                                              | DONE   |
 | [002](002-check-startup-rollback-ownership.md)  | 2             | Check ownership before startup rollback signals.    | High     | Medium | None                                              | DONE   |
-| [003](003-resolve-receipt-path-components.md)   | 3             | Match receipt identity to filesystem path order.    | High     | Medium | None                                              | TODO   |
+| [003](003-resolve-receipt-path-components.md)   | 3             | Match receipt identity to filesystem path order.    | High     | Medium | None                                              | DONE   |
 | [004](004-parse-deno-task-options.md)           | 6             | Parse option values before Deno task names.         | Medium   | Medium | None                                              | DONE   |
 | [005](005-check-existing-workflow-recursion.md) | 4             | Inspect defined dependencies in existing workflows. | High     | Medium | 004: task option parsing                          | TODO   |
 | [006](006-finish-hook-rollback-before-exit.md)  | 5             | Finish hook rollback before cancellation completes. | Medium   | Large  | 004: task option parsing; 005: workflow recursion | TODO   |
@@ -77,6 +77,9 @@ direction options. The user selected the six defects, rather than those options.
 migration and forced installer termination are explicit deferred boundaries.
 
 ## Worklog and ownership
+
+Plan 002, startup ownership, is committed locally as `96b7758`. Its pre-commit gate passed
+348 Deno tests and 307 native checks.
 
 Plan 001, result preservation, is committed locally as `ff618a8`. Its pre-commit gate
 passed 348 Deno tests and 307 native checks.

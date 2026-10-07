@@ -307,30 +307,144 @@ const normalizedAbsolute = (workspace: string, workflow: string): string => {
   return `/${parts.join("/")}`;
 };
 
+type PathLookup<T> =
+  | { readonly tag: "found"; readonly value: T }
+  | { readonly tag: "missing" }
+  | { readonly tag: "kernel-loop"; readonly path: string; readonly detail: string }
+  | { readonly tag: "filesystem"; readonly path: string; readonly detail: string };
+
+type PathPart =
+  | { readonly tag: "component"; readonly value: string }
+  | { readonly tag: "link-end"; readonly path: string };
+
+const pathParts = (path: string): readonly PathPart[] =>
+  path.split("/")
+    .filter((part) => part.length > 0)
+    .map((value) => ({ tag: "component" as const, value }));
+
+const lookupPath = async <T>(
+  path: string,
+  effect: () => Promise<T>,
+): Promise<PathLookup<T>> => {
+  try {
+    return { tag: "found", value: await effect() };
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return { tag: "missing" };
+    if (error instanceof Deno.errors.FilesystemLoop) {
+      return { tag: "kernel-loop", path, detail: message(error) };
+    }
+    return { tag: "filesystem", path, detail: message(error) };
+  }
+};
+
+const lookupError = <T>(
+  lookup: Exclude<PathLookup<T>, { readonly tag: "found" }>,
+): string => {
+  switch (lookup.tag) {
+    case "missing":
+      return "Workflow identity failed: path disappeared during resolution";
+    case "kernel-loop":
+      return `Workflow identity failed at ${lookup.path}: ${lookup.detail}`;
+    case "filesystem":
+      return `Workflow identity failed at ${lookup.path}: ${lookup.detail}`;
+  }
+};
+
+const unresolvedPath = (
+  resolved: readonly string[],
+  component: string,
+  remaining: readonly PathPart[],
+): string =>
+  normalizedAbsolute(
+    "/",
+    [
+      ...resolved,
+      component,
+      ...remaining.flatMap((part) => part.tag === "component" ? [part.value] : []),
+    ].join("/"),
+  );
+
+const resolvePathComponents = async (path: string): Promise<Result<string>> => {
+  const remaining = [...pathParts(path)];
+  const resolved: string[] = [];
+  const activeLinks = new Set<string>();
+  while (remaining.length > 0) {
+    const part = remaining.shift();
+    if (part === undefined) break;
+    if (part.tag === "link-end") {
+      activeLinks.delete(part.path);
+      continue;
+    }
+    if (part.value === ".") continue;
+    if (part.value === "..") {
+      resolved.pop();
+      continue;
+    }
+    const candidate = `/${[...resolved, part.value].join("/")}`;
+    const info = await lookupPath(candidate, () => Deno.lstat(candidate));
+    if (info.tag === "missing") {
+      return ok(unresolvedPath(resolved, part.value, remaining));
+    }
+    if (info.tag !== "found") return err(lookupError(info));
+    if (info.value.isSymlink) {
+      if (activeLinks.has(candidate)) {
+        return err(`Workflow identity failed: symbolic link cycle at ${candidate}`);
+      }
+      const target = await lookupPath(candidate, () => Deno.readLink(candidate));
+      if (target.tag === "missing") {
+        return ok(unresolvedPath(resolved, part.value, remaining));
+      }
+      if (target.tag !== "found") return err(lookupError(target));
+      activeLinks.add(candidate);
+      if (target.value.startsWith("/")) resolved.length = 0;
+      remaining.unshift(
+        ...pathParts(target.value),
+        { tag: "link-end", path: candidate },
+      );
+      continue;
+    }
+    resolved.push(part.value);
+    if (
+      remaining.some((entry) => entry.tag === "component") &&
+      !info.value.isDirectory
+    ) {
+      return err(
+        `Workflow identity failed at ${candidate}: path component is not a directory`,
+      );
+    }
+  }
+  return ok(`/${resolved.join("/")}`);
+};
+
 const canonicalIdentity = async (
   workspace: string,
   workflow: string,
 ): Promise<Result<{ readonly workspace: string; readonly workflow: string }>> => {
   const realWorkspace = await attempt(() => Deno.realPath(workspace));
   if (!realWorkspace.ok) return err(`Workspace identity failed: ${realWorkspace.error}`);
-  const candidate = normalizedAbsolute(realWorkspace.value, workflow);
-  let ancestor = candidate;
-  const suffix: string[] = [];
-  while (true) {
-    const resolved = await attempt(() => Deno.realPath(ancestor));
-    if (resolved.ok) {
-      return ok({
-        workspace: realWorkspace.value,
-        workflow: normalizedAbsolute(resolved.value, suffix.join("/")),
-      });
+  const candidate = workflow.startsWith("/")
+    ? workflow
+    : `${realWorkspace.value}/${workflow}`;
+  const existing = await lookupPath(candidate, () => Deno.realPath(candidate));
+  if (existing.tag === "found") {
+    if (candidate.length > 1 && candidate.endsWith("/")) {
+      const info = await lookupPath(existing.value, () => Deno.lstat(existing.value));
+      if (info.tag !== "found") return err(lookupError(info));
+      if (!info.value.isDirectory) {
+        return err(
+          `Workflow identity failed at ${candidate}: path component is not a directory`,
+        );
+      }
     }
-    if (ancestor === "/") {
-      return ok({ workspace: realWorkspace.value, workflow: candidate });
-    }
-    const separator = ancestor.lastIndexOf("/");
-    suffix.unshift(ancestor.slice(separator + 1));
-    ancestor = separator === 0 ? "/" : ancestor.slice(0, separator);
+    return ok({ workspace: realWorkspace.value, workflow: existing.value });
   }
+  if (existing.tag !== "missing" && existing.tag !== "kernel-loop") {
+    return err(lookupError(existing));
+  }
+  const resolved = await resolvePathComponents(candidate);
+  return resolved.ok
+    ? ok({ workspace: realWorkspace.value, workflow: resolved.value })
+    : resolved;
 };
 
 const pendingOutcome = (): CiReceiptOutcome => ({

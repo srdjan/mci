@@ -273,6 +273,54 @@ Deno.test({
     }),
 });
 
+Deno.test({
+  name: "macOS CLI receipt identifies the workflow selected after a link and parent",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-cli-path-" });
+      const outside = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-cli-target-" });
+      try {
+        await Deno.mkdir(`${outside}/child`);
+        await Deno.writeTextFile(
+          `${outside}/ci.yml`,
+          fixture("      - run: touch selected-outside"),
+        );
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture("      - run: touch selected-workspace"),
+        );
+        await Deno.symlink(`${outside}/child`, `${workspace}/alias`);
+        const args = cliSourceArgs(["run", "alias/../ci.yml", "--job", "check"])
+          .map((argument) =>
+            argument === "--permission-set=mci" ? "--allow-all" : argument
+          );
+        const result = await new Deno.Command(Deno.execPath(), {
+          args,
+          cwd: workspace,
+          env: isolatedEnv({
+            MCI_HOME: home,
+            MCI_SESSION_ID: "cli-path-identity",
+          }),
+          stdout: "piped",
+          stderr: "piped",
+        }).output();
+        assert(result.code === 0, text(result.stderr));
+        assert(await exists(`${workspace}/selected-outside`), text(result.stderr));
+        assert(!await exists(`${workspace}/selected-workspace`));
+        const receipts = unwrap(
+          await readSessionReceipts("cli-path-identity", home),
+        );
+        equal(receipts.length, 1);
+        equal(receipts[0]?.workflow, await Deno.realPath(`${outside}/ci.yml`));
+        equal(receipts[0]?.outcome.kind, "success");
+      } finally {
+        await Deno.remove(home, { recursive: true });
+        await Deno.remove(outside, { recursive: true });
+      }
+    }),
+});
+
 Deno.test("CLI ci without a job returns 2 and saves nothing", () =>
   inWorkspace(async (workspace) => {
     await Deno.writeTextFile(`${workspace}/ci.yml`, fixture("      - run: echo hello"));

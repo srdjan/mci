@@ -431,6 +431,18 @@ daemon request also records its request identifier and saved log path. An interr
 client can leave a pending receipt. Receipt writes use private temporary files and atomic
 rename. The reader rejects malformed receipts and symlinked receipt directories or files.
 
+Workflow identity resolves symbolic links before following parent components. Existing
+paths use filesystem resolution of the original invocation path. Missing paths resolve
+existing components in order and retain the unresolved suffix. Relative and dangling link
+targets follow the same order. Active link cycles and non-missing filesystem errors
+produce a failure instead of a guessed identity.
+
+Receipt fields and session rules remain unchanged. Earlier incorrect identities cannot
+always be reconstructed because receipts contain no original invocation path. The adapter
+does not rewrite or delete those receipts. A legacy unresolved receipt can need owner
+inspection. Concurrent path changes between recording and execution remain outside the
+atomicity contract.
+
 `mci codex hook` reads receipts for an explicit `MCI_SESSION_ID` override or the event's
 session identifier. The adapter ignores inherited `CODEX_SESSION_ID` and `CODEX_THREAD_ID`
 because hook processes can retain identifiers from a parent session. An override must

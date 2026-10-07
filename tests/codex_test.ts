@@ -288,7 +288,7 @@ Deno.test("Concurrent Codex hook commands emit one warning for the same receipt"
     }
   }));
 
-Deno.test("Codex receipt resolution uses the matching job and causal start time", () =>
+Deno.test("Codex hook clears failures only after matching workflow, job, and time", () =>
   inWorkspace(async (workspace) => {
     const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-codex-" });
     try {
@@ -305,6 +305,21 @@ Deno.test("Codex receipt resolution uses the matching job and causal start time"
             code: 0,
             detail: "passed",
             requestId: "unrelated",
+            log: null,
+          },
+        }),
+      );
+      await saveReceipt(
+        home,
+        receipt("resolution", workspace, {
+          workflow: `${workspace}/unrelated.yml`,
+          started: "2026-10-04T12:02:00.000Z",
+          finished: "2026-10-04T12:03:00.000Z",
+          outcome: {
+            kind: "success",
+            code: 0,
+            detail: "unrelated workflow passed",
+            requestId: "unrelated-workflow",
             log: null,
           },
         }),

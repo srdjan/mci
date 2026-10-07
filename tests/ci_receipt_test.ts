@@ -99,6 +99,55 @@ Deno.test("CI receipts use the selected session and canonical workflow identity"
     }
   }));
 
+Deno.test("CI receipts resolve a symlink before a following parent component", () =>
+  inWorkspace(async (workspace) => {
+    const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-order-" });
+    try {
+      const outside = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-target-" });
+      try {
+        await Deno.mkdir(`${outside}/child`);
+        await Deno.writeTextFile(`${outside}/ci.yml`, "name: selected\n");
+        await Deno.writeTextFile(`${workspace}/ci.yml`, "name: other\n");
+        await Deno.symlink(`${outside}/child`, `${workspace}/alias`);
+        const module = new URL("../src/ci-receipt.ts", import.meta.url).href;
+        const source = `import { beginReceipt } from ${JSON.stringify(module)};
+const result = await beginReceipt({
+  workspace: Deno.args[0], workflow: Deno.args[1], job: "check",
+  command: "run", home: Deno.args[2],
+});
+if (!result.ok) { console.error(result.error); Deno.exit(1); }`;
+        for (
+          const [index, workflow] of [
+            "alias/../ci.yml",
+            `${workspace}/alias/../ci.yml`,
+          ].entries()
+        ) {
+          const sessionId = `component-order-${index}`;
+          const output = await new Deno.Command(Deno.execPath(), {
+            args: ["eval", "--allow-all", source, workspace, workflow, home],
+            cwd: workspace,
+            env: {
+              MCI_SESSION_ID: sessionId,
+              CODEX_SESSION_ID: "",
+              CODEX_THREAD_ID: "",
+            },
+            stdout: "piped",
+            stderr: "piped",
+          }).output();
+          assert(output.success, new TextDecoder().decode(output.stderr));
+          const recorded = unwrap(await readSessionReceipts(sessionId, home))[0];
+          assert(recorded !== undefined);
+          equal(recorded.workflow, await Deno.realPath(`${outside}/ci.yml`));
+          equal(await Deno.readTextFile(recorded.workflow), "name: selected\n");
+        }
+      } finally {
+        await Deno.remove(outside, { recursive: true });
+      }
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  }));
+
 Deno.test("CI receipts keep missing workflow identity after creation through a symlink", () =>
   inWorkspace(async (workspace) => {
     const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-identity-" });
@@ -126,6 +175,142 @@ Deno.test("CI receipts keep missing workflow identity after creation through a s
       await Deno.remove(home, { recursive: true });
     }
   }));
+
+Deno.test("CI receipts preserve relative dangling-link identity after target creation", () =>
+  inWorkspace(async (workspace) => {
+    const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-dangling-" });
+    try {
+      await Deno.symlink("future/child", `${workspace}/alias`);
+      await withSessionEnvironment({ MCI_SESSION_ID: "dangling-identity" }, async () => {
+        const input = {
+          workspace,
+          workflow: "./alias/../ci.yml",
+          job: "check",
+          command: "run" as const,
+          home,
+        };
+        const missing = unwrap(await beginReceipt(input));
+        assert(missing !== null);
+        equal(missing.workflow, `${workspace}/future/ci.yml`);
+        await Deno.mkdir(`${workspace}/future/child`, { recursive: true });
+        await Deno.writeTextFile(`${workspace}/future/ci.yml`, "created");
+        const created = unwrap(await beginReceipt(input));
+        assert(created !== null);
+        equal(created.workflow, missing.workflow);
+      });
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  }));
+
+Deno.test("CI receipt identity rejects link cycles and non-directory components", () =>
+  inWorkspace(async (workspace) => {
+    const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-path-error-" });
+    try {
+      await Deno.symlink("cycle-b", `${workspace}/cycle-a`);
+      await Deno.symlink("cycle-a", `${workspace}/cycle-b`);
+      await Deno.writeTextFile(`${workspace}/file`, "not a directory");
+      await withSessionEnvironment({ MCI_SESSION_ID: "path-errors" }, async () => {
+        const cycle = await beginReceipt({
+          workspace,
+          workflow: "cycle-a/ci.yml",
+          job: "check",
+          command: "run",
+          home,
+        });
+        assert(!cycle.ok);
+        assert(cycle.error.includes("symbolic link cycle"), cycle.error);
+
+        const notDirectory = await beginReceipt({
+          workspace,
+          workflow: "file/ci.yml",
+          job: "check",
+          command: "run",
+          home,
+        });
+        assert(!notDirectory.ok);
+        assert(
+          notDirectory.error.toLowerCase().includes("not a directory"),
+          notDirectory.error,
+        );
+
+        const trailingSlash = await beginReceipt({
+          workspace,
+          workflow: "file/",
+          job: "check",
+          command: "run",
+          home,
+        });
+        assert(!trailingSlash.ok);
+        assert(trailingSlash.error.toLowerCase().includes("not a directory"));
+      });
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  }));
+
+Deno.test("CI receipt identity resolves a long non-cyclic link chain", () =>
+  inWorkspace(async (workspace) => {
+    const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-link-chain-" });
+    try {
+      await Deno.mkdir(`${workspace}/actual`);
+      await Deno.writeTextFile(`${workspace}/actual/ci.yml`, "selected");
+      const linkCount = 64;
+      for (let index = 0; index < linkCount; index += 1) {
+        const target = index === linkCount - 1 ? "actual" : `link-${index + 1}`;
+        await Deno.symlink(target, `${workspace}/link-${index}`);
+      }
+      try {
+        await Deno.realPath(`${workspace}/link-0/ci.yml`);
+        assert(false, "the fixture did not exceed the kernel symbolic-link limit");
+      } catch (error) {
+        assert(error instanceof Deno.errors.FilesystemLoop, String(error));
+      }
+      await withSessionEnvironment({ MCI_SESSION_ID: "long-link-chain" }, async () => {
+        const receipt = unwrap(
+          await beginReceipt({
+            workspace,
+            workflow: "link-0/ci.yml",
+            job: "check",
+            command: "run",
+            home,
+          }),
+        );
+        assert(receipt !== null);
+        equal(receipt.workflow, `${workspace}/actual/ci.yml`);
+      });
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  }));
+
+Deno.test({
+  name: "CI receipt identity returns permission failures without guessing a path",
+  ignore: Deno.build.os === "windows",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-permission-" });
+      const blocked = `${workspace}/blocked`;
+      try {
+        await Deno.mkdir(blocked, { mode: 0o700 });
+        await Deno.chmod(blocked, 0o000);
+        await withSessionEnvironment({ MCI_SESSION_ID: "permission-error" }, async () => {
+          const result = await beginReceipt({
+            workspace,
+            workflow: "blocked/ci.yml",
+            job: "check",
+            command: "run",
+            home,
+          });
+          assert(!result.ok);
+          assert(result.error.includes("Permission denied"), result.error);
+        });
+      } finally {
+        await Deno.chmod(blocked, 0o700);
+        await Deno.remove(home, { recursive: true });
+      }
+    }),
+});
 
 Deno.test("CI receipt completion survives a clock before its recorded start", () =>
   inWorkspace(async (workspace) => {
