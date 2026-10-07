@@ -364,6 +364,17 @@ repository name or path selects different behavior in mci. Setup adds `.mci/` to
 `.gitignore` when necessary. This entry keeps runtime files outside Git changes and Deno
 formatting. Setup restores the previous ignore file when installation fails.
 
+Dependency discovery and recursion detection use one literal invocation scanner. The
+scanner consumes required option values before the task name. Deno 2.9.7 consumes a
+separate optional `--lock` value. Other optional-value flags use `=` for a value.
+Arguments after the task name do not change dependency discovery.
+
+The scanner resolves default and explicit root `deno.json` commands against root tasks.
+Foreign configurations, changed directories, and workspace fan-out have opaque context. An
+opaque context means mci trusts the command without inspecting its task configuration.
+Literal `ci` and `mci:ci` names still cause refusal. Quotes protect printed command text
+from invocation detection. The scanner does not implement the complete shell grammar.
+
 With `--replace-pre-push`, setup can replace repository-owned `.githooks` configuration
 for the selected worktree. The flag authorizes disabling that directory's pre-push hook.
 Setup preserves the old hook files and shared Git settings. An unknown pre-commit hook or

@@ -145,12 +145,153 @@ type HookMigration = {
   readonly activeHooks: string;
 };
 
-const recursiveStep = (script: string): boolean =>
-  /(?:^|[\n;&|()])\s*deno\s+task(?:\s+--[^\s]+)*\s+(?:ci|mci:ci)(?:\s|$)/m.test(
-    script,
-  ) ||
-  /(?:^|[\n;&|()])\s*(?:(?:[^\s;&|()]+\/)?mci|'(?:[^']*\/)?mci'|"(?:[^"]*\/)?mci")\s+ci(?:\s|$)/m
-    .test(script);
+type ShellWord = { readonly value: string; readonly literal: boolean };
+type TaskInvocation =
+  | { readonly kind: "root"; readonly name: string }
+  | { readonly kind: "opaque"; readonly name: string };
+
+// This scanner covers literal command positions, not the complete shell grammar.
+const shellCommands = (script: string): readonly (readonly ShellWord[])[] => {
+  const commands: ShellWord[][] = [];
+  let words: ShellWord[] = [];
+  let value = "";
+  let literal = true;
+  let started = false;
+  let quote = "";
+  const finishWord = () => {
+    if (started) words.push({ value, literal: literal && quote === "" });
+    value = "";
+    literal = true;
+    started = false;
+  };
+  const finishCommand = () => {
+    finishWord();
+    if (words.length) commands.push(words);
+    words = [];
+  };
+  for (let index = 0; index < script.length; index++) {
+    const character = script.charAt(index);
+    if (character === "\\" && quote !== "'") {
+      started = true;
+      const next = script[++index];
+      if (next === undefined) literal = false;
+      else if (next !== "\n") value += next;
+    } else if (quote) {
+      if (character === quote) quote = "";
+      else {
+        value += character;
+        if (quote === '"' && (character === "$" || character === "`")) literal = false;
+      }
+    } else if (character === "'" || character === '"') {
+      quote = character;
+      started = true;
+    } else if (character === "#" && !started) {
+      while (index < script.length && script[index] !== "\n") index++;
+      finishCommand();
+    } else if ("\n;&|()".includes(character)) {
+      finishCommand();
+    } else if (/\s/.test(character)) {
+      finishWord();
+    } else {
+      value += character;
+      started = true;
+      if (character === "$" || character === "`") literal = false;
+    }
+  }
+  finishCommand();
+  return commands;
+};
+
+const inspectInvocations = (
+  script: string,
+  repository: string,
+): { readonly tasks: readonly TaskInvocation[]; readonly mciCi: boolean } => {
+  const tasks: TaskInvocation[] = [];
+  let mciCi = false;
+  for (const words of shellCommands(script)) {
+    const executable = words[0];
+    if (!executable?.literal) continue;
+    if (
+      (executable.value === "mci" || executable.value.endsWith("/mci")) &&
+      words[1]?.literal && words[1].value === "ci"
+    ) mciCi = true;
+    if (executable.value !== "deno" || !words[1]?.literal || words[1].value !== "task") {
+      continue;
+    }
+    let opaque = false;
+    for (let index = 2; index < words.length; index++) {
+      const word = words[index];
+      if (!word?.literal) break;
+      if (word.value === "--") {
+        const task = words[index + 1];
+        if (task?.literal) {
+          tasks.push({ kind: opaque ? "opaque" : "root", name: task.value });
+        }
+        break;
+      }
+      if (!word.value.startsWith("-")) {
+        tasks.push({ kind: opaque ? "opaque" : "root", name: word.value });
+        break;
+      }
+      const equals = word.value.indexOf("=");
+      const short = /^-[cfj].+/.test(word.value);
+      const option = short
+        ? word.value.slice(0, 2)
+        : equals >= 0
+        ? word.value.slice(0, equals)
+        : word.value;
+      const attached = short
+        ? word.value.slice(2)
+        : equals >= 0
+        ? word.value.slice(equals + 1)
+        : undefined;
+      if (
+        ["--cwd", "--config", "-c", "--filter", "-f", "--jobs", "-j"].includes(option)
+      ) {
+        const argument = attached === undefined
+          ? words[++index]
+          : { value: attached, literal: true };
+        if (!argument?.literal) break;
+        if (option === "--config" || option === "-c") {
+          if (
+            !["deno.json", "./deno.json", `${repository}/deno.json`].includes(
+              argument.value,
+            )
+          ) opaque = true;
+        } else if (option === "--cwd") {
+          if (![".", "./", repository].includes(argument.value)) opaque = true;
+        } else if (option === "--filter" || option === "-f") opaque = true;
+      } else if (option === "--lock") {
+        // Deno 2.9.7 consumes a separate optional lock value, unlike the other optional flags.
+        const next = words[index + 1];
+        if (attached === undefined && next && !next.value.startsWith("-")) index++;
+      } else if (["-r", "--recursive", "--members", "--eval"].includes(option)) {
+        opaque = true;
+      } else if (
+        ![
+          "--env-file",
+          "--node-modules-dir",
+          "--frozen-lockfile",
+          "--if-present",
+          "--no-prefix",
+          "--no-lock",
+        ].includes(option)
+      ) {
+        opaque = true;
+      }
+    }
+  }
+  return { tasks, mciCi };
+};
+
+const recursiveInvocations = (
+  invocations: ReturnType<typeof inspectInvocations>,
+): boolean =>
+  invocations.mciCi ||
+  invocations.tasks.some(({ name }) => name === "ci" || name === "mci:ci");
+
+const recursiveStep = (script: string, repository: string): boolean =>
+  recursiveInvocations(inspectInvocations(script, repository));
 
 const regularFile = async (path: string): Promise<Result<"absent" | "file">> => {
   const info = await attempt(() => Deno.lstat(path));
@@ -181,19 +322,10 @@ const readConfig = async (path: string): Promise<Result<JsonObject>> => {
 const missingGitValue = (result: Result<string>): boolean =>
   !result.ok && result.error.endsWith("exited with 1");
 
-const taskReferences = (script: string): readonly string[] => {
-  const references: string[] = [];
-  const pattern = /(?:^|[\n;&|()])\s*deno\s+task(?:\s+--[^\s]+)*\s+([^\s;&|()]+)/gm;
-  for (const match of script.matchAll(pattern)) {
-    const name = match[1]?.replace(/^['"]|['"]$/g, "");
-    if (name) references.push(name);
-  }
-  return references;
-};
-
 const validateTasks = (
   tasks: JsonObject,
   selected: readonly string[],
+  repository: string,
 ): Result<void> => {
   const visited = new Set<string>();
   const visiting = new Set<string>();
@@ -208,14 +340,16 @@ const validateTasks = (
     if (typeof script !== "string" || !script.trim() || script.includes("\0")) {
       return err(`deno.json must define a nonempty string task named ${name}.`);
     }
-    if (recursiveStep(script)) {
+    const invocations = inspectInvocations(script, repository);
+    if (recursiveInvocations(invocations)) {
       return err(
         `The selected task ${selectedTask} reaches ${name}, which would recurse through mci CI.`,
       );
     }
     visiting.add(name);
-    for (const dependency of taskReferences(script)) {
-      const checked = visit(dependency, selectedTask);
+    for (const dependency of invocations.tasks) {
+      if (dependency.kind !== "root") continue;
+      const checked = visit(dependency.name, selectedTask);
       if (!checked.ok) return checked;
     }
     visiting.delete(name);
@@ -554,7 +688,7 @@ const installHookWithPolicy = async (
   if (!source.ok) return err(`Cannot read the workflow: ${source.error}`);
   const plan = planWorkflow(source.value, job);
   if (!plan.ok) return err(`The workflow cannot run job ${job}: ${plan.error}`);
-  if (plan.value.steps.some((step) => recursiveStep(step.script))) {
+  if (plan.value.steps.some((step) => recursiveStep(step.script, real.value))) {
     return err("The workflow job invokes mci CI and would recurse through the hook.");
   }
 
@@ -914,14 +1048,14 @@ export const setupHookWith = async (
         "deno.json must define at least one standard task: fmt:check, lint, check, or test.",
       );
     }
-    const verified = validateTasks(tasks, selectedStandardTasks);
+    const verified = validateTasks(tasks, selectedStandardTasks, real.value);
     if (!verified.ok) return verified;
   } else {
     const workflow = await attempt(() => Deno.readTextFile(workflowPath));
     if (!workflow.ok) return err(`Cannot read the workflow: ${workflow.error}`);
     const plan = planWorkflow(workflow.value, setupJob);
     if (!plan.ok) return err(`The workflow cannot run job ${setupJob}: ${plan.error}`);
-    if (plan.value.steps.some((step) => recursiveStep(step.script))) {
+    if (plan.value.steps.some((step) => recursiveStep(step.script, real.value))) {
       return err("The workflow job invokes mci CI and would recurse through the hook.");
     }
   }

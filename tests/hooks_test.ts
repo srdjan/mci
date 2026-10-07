@@ -411,6 +411,90 @@ Deno.test("hook setup generates present standard tasks in canonical order", asyn
   });
 });
 
+for (
+  const invocation of [
+    "deno task --config deno.json lint",
+    "deno task --config=deno.json lint",
+    "deno task -c deno.json lint",
+    "deno task -cdeno.json lint",
+    "deno task --config './deno.json' -j 1 lint",
+    'deno task --config="deno.json" --jobs=1 lint',
+    "deno task --env-file --node-modules-dir --frozen-lockfile lint",
+    "deno task --env-file=.env --lock deno.lock --no-prefix lint",
+    "deno task --lock=deno.lock --if-present lint --config other.json",
+  ]
+) {
+  Deno.test(`hook setup accepts task options: ${invocation}`, async () => {
+    await withRepository(async (repository, prefix) => {
+      await Deno.writeTextFile(
+        `${repository}/deno.json`,
+        JSON.stringify({
+          tasks: { test: invocation, lint: "deno lint" },
+        }),
+      );
+      unwrap(await setupHookWith(repository, capabilities(prefix)));
+      equal(
+        await Deno.readTextFile(`${repository}/ci/local-ci.yml`),
+        generatedWorkflow.replace(
+          "      - name: Run fmt:check\n        run: deno task fmt:check\n",
+          "",
+        )
+          .replace("      - name: Run check\n        run: deno task check\n", ""),
+      );
+    });
+  });
+}
+
+for (
+  const invocation of [
+    "deno task --config deno.json mci:ci",
+    "deno task -cdeno.json --jobs 1 ci",
+    "deno task --config=other.json --cwd other mci:ci",
+    "deno task --env-file --lock=deno.lock mci:ci",
+  ]
+) {
+  Deno.test(`hook setup refuses actual recursive task after options: ${invocation}`, async () => {
+    await withRepository(async (repository, prefix) => {
+      const source = JSON.stringify({ tasks: { test: invocation } });
+      await Deno.writeTextFile(`${repository}/deno.json`, source);
+      const beforeGit = await Deno.readTextFile(`${repository}/.git/config`);
+      const result = await setupHookWith(repository, capabilities(prefix));
+      assert(
+        !result.ok && result.error.includes("recurs"),
+        result.ok ? "setup succeeded" : result.error,
+      );
+      equal(await Deno.readTextFile(`${repository}/deno.json`), source);
+      equal(await Deno.readTextFile(`${repository}/.git/config`), beforeGit);
+      assert(!await exists(`${repository}/ci`));
+      assert(!await exists(`${repository}/.gitignore`));
+    });
+  });
+}
+
+for (
+  const invocation of [
+    "deno task --config other.json build",
+    "deno task -cother.json build",
+    "deno task --cwd other build",
+    "deno task --recursive build",
+    "deno task --members build",
+    "deno task --filter member build",
+    "deno task -fmember build",
+    "printf 'deno task absent; deno task mci:ci\\n'",
+    'echo "deno task absent && deno task mci:ci"',
+  ]
+) {
+  Deno.test(`hook setup preserves opaque or printed command: ${invocation}`, async () => {
+    await withRepository(async (repository, prefix) => {
+      await Deno.writeTextFile(
+        `${repository}/deno.json`,
+        JSON.stringify({ tasks: { test: invocation } }),
+      );
+      unwrap(await setupHookWith(repository, capabilities(prefix)));
+    });
+  });
+}
+
 Deno.test("hook setup rejects invalid present standard tasks before mutation", async () => {
   for (const invalid of ["", "   ", null, 42]) {
     await withRepository(async (repository, prefix) => {

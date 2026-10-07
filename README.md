@@ -353,6 +353,12 @@ repository must define at least one standard task. Each selected task must be a 
 string. Setup adds `.mci/` to `.gitignore` when that entry is absent. This entry excludes
 saved logs and runtime files from Git and Deno formatting.
 
+Setup inspects literal Deno task commands at supported shell command positions. It parses
+task options before task names. Default configuration and explicit root `deno.json` use
+root task dependencies. Foreign configurations, changed directories, and workspace runs
+remain trusted commands outside root inspection. A literal `ci` or `mci:ci` task still
+causes refusal. Static inspection does not validate arbitrary shell programs.
+
 Setup adds the `mci:ci` task and selects the packaged Homebrew hook for the worktree.
 Setup can replace repository-owned `.githooks` configuration and disable its pre-push
 hook. Setup preserves the old hook files and shared Git settings. Sibling worktrees keep

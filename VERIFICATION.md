@@ -745,6 +745,22 @@ cache or only the kernel buffers.
 
 ## Evidence limits
 
+### Task option parsing
+
+The new public setup regression failed because baseline dependency discovery selected
+`deno.json` as a task name. The corrected scanner passed 74 hook tests. Each new option
+case completed below one second. Tests cover root options, recursion after options,
+foreign configuration, changed directories, workspace runs, and printed command text.
+
+Local Deno 2.9.7 probes confirmed optional-value behavior. `--lock probe` consumed `probe`
+as a lock path and listed tasks. Bare `--env-file`, `--node-modules-dir`, and
+`--frozen-lockfile` left `probe` as the task name. Equals forms selected the task
+normally. These probes do not establish behavior for other Deno versions.
+
+The first integrated gate passed 348 Deno tests, ignored one platform test, and passed 307
+native checks. Formatting, lint, type checks, layer checks, and suppression checks passed.
+This gate covers the first four fixes. Later sections record subsequent checks.
+
 The final host checks establish package installation, daemon startup, concurrent
 execution, socket decoding, signature validity, and hook behavior.
 

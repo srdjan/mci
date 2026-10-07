@@ -1,7 +1,8 @@
 # Implementation plans
 
 The user selected plans for all six audit findings on 2026-10-06. These plans use local
-`main` at `7b74afa` as their source baseline. The plans are pending implementation.
+`main` at `7b74afa` as their source baseline. The active goal now authorizes
+implementation.
 
 The earlier [hardening and pruning list](hardening-pruning-list.md) records completed
 work. This index records the new selected work without reopening those completed units.
@@ -17,7 +18,7 @@ priorities shown to the user. Effort describes scope, rather than elapsed time. 
 | [001](001-preserve-recorded-results.md)         | 1             | Preserve recorded results after projection failure. | High     | Medium | None                                              | TODO   |
 | [002](002-check-startup-rollback-ownership.md)  | 2             | Check ownership before startup rollback signals.    | High     | Medium | None                                              | TODO   |
 | [003](003-resolve-receipt-path-components.md)   | 3             | Match receipt identity to filesystem path order.    | High     | Medium | None                                              | TODO   |
-| [004](004-parse-deno-task-options.md)           | 6             | Parse option values before Deno task names.         | Medium   | Medium | None                                              | TODO   |
+| [004](004-parse-deno-task-options.md)           | 6             | Parse option values before Deno task names.         | Medium   | Medium | None                                              | DONE   |
 | [005](005-check-existing-workflow-recursion.md) | 4             | Inspect defined dependencies in existing workflows. | High     | Medium | 004: task option parsing                          | TODO   |
 | [006](006-finish-hook-rollback-before-exit.md)  | 5             | Finish hook rollback before cancellation completes. | Medium   | Large  | 004: task option parsing; 005: workflow recursion | TODO   |
 
@@ -26,13 +27,13 @@ Plans 001, 002, and 003 have independent implementation boundaries. Plans 004, 0
 
 Each executor must read the complete selected plan and compare source drift before
 editing. Each completed fix needs its own local commit on `main`. The maintainer owns
-pushes and repository backups. The current request authorizes planning only.
+pushes and repository backups. The active goal authorizes all six fixes.
 
 ## Objective and accepted direction
 
-The current objective is six self-contained plans with source evidence, bounded scope,
-ordered steps, regression cases, and observable stop conditions. Source code remains
-unchanged during this planning unit.
+The current objective is implementation of all six saved plans. The main agent owns
+integration, documentation, verification, and local commits. Workers own disjoint source
+and test files. Hook plans follow their dependency order.
 
 Task parsing precedes workflow recursion because both checks need one invocation scanner.
 Existing workflows continue to accept undefined optional tasks. Foreign configurations
@@ -81,13 +82,19 @@ Completed: the user selected all six findings, and the main agent reconstructed 
 callers, compatibility rules, and test seams. The main agent wrote and reviewed the six
 plans. The plans preserve that accepted scope.
 
-Current: the main agent completes reference and formatting checks, then creates one local
-documentation commit. The commit is the durable checkpoint for the accepted planning
-scope.
+Current: source changes for result preservation, startup ownership, receipt paths, and
+task option parsing pass the complete gate. The checkout started clean at `0330b74`.
 
-Next: the maintainer selects when implementation starts. The selected executor then
-follows the dependency order, runs each plan's checks, and updates this index with commit
-evidence.
+The main agent reviewed each changed line and corrected two gaps. Projection failure now
+preserves the recorded terminal in memory. Unknown child status now preserves recovery
+evidence without signaling. The gate passed 348 Deno tests and 307 native checks.
 
-No user decision remains necessary to finish planning. A stop condition during execution
-must name the failed assumption and the additional scope needed.
+The simplification pass removed repeated stable identity comparisons and repeated task
+scanning. The main agent kept cleanup state and status observation explicit. Fixture
+consolidation did not justify changing existing tests.
+
+Next: the main agent reviews each change, runs checks, and commits each complete fix.
+Existing workflow validation and cooperative cancellation follow task option parsing.
+
+No user decision remains necessary to start implementation. A stop condition during
+execution must name the failed assumption and the additional scope needed.
