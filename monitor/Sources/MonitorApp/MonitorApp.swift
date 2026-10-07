@@ -2,24 +2,8 @@ import AppKit
 import MonitorCore
 import SwiftUI
 
-@MainActor final class MonitorApplicationDelegate: NSObject, NSApplicationDelegate {
-    weak var model: MonitorModel?
-    private var terminationPending = false
-
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if terminationPending { return .terminateLater }
-        guard let model else { return .terminateNow }
-        let deferred = model.requestTermination {
-            sender.reply(toApplicationShouldTerminate: true)
-        }
-        terminationPending = deferred
-        return deferred ? .terminateLater : .terminateNow
-    }
-}
-
 @main
 struct MonitorApp: App {
-    @NSApplicationDelegateAdaptor(MonitorApplicationDelegate.self) private var delegate
     // The command line tools ship no SwiftUIMacros plugin, so the app avoids `@State`.
     // `App` is created once, so plain stored properties keep these objects alive.
     // MCI_MONITOR_DAEMON_DIR points a test run at a temporary daemon folder.
@@ -34,7 +18,6 @@ struct MonitorApp: App {
 
     init() {
         NSApplication.shared.setActivationPolicy(.accessory)
-        delegate.model = model
         model.start()
     }
 

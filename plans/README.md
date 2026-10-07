@@ -20,7 +20,7 @@ priorities shown to the user. Effort describes scope, rather than elapsed time. 
 | [003](003-resolve-receipt-path-components.md)   | 3             | Match receipt identity to filesystem path order.    | High     | Medium | None                                              | DONE   |
 | [004](004-parse-deno-task-options.md)           | 6             | Parse option values before Deno task names.         | Medium   | Medium | None                                              | DONE   |
 | [005](005-check-existing-workflow-recursion.md) | 4             | Inspect defined dependencies in existing workflows. | High     | Medium | 004: task option parsing                          | DONE   |
-| [006](006-finish-hook-rollback-before-exit.md)  | 5             | Finish hook rollback before cancellation completes. | Medium   | Large  | 004: task option parsing; 005: workflow recursion | DONE   |
+| [006](006-finish-hook-rollback-before-exit.md)  | 5             | Finish hook rollback before cancellation completes. | Medium   | Large  | 004: task option parsing; 005: workflow recursion | TODO   |
 
 Plans 001, 002, and 003 have independent implementation boundaries. Plans 004, 005, and
 006 share `src/hooks.ts` and its tests. Execute the three hook plans sequentially.
@@ -59,9 +59,9 @@ incorrect receipt identity, accepted recursive setup, and rejected valid task op
 startup probe used capability doubles and signaled no real process. The store probe called
 the public store in the same order as daemon completion.
 
-Plan 006 reproduces cancellation during repository mutation and restoration through public
-tests. No measured PID-reuse rate, queue capacity, or log capacity exists in this
-evidence.
+Cancellation during repository mutation remains source-confirmed and needs reproduction in
+Plan 006. No measured PID-reuse rate, rollback duration, queue capacity, or log capacity
+exists in this planning evidence.
 
 ## Deferred and rejected areas
 
@@ -77,12 +77,6 @@ direction options. The user selected the six defects, rather than those options.
 migration and forced installer termination are explicit deferred boundaries.
 
 ## Worklog and ownership
-
-Plan 006, cooperative cancellation, is committed locally as `8ce0843`. Its pre-commit gate
-passed 388 Deno tests and 339 native checks, with one platform test ignored.
-
-Plan 005, workflow validation, is committed locally as `a110a3b`. Its pre-commit gate
-passed 372 Deno tests and 307 native checks, with one platform test ignored.
 
 Plan 003, receipt path resolution, is committed locally as `4deb5b2`. Its pre-commit gate
 passed 348 Deno tests and 307 native checks. The checkout was clean after that commit.
@@ -115,39 +109,8 @@ Completed: existing workflow validation passes 117 focused tests and the complet
 The gate passed 372 Deno tests and 307 native checks, with one platform test ignored. The
 main agent reviewed the changed lines and corrected root directory and option coverage.
 
-Completed: Plan 006 integrates CLI cancellation, the native installation handshake, task
-retention, and normal Quit. The complete gate passed 388 Deno tests and 339 native checks.
-One platform test was ignored. The focused gate passed 133 Deno tests.
-
-Completed: public checks cover cancellation during restoration and success after commit.
-The monitor retains the latest installation message, matching the existing error field.
-The local Swift compiler accepts the deferred application termination interface.
-
-Completed: seven final reviewers found no defect. The AppKit probe confirms that normal
-Quit waits for restoration and installer exit. A second scenario confirms that removal and
-re-registration refuse stale row updates while preserving the global diagnostic.
-
-The main agent retains the documented diagnostic spool policy. A fixed disk bound needs a
-separate design; displayed diagnostic tails remain bounded. Parent directory inspection
-and earlier physical commit points would change accepted behavior and remain outside these
-plans.
-
-Completed: the final gate passed 388 Deno tests and 339 native checks, with one platform
-test ignored. Formatting, lint, type checks, layer checks, and suppression checks passed.
-The final review receipt reports no code findings. The local commit and index now satisfy
-its remaining conditions. All six fixes have separate local commits.
-
-Current: Decision 1 awaits authorization for the configured Advisor model,
-`gpt-6-sol/high`, instead of the required `gpt-5.6-sol/high`. Code completion does not
-include that consultation.
-
-Completion audit: each plan meets its public behavior checks, compatibility rules, file
-scope, complete gate, and local commit requirements. The AppKit probe confirms the normal
-termination boundary. Forced termination, power-loss durability, and cross-platform
-release claims remain outside the accepted scope.
-
-Next: the user owns Decision 1, which authorizes one read-only consultation with the
-configured Advisor model. The main agent owns that consultation after authorization.
+Next: the main agent commits workflow validation. Cooperative cancellation follows that
+commit. The local Swift compiler accepts the deferred application termination interface.
 
 No user decision remains necessary to start implementation. A stop condition during
 execution must name the failed assumption and the additional scope needed.

@@ -136,31 +136,8 @@ const gitHookNames = new Set([
   "update",
 ]);
 
-export type HookCancellationReason =
-  | { readonly tag: "timeout"; readonly timeoutMs: number }
-  | { readonly tag: "SIGINT" }
-  | { readonly tag: "SIGTERM" };
-
-export type HookOperationOptions = {
-  readonly signal?: AbortSignal;
-};
-
-export type HookSetupOptions = HookOperationOptions & {
+export type HookSetupOptions = {
   readonly replacePrePush?: boolean;
-};
-
-const cancellationDetail = (signal: AbortSignal | undefined): string | null => {
-  if (signal?.aborted !== true) return null;
-  const reason: unknown = signal.reason;
-  if (!object(reason) || typeof reason.tag !== "string") {
-    return "Hook setup was cancelled for an unknown reason.";
-  }
-  if (reason.tag === "SIGINT" || reason.tag === "SIGTERM") {
-    return `Hook setup was cancelled by ${reason.tag}.`;
-  }
-  return reason.tag === "timeout" && typeof reason.timeoutMs === "number"
-    ? `Hook setup timed out after ${reason.timeoutMs} ms.`
-    : "Hook setup was cancelled for an unknown reason.";
 };
 
 type HookMigration = {
@@ -634,7 +611,6 @@ const installHookWithPolicy = async (
   job: string,
   capabilities: HookCapabilities,
   migration?: HookMigration,
-  options: HookOperationOptions = {},
 ): Promise<Result<void>> => {
   if (!repository.startsWith("/") || repository.includes("\0")) {
     return err("The repository path must be absolute.");
@@ -893,9 +869,6 @@ const installHookWithPolicy = async (
     }
   }
 
-  const cancelledBeforeMutation = cancellationDetail(options.signal);
-  if (cancelledBeforeMutation !== null) return err(cancelledBeforeMutation);
-
   const configUpdated = existingTask === undefined;
   let configChange: UpdatedFile | undefined;
   if (configUpdated) {
@@ -926,58 +899,6 @@ const installHookWithPolicy = async (
     }
     return await writeAtomic(configPath, configChange.before);
   };
-  const extensionRecovery = worktreeExtension.ok
-    ? "restore the prior extensions.worktreeConfig value and confirm the setting.\n" +
-      `Command:\ngit -C ${shellQuote(real.value)} config --local ` +
-      `extensions.worktreeConfig ${worktreeExtension.value}`
-    : "remove extensions.worktreeConfig and confirm that it is absent.\n" +
-      `Command:\ngit -C ${shellQuote(real.value)} config --local --unset-all ` +
-      "extensions.worktreeConfig";
-  const restoreExtension = (): Promise<Result<string>> =>
-    worktreeExtension.ok
-      ? capabilities.git([
-        "-C",
-        real.value,
-        "config",
-        "--local",
-        "extensions.worktreeConfig",
-        worktreeExtension.value,
-      ])
-      : capabilities.git([
-        "-C",
-        real.value,
-        "config",
-        "--local",
-        "--unset-all",
-        "extensions.worktreeConfig",
-      ]);
-  const rollbackInstallation = async (
-    detail: string,
-    restoreEnabledExtension: boolean,
-  ): Promise<Result<void>> => {
-    let restoredDetail = detail;
-    if (restoreEnabledExtension) {
-      const restoredExtension = await restoreExtension();
-      restoredDetail += rollbackFailure(
-        restoredExtension,
-        `extensions.worktreeConfig in ${real.value}`,
-        extensionRecovery,
-      );
-    }
-    const restoredConfig = await restoreConfig();
-    restoredDetail += rollbackFailure(
-      restoredConfig,
-      configPath,
-      `restore ${shellQuote(configPath)} to its prior contents and confirm the file.`,
-    );
-    return err(restoredDetail);
-  };
-  if (configChange !== undefined) {
-    const cancelledAfterConfig = cancellationDetail(options.signal);
-    if (cancelledAfterConfig !== null) {
-      return await rollbackInstallation(cancelledAfterConfig, false);
-    }
-  }
   let enabledWorktreeConfig = false;
   if (!worktreeConfigEnabled) {
     const enabled = await capabilities.git([
@@ -1002,14 +923,6 @@ const installHookWithPolicy = async (
       );
     }
     enabledWorktreeConfig = true;
-    const cancelledAfterExtension = cancellationDetail(options.signal);
-    if (cancelledAfterExtension !== null) {
-      return await rollbackInstallation(cancelledAfterExtension, true);
-    }
-  }
-  const cancelledBeforeCommit = cancellationDetail(options.signal);
-  if (cancelledBeforeCommit !== null) {
-    return await rollbackInstallation(cancelledBeforeCommit, enabledWorktreeConfig);
   }
   if (
     migration !== undefined || !worktreeConfigEnabled || worktreeConfigured?.ok === false
@@ -1023,9 +936,47 @@ const installHookWithPolicy = async (
       hooksPath,
     ]);
     if (!set.ok) {
-      return await rollbackInstallation(
-        `Cannot set worktree core.hooksPath: ${set.error}`,
-        enabledWorktreeConfig,
+      const restoredExtension = !enabledWorktreeConfig
+        ? ok(undefined)
+        : worktreeExtension.ok
+        ? await capabilities.git([
+          "-C",
+          real.value,
+          "config",
+          "--local",
+          "extensions.worktreeConfig",
+          worktreeExtension.value,
+        ])
+        : await capabilities.git([
+          "-C",
+          real.value,
+          "config",
+          "--local",
+          "--unset-all",
+          "extensions.worktreeConfig",
+        ]);
+      const restoredConfig = await restoreConfig();
+      const extensionRecovery = worktreeExtension.ok
+        ? "restore the prior extensions.worktreeConfig value and confirm the setting.\n" +
+          `Command:\ngit -C ${shellQuote(real.value)} config --local ` +
+          `extensions.worktreeConfig ${worktreeExtension.value}`
+        : "remove extensions.worktreeConfig and confirm that it is absent.\n" +
+          `Command:\ngit -C ${shellQuote(real.value)} config --local --unset-all ` +
+          "extensions.worktreeConfig";
+      return err(
+        `Cannot set worktree core.hooksPath: ${set.error}` +
+          rollbackFailure(
+            restoredExtension,
+            `extensions.worktreeConfig in ${real.value}`,
+            extensionRecovery,
+          ) +
+          rollbackFailure(
+            restoredConfig,
+            configPath,
+            `restore ${
+              shellQuote(configPath)
+            } to its prior contents and confirm the file.`,
+          ),
       );
     }
   }
@@ -1037,9 +988,8 @@ export const installHookWith = (
   workflow: string,
   job: string,
   capabilities: HookCapabilities,
-  options: HookOperationOptions = {},
 ): Promise<Result<void>> =>
-  installHookWithPolicy(repository, workflow, job, capabilities, undefined, options);
+  installHookWithPolicy(repository, workflow, job, capabilities);
 
 export const setupHookWith = async (
   repository: string,
@@ -1207,9 +1157,6 @@ export const setupHookWith = async (
   const ignorePlan = await planGitIgnore(real.value);
   if (!ignorePlan.ok) return ignorePlan;
 
-  const cancelledBeforeMutation = cancellationDetail(options.signal);
-  if (cancelledBeforeMutation !== null) return err(cancelledBeforeMutation);
-
   let generated: CreatedFile | undefined;
   if (generateWorkflow) {
     const directory = await requireDirectory(ciPath);
@@ -1224,19 +1171,6 @@ export const setupHookWith = async (
       return written;
     }
     generated = written.value;
-    const cancelledAfterWorkflow = cancellationDetail(options.signal);
-    if (cancelledAfterWorkflow !== null) {
-      const workflowRollback = await rollbackCreatedFile(generated);
-      return err(
-        cancelledAfterWorkflow + rollbackFailure(
-          workflowRollback,
-          generated.path,
-          `remove ${
-            shellQuote(generated.path)
-          } after confirming that it is still generated by mci.`,
-        ),
-      );
-    }
   }
 
   const ignored = await applyGitIgnore(ignorePlan.value);
@@ -1254,45 +1188,34 @@ export const setupHookWith = async (
     );
   }
 
-  const rollbackSetup = async (detail: string): Promise<Result<void>> => {
-    let restoredDetail = detail;
-    if (ignored.value !== null) {
-      const ignoredRollback = await rollbackGitIgnore(ignored.value);
-      restoredDetail += rollbackFailure(
-        ignoredRollback,
-        ignored.value.path,
-        `restore ${shellQuote(ignored.value.path)} to its prior contents and confirm it.`,
-      );
-    }
-    if (generated !== undefined) {
-      const workflowRollback = await rollbackCreatedFile(generated);
-      restoredDetail += rollbackFailure(
-        workflowRollback,
-        generated.path,
-        `remove ${
-          shellQuote(generated.path)
-        } after confirming that it is still generated by mci.`,
-      );
-    }
-    return err(restoredDetail);
-  };
-  if (ignored.value !== null) {
-    const cancelledAfterIgnore = cancellationDetail(options.signal);
-    if (cancelledAfterIgnore !== null) {
-      return await rollbackSetup(cancelledAfterIgnore);
-    }
-  }
-
   const installed = await installHookWithPolicy(
     real.value,
     setupWorkflow,
     setupJob,
     capabilities,
     migration,
-    options,
   );
   if (installed.ok) return installed;
-  return await rollbackSetup(installed.error);
+  let detail = installed.error;
+  if (ignored.value !== null) {
+    const ignoredRollback = await rollbackGitIgnore(ignored.value);
+    detail += rollbackFailure(
+      ignoredRollback,
+      ignored.value.path,
+      `restore ${shellQuote(ignored.value.path)} to its prior contents and confirm it.`,
+    );
+  }
+  if (generated !== undefined) {
+    const workflowRollback = await rollbackCreatedFile(generated);
+    detail += rollbackFailure(
+      workflowRollback,
+      generated.path,
+      `remove ${
+        shellQuote(generated.path)
+      } after confirming that it is still generated by mci.`,
+    );
+  }
+  return err(detail);
 };
 
 export const setupHook = (
@@ -1304,9 +1227,8 @@ export const installHook = (
   repository: string,
   workflow: string,
   job: string,
-  options: HookOperationOptions = {},
 ): Promise<Result<void>> =>
-  installHookWith(repository, workflow, job, nativeHookCapabilities, options);
+  installHookWith(repository, workflow, job, nativeHookCapabilities);
 
 const status = (name: string, passed: boolean, detail: string): string =>
   `${passed ? "PASS" : "FAIL"} ${name}: ${detail}`;

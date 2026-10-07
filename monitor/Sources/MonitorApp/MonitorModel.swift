@@ -2,6 +2,13 @@ import AppKit
 import MonitorCore
 import Observation
 
+private enum HookPhase { case inspection, installation }
+
+private struct HookOperation {
+    let phase: HookPhase
+    let task: Task<Void, Never>
+}
+
 @MainActor @Observable
 final class MonitorModel {
     private(set) var rows: [RowState] = []
@@ -32,11 +39,8 @@ final class MonitorModel {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var actionUncertain = false
     @ObservationIgnored private var repositories: [DaemonRepository] = []
-    @ObservationIgnored private var hookRegistrations: [String: UUID] = [:]
     @ObservationIgnored private var hookStatuses: [String: HookStatus] = [:]
-    private var hookInspections: [String: Task<Void, Never>] = [:]
-    private let hookLifecycle = HookLifecycle()
-    @ObservationIgnored private var closing = false
+    private var hookOperations: [String: HookOperation] = [:]
 
     init(client: DaemonClient = DaemonClient(), hookInstaller: HookInstaller = HookInstaller()) {
         self.client = client
@@ -53,7 +57,6 @@ final class MonitorModel {
     }
 
     func schedule() {
-        guard !closing else { return }
         pending?.cancel()
         pending = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(100))
@@ -63,14 +66,12 @@ final class MonitorModel {
     }
 
     func add(path: String) {
-        guard !closing else { return }
         Task { [weak self] in
             guard let self else { return }
             switch await client.register(path: path) {
             case .failure(let error):
                 await apply(.failure(error))
             case .success(let snapshot):
-                guard !closing else { return }
                 actionError = nil
                 actionUncertain = false
                 use(snapshot: snapshot, daemonAvailable: true)
@@ -83,7 +84,6 @@ final class MonitorModel {
     }
 
     func remove(_ row: RowState) {
-        guard !closing else { return }
         Task { [weak self] in
             guard let self else { return }
             await apply(await client.unregister(repository: row.repositoryID))
@@ -95,67 +95,43 @@ final class MonitorModel {
     }
 
     func checkingHook(_ row: RowState) -> Bool {
-        hookInspections[row.repositoryID] != nil || installingHook(row)
+        hookOperations[row.repositoryID] != nil
     }
 
     func installingHook(_ row: RowState) -> Bool {
-        hookLifecycle.contains(repository: row.repositoryID)
+        hookOperations[row.repositoryID]?.phase == .installation
     }
 
     func retryHookCheck(_ row: RowState) {
-        guard !closing, daemonAvailable,
+        guard daemonAvailable,
             let repository = repositories.first(where: { $0.id == row.repositoryID && $0.path == row.workspace })
         else { return }
         inspectHook(repository)
     }
 
     func retryHookInstallation(_ row: RowState) {
-        guard !closing, daemonAvailable, !installingHook(row),
-            let registration = hookRegistrations[row.repositoryID],
+        guard daemonAvailable, !installingHook(row),
             containsRepository(id: row.repositoryID, path: row.workspace)
         else { return }
-        hookInspections.removeValue(forKey: row.repositoryID)?.cancel()
+        hookOperations.removeValue(forKey: row.repositoryID)?.task.cancel()
         let installer = hookInstaller
-        hookLifecycle.start(repository: row.repositoryID, operation: {
-            await installer.install(repository: row.workspace)
-        }, completion: { [weak self] result in
-            guard let self else { return }
-            if hookRegistrations[row.repositoryID] == registration,
+        let task = Task { [weak self] in
+            let result = await installer.install(repository: row.workspace)
+            guard let self, !Task.isCancelled,
                 containsRepository(id: row.repositoryID, path: row.workspace)
-            {
-                var status = hookStatuses[row.repositoryID] ?? HookStatus()
-                status.recordInstallation(result)
-                hookStatuses[row.repositoryID] = status
-                renderRows()
-            }
-            if case .failure(let error) = result {
-                actionUncertain = false
-                let detail = "\(row.workspace): \(error.message)"
-                actionError = detail
-            }
+            else { return }
+            hookOperations.removeValue(forKey: row.repositoryID)
+            var status = hookStatuses[row.repositoryID] ?? HookStatus()
+            status.recordInstallation(result)
+            hookStatuses[row.repositoryID] = status
+            renderRows()
             refresh()
-        })
-    }
-
-    func requestTermination(reply: @escaping @MainActor () -> Void) -> Bool {
-        closing = true
-        timer?.invalidate()
-        timer = nil
-        pending?.cancel()
-        pending = nil
-        watcher?.cancel()
-        watcher = nil
-        cancelInspections()
-        return hookLifecycle.requestTermination(reply: reply)
-    }
-
-    private func cancelInspections() {
-        for task in hookInspections.values { task.cancel() }
-        hookInspections.removeAll()
+        }
+        hookOperations[row.repositoryID] = HookOperation(
+            phase: .installation, task: task)
     }
 
     private func apply(_ result: Result<DaemonSnapshot, DaemonClientError>) async {
-        guard !closing else { return }
         switch result {
         case .success(let snapshot):
             actionError = nil
@@ -180,7 +156,6 @@ final class MonitorModel {
     }
 
     func refresh() {
-        guard !closing else { return }
         if refreshing {
             refreshAgain = true
             return
@@ -192,9 +167,7 @@ final class MonitorModel {
     private func runRefresh() async {
         repeat {
             refreshAgain = false
-            let result = await client.status()
-            guard !closing else { break }
-            switch result {
+            switch await client.status() {
             case .success(let snapshot):
                 if actionUncertain {
                     actionError = nil
@@ -202,8 +175,6 @@ final class MonitorModel {
                 }
                 use(snapshot: snapshot, daemonAvailable: true)
             case .failure(let error):
-                hookLifecycle.cancelAll()
-                cancelInspections()
                 daemonAvailable = false
                 daemonError = error.message
                 let path = client.snapshotPath
@@ -213,27 +184,22 @@ final class MonitorModel {
                 switch persisted {
                 case .success(let snapshot): use(snapshot: snapshot, daemonAvailable: false)
                 case .failure:
+                    for operation in hookOperations.values { operation.task.cancel() }
+                    hookOperations.removeAll()
                     hookStatuses.removeAll()
-                    hookRegistrations.removeAll()
                     repositories = []
                     rows = []
                 }
             }
-        } while refreshAgain && !closing
+        } while refreshAgain
         refreshing = false
     }
 
     private func use(snapshot: DaemonSnapshot, daemonAvailable: Bool) {
-        guard !closing else { return }
         let paths = Dictionary(uniqueKeysWithValues: snapshot.repositories.map { ($0.id, $0.path) })
         for repository in repositories where paths[repository.id] != repository.path {
-            hookInspections.removeValue(forKey: repository.id)?.cancel()
-            hookLifecycle.cancel(repository: repository.id)
+            hookOperations.removeValue(forKey: repository.id)?.task.cancel()
             hookStatuses.removeValue(forKey: repository.id)
-            hookRegistrations.removeValue(forKey: repository.id)
-        }
-        for repository in snapshot.repositories where hookRegistrations[repository.id] == nil {
-            hookRegistrations[repository.id] = UUID()
         }
         repositories = snapshot.repositories
         self.daemonAvailable = daemonAvailable
@@ -257,16 +223,14 @@ final class MonitorModel {
     }
 
     private func inspectHook(_ repository: DaemonRepository) {
-        guard !closing, hookInspections[repository.id] == nil,
-            !hookLifecycle.contains(repository: repository.id)
-        else { return }
+        guard hookOperations[repository.id] == nil else { return }
         let installer = hookInstaller
         let task = Task { [weak self] in
             let readiness = await installer.inspect(repository: repository.path)
             guard let self, !Task.isCancelled,
                 let current = repositories.first(where: { $0.id == repository.id && $0.path == repository.path })
             else { return }
-            hookInspections.removeValue(forKey: repository.id)
+            hookOperations.removeValue(forKey: repository.id)
             var status = hookStatuses[repository.id] ?? HookStatus()
             let previousReadiness = status.displayedReadiness
             status.recordInspection(readiness)
@@ -279,6 +243,7 @@ final class MonitorModel {
                         hookReadiness: status.displayedReadiness) : $0
             }
         }
-        hookInspections[repository.id] = task
+        hookOperations[repository.id] = HookOperation(
+            phase: .inspection, task: task)
     }
 }

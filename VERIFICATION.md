@@ -745,45 +745,6 @@ cache or only the kernel buffers.
 
 ## Evidence limits
 
-### Cooperative hook cancellation
-
-The isolated public Deno baseline failed nine cancellation scenarios. Late cancellation
-after the final mutation correctly passed. The corrected focused suite passed 132 tests
-with one platform test ignored. A further public test confirms cancellation during
-rollback. Restoration completes before that result resolves.
-
-An isolated native baseline failed eight installation checks. Failures covered the
-deadline argument, older CLI refusal, child-owned timeout, cooperative waiting, diagnostic
-retention, late success, diagnostic tail, and output-triggered termination.
-
-The corrected isolated native package passed 322 checks. The separate lifecycle package
-passed 17 checks. Public lifecycle checks retain cancelled tasks, refuse duplicates during
-cleanup, delay normal Quit, and preserve committed success. New cancellation scenarios
-complete below one second.
-
-The native fixture holds an active helper until a gate opens. No result arrives before
-release, and neither the CLI fixture nor its helper survives completion. Inspection
-retains its previous timeout and cancellation checks. The AppKit delegate compiles with
-the installed SDK.
-
-A native AppKit probe uses the production model and delegate. A normal run-loop Quit
-waited for restoration and reaped the installer in 635.1 ms. Idle Quit completed in 73.8
-ms. The probe confirms the termination handshake, not visual menu or VoiceOver behavior.
-
-Forced termination and host crashes can interrupt cleanup. Transactional diagnostic files
-can grow until CLI exit. The monitor bounds the displayed tail, rather than disk growth.
-No measured evidence supports a fixed deadline for complete restoration.
-
-The integrated gate passed 388 Deno tests and 339 native checks, with one platform test
-ignored. Formatting, lint, type checks, layer checks, and suppression checks passed.
-
-Integration review found a stale row update after removal and re-registration at the same
-path. The monitor now compares registration tokens before row updates and preserves global
-diagnostics. Removal and path changes invalidate those tokens. Public lifecycle checks
-preserve committed success after cancellation. The native AppKit probe removes and
-registers the same path during cleanup. The probe confirms duplicate refusal, stale result
-refusal, and global diagnostic retention in 256.8 ms.
-
 ### Existing workflow dependencies
 
 Twelve initial public regressions failed because both installation routes accepted defined
