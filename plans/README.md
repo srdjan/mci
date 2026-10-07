@@ -15,7 +15,7 @@ priorities shown to the user. Effort describes scope, rather than elapsed time. 
 
 | Plan                                            | Audit finding | Outcome                                             | Priority | Effort | Depends on                                        | Status |
 | ----------------------------------------------- | ------------- | --------------------------------------------------- | -------- | ------ | ------------------------------------------------- | ------ |
-| [001](001-preserve-recorded-results.md)         | 1             | Preserve recorded results after projection failure. | High     | Medium | None                                              | TODO   |
+| [001](001-preserve-recorded-results.md)         | 1             | Preserve recorded results after projection failure. | High     | Medium | None                                              | DONE   |
 | [002](002-check-startup-rollback-ownership.md)  | 2             | Check ownership before startup rollback signals.    | High     | Medium | None                                              | TODO   |
 | [003](003-resolve-receipt-path-components.md)   | 3             | Match receipt identity to filesystem path order.    | High     | Medium | None                                              | TODO   |
 | [004](004-parse-deno-task-options.md)           | 6             | Parse option values before Deno task names.         | Medium   | Medium | None                                              | DONE   |
@@ -77,6 +77,9 @@ direction options. The user selected the six defects, rather than those options.
 migration and forced installer termination are explicit deferred boundaries.
 
 ## Worklog and ownership
+
+Plan 004, task option parsing, is committed locally as `0640c15`. Its pre-commit gate
+passed 348 Deno tests and 307 native checks.
 
 Completed: the user selected all six findings, and the main agent reconstructed their
 callers, compatibility rules, and test seams. The main agent wrote and reviewed the six

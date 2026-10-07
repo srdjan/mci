@@ -87,6 +87,17 @@ The daemon journals every accepted request before it confirms acceptance. On res
 records each unfinished request that began as INTERRUPTED and does not retry it. A durable
 terminal record preserves completed work if projection or journal cleanup fails.
 
+Terminal recording and projection are separate operations. Recording preserves the first
+result for each request identifier. An identical repeated record succeeds. A conflicting
+record fails. Projection updates `latest.json`, `latest.log`, and `status.json` from the
+recorded result.
+
+After recording succeeds, the daemon returns that result and preserves it in memory. A
+projection fault blocks further repository work and retains the journal and recovery
+files. Restart projects the recorded result before journal cleanup. Recording failure
+returns a storage diagnostic without replacing a possibly saved result. These operations
+retain the existing sync policy. Power-loss durability remains unmeasured.
+
 The daemon sends the response to a register or unregister request after the management
 chain step ends. A client that does not read its response cannot stall later management
 requests. The daemon publishes the snapshot before it resolves a job result. A shutdown

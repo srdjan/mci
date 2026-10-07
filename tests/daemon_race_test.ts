@@ -78,6 +78,71 @@ const prepareRecovery = async (workspace: string, directory: string) => {
   return { store: store.value, save };
 };
 
+for (const projection of ["latest.json", "latest.log", "status.json"] as const) {
+  Deno.test(`recorded terminal survives a ${projection} projection failure`, () =>
+    inWorkspace(async (workspace) => {
+      const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-project-" });
+      try {
+        const recovery = await prepareRecovery(workspace, directory);
+        const terminal = await recovery.save(
+          `blocked-${projection.replace(".", "-")}`,
+          "2026-10-03T18:00:01.000Z",
+        );
+        assert((await recovery.store.writeTerminal(workspace, terminal)).ok);
+        await Deno.mkdir(`${workspace}/.mci/ci/${projection}`);
+        const projected = await recovery.store.projectTerminal(workspace, terminal);
+        assert(!projected.ok);
+        const repository = recovery.store.repositories()[0];
+        assert(repository !== undefined);
+        const recorded = await recovery.store.readTerminal(repository, terminal.id);
+        assert(recorded.ok);
+        equal(recorded.value, terminal);
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    }));
+}
+
+Deno.test("terminal recording is idempotent and rejects a conflicting result", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-record-" });
+    try {
+      const recovery = await prepareRecovery(workspace, directory);
+      const terminal = await recovery.save("immutable", "2026-10-03T18:00:01.000Z");
+      assert((await recovery.store.writeTerminal(workspace, terminal)).ok);
+      assert((await recovery.store.writeTerminal(workspace, terminal)).ok);
+      const conflict: Terminal = {
+        ...terminal,
+        kind: "failure",
+        code: 1,
+        detail: "conflicting result",
+      };
+      const repeated = await recovery.store.writeTerminal(workspace, conflict);
+      assert(!repeated.ok && repeated.error.includes("conflicting terminal"));
+      const repository = recovery.store.repositories()[0];
+      assert(repository !== undefined);
+      const recorded = await recovery.store.readTerminal(repository, terminal.id);
+      assert(recorded.ok);
+      equal(recorded.value, terminal);
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
+Deno.test("terminal recording failure retains the pending journal entry", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-record-" });
+    try {
+      const recovery = await prepareRecovery(workspace, directory);
+      const terminal = await recovery.save("blocked-record", "2026-10-03T18:00:01.000Z");
+      await Deno.mkdir(`${workspace}/.mci/ci/requests/${terminal.id}.json`);
+      assert(!(await recovery.store.writeTerminal(workspace, terminal)).ok);
+      equal(recovery.store.pending().map((request) => request.id), [terminal.id]);
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
 Deno.test("restart preserves the newest completion across multiple pending journal entries", () =>
   inWorkspace(async (workspace) => {
     const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-recovery-" });
@@ -85,8 +150,10 @@ Deno.test("restart preserves the newest completion across multiple pending journ
       const recovery = await prepareRecovery(workspace, directory);
       const first = await recovery.save("first", "2026-10-03T18:00:01.000Z");
       assert((await recovery.store.writeTerminal(workspace, first)).ok);
+      assert((await recovery.store.projectTerminal(workspace, first)).ok);
       const second = await recovery.save("second", "2026-10-03T18:00:02.000Z");
       assert((await recovery.store.writeTerminal(workspace, second)).ok);
+      assert((await recovery.store.projectTerminal(workspace, second)).ok);
       const daemon = await startDaemon({ directory });
       assert(daemon.ok);
       try {
@@ -105,6 +172,33 @@ Deno.test("restart preserves the newest completion across multiple pending journ
     }
   }));
 
+Deno.test("restart accepts a pending completion found only in latest.json", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-latest-only-" });
+    try {
+      const recovery = await prepareRecovery(workspace, directory);
+      const terminal = await recovery.save("latest-only", "2026-10-03T18:00:01.000Z");
+      assert((await recovery.store.projectTerminal(workspace, terminal)).ok);
+      assert(
+        !await exists(`${workspace}/.mci/ci/requests/${terminal.id}.json`),
+      );
+      const daemon = await startDaemon({ directory });
+      assert(daemon.ok, daemon.ok ? "" : daemon.error);
+      try {
+        equal(daemon.value.snapshot().repositories[0]?.latest, terminal);
+        equal(
+          JSON.parse(await Deno.readTextFile(`${directory}/requests.json`)).requests,
+          [],
+        );
+        equal(await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`), "latest-only");
+      } finally {
+        await daemon.value.close();
+      }
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
 Deno.test("restart restores a durable completion after latest projection fails", () =>
   inWorkspace(async (workspace) => {
     const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-projection-" });
@@ -112,13 +206,15 @@ Deno.test("restart restores a durable completion after latest projection fails",
       const recovery = await prepareRecovery(workspace, directory);
       const first = await recovery.save("first", "2026-10-03T18:00:01.000Z");
       assert((await recovery.store.writeTerminal(workspace, first)).ok);
+      assert((await recovery.store.projectTerminal(workspace, first)).ok);
       assert((await recovery.store.finish(first.id)).ok);
       const second = await recovery.save("second", "2026-10-03T18:00:02.000Z");
       const reference = `${workspace}/.mci/ci/latest.json`;
       const prior = await Deno.readTextFile(reference);
       await Deno.remove(reference);
       await Deno.mkdir(reference);
-      assert(!(await recovery.store.writeTerminal(workspace, second)).ok);
+      assert((await recovery.store.writeTerminal(workspace, second)).ok);
+      assert(!(await recovery.store.projectTerminal(workspace, second)).ok);
       await Deno.remove(reference);
       await Deno.writeTextFile(reference, prior);
       const daemon = await startDaemon({ directory });
@@ -134,6 +230,202 @@ Deno.test("restart restores a durable completion after latest projection fails",
         assert(!await exists(first.log));
       } finally {
         await daemon.value.close();
+      }
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
+Deno.test("projection failure preserves the recorded workflow result for recovery", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-recorded-" });
+    let projectionCalls = 0;
+    let prior: Terminal | null = null;
+    let completed: Terminal | null = null;
+    try {
+      const daemon = await startDaemon({
+        directory,
+        openStore: async (paths) => {
+          const store = await openDaemonStore(paths);
+          return store.ok
+            ? ok({
+              ...store.value,
+              projectTerminal: async (path, terminal) => {
+                projectionCalls += 1;
+                if (projectionCalls === 2) {
+                  await Deno.remove(`${path}/.mci/ci/latest.json`);
+                  await Deno.mkdir(`${path}/.mci/ci/latest.json`);
+                }
+                return await store.value.projectTerminal(path, terminal);
+              },
+            })
+            : store;
+        },
+      });
+      assert(daemon.ok, daemon.ok ? "" : daemon.error);
+      try {
+        assert(
+          (await rpc({ version: 1, op: "register", path: workspace }, directory)).ok,
+        );
+        const first = await submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "prior.yml",
+            job: "check",
+            source: fixture("      - run: printf prior >> executions"),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+        assert(first.ok, first.ok ? "" : first.error);
+        equal(first.value.kind, "success");
+        prior = first.value;
+        const result = await submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "recorded.yml",
+            job: "check",
+            source: fixture("      - run: printf current >> executions"),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+        assert(result.ok, result.ok ? "" : result.error);
+        equal(result.value.kind, "success");
+        completed = result.value;
+        const recorded = JSON.parse(
+          await Deno.readTextFile(
+            `${workspace}/.mci/ci/requests/${result.value.id}.json`,
+          ),
+        );
+        equal(recorded, result.value);
+        assert(
+          daemon.value.snapshot().repositories[0]?.blocked?.includes("projection"),
+        );
+        equal(daemon.value.snapshot().repositories[0]?.latest, result.value);
+        equal(
+          JSON.parse(await Deno.readTextFile(`${directory}/requests.json`)).requests
+            .length,
+          1,
+        );
+        assert(await exists(prior.log));
+        assert(await exists(result.value.log));
+        equal(await Deno.readTextFile(`${workspace}/executions`), "priorcurrent");
+      } finally {
+        await daemon.value.close();
+      }
+      assert(prior !== null);
+      assert(completed !== null);
+      await Deno.remove(`${workspace}/.mci/ci/latest.json`);
+      const restarted = await startDaemon({ directory });
+      assert(restarted.ok, restarted.ok ? "" : restarted.error);
+      try {
+        equal(restarted.value.snapshot().repositories[0]?.latest, completed);
+        equal(
+          JSON.parse(await Deno.readTextFile(`${directory}/requests.json`)).requests,
+          [],
+        );
+        equal(
+          JSON.parse(await Deno.readTextFile(`${workspace}/.mci/ci/latest.json`)),
+          completed,
+        );
+        equal(
+          await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`),
+          await Deno.readTextFile(completed.log),
+        );
+        equal(
+          JSON.parse(await Deno.readTextFile(`${workspace}/.mci/ci/status.json`)),
+          { version: 2, ...completed },
+        );
+        assert(!await exists(prior.log));
+        assert(await exists(completed.log));
+        equal(await Deno.readTextFile(`${workspace}/executions`), "priorcurrent");
+      } finally {
+        await restarted.value.close();
+      }
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
+Deno.test("ambiguous recording failure never replaces the recorded workflow result", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-recording-" });
+    let writeCalls = 0;
+    let recorded: Terminal | null = null;
+    try {
+      const daemon = await startDaemon({
+        directory,
+        openStore: async (paths) => {
+          const store = await openDaemonStore(paths);
+          return store.ok
+            ? ok({
+              ...store.value,
+              writeTerminal: async (path, terminal) => {
+                writeCalls += 1;
+                const written = await store.value.writeTerminal(path, terminal);
+                return written.ok ? err("injected sync failure") : written;
+              },
+            })
+            : store;
+        },
+      });
+      assert(daemon.ok, daemon.ok ? "" : daemon.error);
+      try {
+        assert(
+          (await rpc({ version: 1, op: "register", path: workspace }, directory)).ok,
+        );
+        const result = await submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "ambiguous.yml",
+            job: "check",
+            source: fixture("      - run: printf once >> executions"),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+        assert(result.ok, result.ok ? "" : result.error);
+        equal(result.value.kind, "failure");
+        equal(writeCalls, 1);
+        recorded = JSON.parse(
+          await Deno.readTextFile(
+            `${workspace}/.mci/ci/requests/${result.value.id}.json`,
+          ),
+        );
+        equal(recorded?.kind, "success");
+        assert(
+          daemon.value.snapshot().repositories[0]?.blocked?.includes("storage"),
+        );
+        equal(
+          JSON.parse(await Deno.readTextFile(`${directory}/requests.json`)).requests
+            .length,
+          1,
+        );
+      } finally {
+        await daemon.value.close();
+      }
+      assert(recorded !== null);
+      const restarted = await startDaemon({ directory });
+      assert(restarted.ok, restarted.ok ? "" : restarted.error);
+      try {
+        equal(restarted.value.snapshot().repositories[0]?.latest, recorded);
+        equal(
+          JSON.parse(await Deno.readTextFile(`${directory}/requests.json`)).requests,
+          [],
+        );
+        equal(await Deno.readTextFile(`${workspace}/executions`), "once");
+      } finally {
+        await restarted.value.close();
       }
     } finally {
       await Deno.remove(directory, { recursive: true });
@@ -280,6 +572,7 @@ Deno.test("startup pruning failure blocks commands and preserves recovery files"
       const recovery = await prepareRecovery(workspace, directory);
       const saved = await recovery.save("saved", "2026-10-03T18:00:01.000Z");
       assert((await recovery.store.writeTerminal(workspace, saved)).ok);
+      assert((await recovery.store.projectTerminal(workspace, saved)).ok);
       assert((await recovery.store.finish(saved.id)).ok);
       const daemon = await startDaemon({
         directory,

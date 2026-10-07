@@ -39,6 +39,7 @@ export type DaemonStore = {
     id: string,
   ) => Promise<Result<Terminal | null>>;
   readonly writeTerminal: (path: string, terminal: Terminal) => Promise<Result<void>>;
+  readonly projectTerminal: (path: string, terminal: Terminal) => Promise<Result<void>>;
   readonly writeSnapshot: (snapshot: Snapshot) => Promise<Result<void>>;
   readonly removeRun: (path: string, id: string) => Promise<Result<void>>;
   readonly pruneRuns: (path: string, keep: readonly string[]) => Promise<Result<void>>;
@@ -475,6 +476,18 @@ export const openDaemonStore = async (
   };
   let snapshotChain = Promise.resolve<Result<void>>(ok(undefined));
   const terminalChains = new Map<string, Promise<Result<void>>>();
+  const sequenceTerminal = (
+    path: string,
+    operation: () => Promise<Result<void>>,
+  ): Promise<Result<void>> => {
+    const prior = terminalChains.get(path) ?? Promise.resolve(ok(undefined));
+    const update = prior.then(operation);
+    terminalChains.set(path, update);
+    void update.finally(() => {
+      if (terminalChains.get(path) === update) terminalChains.delete(path);
+    });
+    return update;
+  };
 
   return ok({
     repositories: () => repositories,
@@ -592,26 +605,38 @@ export const openDaemonStore = async (
       );
       return recorded.ok ? ok(terminal) : recorded;
     },
-    writeTerminal: (path, terminal) => {
-      const prior = terminalChains.get(path) ?? Promise.resolve(ok(undefined));
-      const update = prior.then(async () => {
+    writeTerminal: (path, terminal) =>
+      sequenceTerminal(path, async () => {
+        const candidate = decodeTerminal(terminal);
+        if (!candidate.ok) return candidate;
         const directory = await prepareRequestDirectory(path);
         if (!directory.ok) return directory;
         // A missing spool log counts as an empty log, so recovery can finish the entry.
-        const logFound = await metadata(terminal.log);
+        const logFound = await metadata(candidate.value.log);
         if (!logFound.ok) return logFound;
         if (
           logFound.value === null &&
-          terminal.log === `${directory.value}/${terminal.id}.log`
+          candidate.value.log === `${directory.value}/${candidate.value.id}.log`
         ) {
-          const created = await createPrivateFile(terminal.log);
+          const created = await createPrivateFile(candidate.value.log);
           if (!created.ok) return created;
         }
-        const durable = await atomicJson(
-          `${directory.value}/${terminal.id}.json`,
-          terminal,
-        );
-        if (!durable.ok) return durable;
+        const target = `${directory.value}/${candidate.value.id}.json`;
+        const saved = await parseFile(target);
+        if (!saved.ok) return saved;
+        if (saved.value !== null) {
+          const prior = decodeTerminal(saved.value);
+          if (!prior.ok) return prior;
+          return JSON.stringify(prior.value) === JSON.stringify(candidate.value)
+            ? ok(undefined)
+            : err(`conflicting terminal for request ${candidate.value.id}`);
+        }
+        return await atomicJson(target, candidate.value);
+      }),
+    projectTerminal: (path, terminal) =>
+      sequenceTerminal(path, async () => {
+        const directory = await prepareRequestDirectory(path);
+        if (!directory.ok) return directory;
         const reference = await atomicJson(`${path}/.mci/ci/latest.json`, terminal);
         if (!reference.ok) return reference;
         const projected = await atomicCopy(terminal.log, `${path}/.mci/ci/latest.log`);
@@ -620,13 +645,7 @@ export const openDaemonStore = async (
           version: 2,
           ...terminal,
         });
-      });
-      terminalChains.set(path, update);
-      void update.finally(() => {
-        if (terminalChains.get(path) === update) terminalChains.delete(path);
-      });
-      return update;
-    },
+      }),
     writeSnapshot: (snapshot) => {
       const update = snapshotChain.then(() =>
         atomicJson(paths.snapshot, snapshot, false)

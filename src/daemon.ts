@@ -447,27 +447,36 @@ const complete = async (
   job: Job,
   terminal: Terminal,
 ): Promise<void> => {
-  let result = shutdownTerminal(runtime, terminal);
-  let stored = await runtime.store.writeTerminal(repository.repository.path, result);
-  if (!stored.ok) {
+  const terminalResult = shutdownTerminal(runtime, terminal);
+  let result = terminalResult;
+  const stored = await runtime.store.writeTerminal(
+    repository.repository.path,
+    terminalResult,
+  );
+  const previous = repository.latest;
+  if (stored.ok) {
+    repository.latest = terminalResult;
+    const projected = await runtime.store.projectTerminal(
+      repository.repository.path,
+      terminalResult,
+    );
+    if (projected.ok) {
+      const finished = await runtime.store.finish(job.id);
+      if (!finished.ok) {
+        repository.blocked = `request journal cleanup failed: ${finished.error}`;
+      }
+      await attempt(() => Deno.remove(job.control));
+      await retire(runtime, repository.repository.path, previous);
+    } else {
+      repository.blocked = `terminal projection failed: ${projected.error}`;
+    }
+  } else {
+    repository.blocked = `terminal storage failed: ${stored.error}`;
     result = {
-      ...failedTerminal(job, `terminal storage failed: ${stored.error}`),
+      ...failedTerminal(job, repository.blocked),
       kind: "failure",
       code: 1,
     };
-    stored = await runtime.store.writeTerminal(repository.repository.path, result);
-  }
-  const previous = repository.latest;
-  if (stored.ok) {
-    repository.latest = result;
-    const finished = await runtime.store.finish(job.id);
-    if (!finished.ok) {
-      repository.blocked = `request journal cleanup failed: ${finished.error}`;
-    }
-    await attempt(() => Deno.remove(job.control));
-    await retire(runtime, repository.repository.path, previous);
-  } else {
-    repository.blocked = `terminal storage failed: ${stored.error}`;
   }
   if (repository.active === job) repository.active = null;
   job.child = null;
@@ -960,7 +969,10 @@ const prepareRuntime = async (
       (priorLatest?.id === pending.id ? priorLatest : null);
     if (completed !== null) {
       if (state.latest === null || completed.finished >= state.latest.finished) {
-        const projected = await store.writeTerminal(state.repository.path, completed);
+        const projected = await store.projectTerminal(
+          state.repository.path,
+          completed,
+        );
         if (!projected.ok) {
           state.blocked ??= `completed request projection failed: ${projected.error}`;
           continue;
@@ -997,6 +1009,11 @@ const prepareRuntime = async (
     const recorded = await store.writeTerminal(state.repository.path, interrupted);
     if (!recorded.ok) {
       state.blocked = `interrupted request storage failed: ${recorded.error}`;
+      continue;
+    }
+    const projected = await store.projectTerminal(state.repository.path, interrupted);
+    if (!projected.ok) {
+      state.blocked = `interrupted request projection failed: ${projected.error}`;
       continue;
     }
     const previous = state.latest;

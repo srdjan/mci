@@ -745,6 +745,18 @@ cache or only the kernel buffers.
 
 ## Evidence limits
 
+### Recorded workflow results
+
+The public daemon regression failed on the baseline because projection failure changed the
+client's success result. The correction passed 63 focused daemon tests. The integrated
+gate passed 348 Deno tests and 307 native checks, with one platform test ignored.
+
+Public tests cover each projection target, conflicting recording, recording failure, and
+ambiguous failure after recording. Restart restores the recorded result and clears its
+journal without repeating execution. Tests also preserve prior spool files during a
+projection fault and remove them after recovery. Existing journal cleanup and shutdown
+checks pass. These checks do not establish power-loss durability.
+
 ### Task option parsing
 
 The new public setup regression failed because baseline dependency discovery selected
