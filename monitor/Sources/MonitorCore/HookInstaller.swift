@@ -138,26 +138,103 @@ private func installHook(
     guard let executable = executablePaths.first(where: FileManager.default.isExecutableFile) else {
         return .failure(.executableNotFound(executablePaths))
     }
-    let result = runBounded(
+    return runInstaller(
         executable: executable,
         arguments: [
             "hooks", "setup", repository, "--replace-pre-push",
+            "--timeout-ms", String(timeoutMilliseconds),
         ],
-        timeoutMilliseconds: timeoutMilliseconds)
-    switch result {
-    case .success:
-        return .success(())
-    case .failure(.launch(let detail)):
-        return .failure(.launch(detail))
-    case .failure(.failed(let exitCode, let stderr)):
-        return .failure(.failed(exitCode: exitCode, stderr: stderr))
-    case .failure(.timedOut):
-        return .failure(.timedOut)
-    case .failure(.outputLimitExceeded):
-        return .failure(.outputLimitExceeded)
-    case .failure(.cancelled):
-        return .failure(.cancelled)
+        diagnosticLimit: outputLimit)
+}
+
+private func runInstaller(
+    executable: String,
+    arguments: [String],
+    diagnosticLimit: UInt64
+) -> Result<Void, HookInstallError> {
+    guard !Task.isCancelled else { return .failure(.cancelled) }
+
+    let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "mci-hook-installation-\(UUID().uuidString)", isDirectory: true)
+    guard mkdir(scratch.path, 0o700) == 0 else {
+        return .failure(.launch(String(cString: strerror(errno))))
     }
+    guard chmod(scratch.path, 0o700) == 0 else {
+        let detail = String(cString: strerror(errno))
+        try? FileManager.default.removeItem(at: scratch)
+        return .failure(.launch(detail))
+    }
+    defer { try? FileManager.default.removeItem(at: scratch) }
+
+    let outputURL = scratch.appendingPathComponent("stdout")
+    let errorURL = scratch.appendingPathComponent("stderr")
+    var outputDescriptor = open(outputURL.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+    guard outputDescriptor >= 0 else {
+        return .failure(.launch("The command output file could not open: \(String(cString: strerror(errno)))."))
+    }
+    defer {
+        if outputDescriptor >= 0 { _ = Darwin.close(outputDescriptor) }
+    }
+    var errorDescriptor = open(errorURL.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+    guard errorDescriptor >= 0 else {
+        return .failure(.launch("The command error file could not open: \(String(cString: strerror(errno)))."))
+    }
+    defer {
+        if errorDescriptor >= 0 { _ = Darwin.close(errorDescriptor) }
+    }
+    guard fchmod(outputDescriptor, 0o600) == 0, fchmod(errorDescriptor, 0o600) == 0 else {
+        return .failure(.launch("The command output files could not be made private."))
+    }
+
+    let outputFile = FileHandle(fileDescriptor: outputDescriptor, closeOnDealloc: false)
+    let errorFile = FileHandle(fileDescriptor: errorDescriptor, closeOnDealloc: false)
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = outputFile
+    process.standardError = errorFile
+
+    guard !Task.isCancelled else { return .failure(.cancelled) }
+    do {
+        try process.run()
+    } catch {
+        return .failure(.launch(error.localizedDescription))
+    }
+
+    var sentTermination = false
+    while process.isRunning {
+        if Task.isCancelled, !sentTermination {
+            _ = kill(process.processIdentifier, SIGTERM)
+            sentTermination = true
+        }
+        if process.isRunning { usleep(10_000) }
+    }
+    process.waitUntilExit()
+
+    _ = Darwin.close(errorDescriptor)
+    errorDescriptor = -1
+    _ = Darwin.close(outputDescriptor)
+    outputDescriptor = -1
+
+    guard process.terminationStatus != 0 else { return .success(()) }
+    let diagnostic: String
+    do {
+        diagnostic = try readTail(errorURL, maximumBytes: diagnosticLimit)
+    } catch {
+        diagnostic = "The installer diagnostic could not be read: \(error.localizedDescription)"
+    }
+    return .failure(.failed(exitCode: process.terminationStatus, stderr: diagnostic))
+}
+
+private func readTail(_ url: URL, maximumBytes: UInt64) throws -> String {
+    let file = try FileHandle(forReadingFrom: url)
+    defer { try? file.close() }
+
+    let size = try file.seekToEnd()
+    try file.seek(toOffset: size > maximumBytes ? size - maximumBytes : 0)
+    let data = try file.readToEnd() ?? Data()
+    return String(decoding: data, as: UTF8.self)
 }
 
 private func inspectHook(
