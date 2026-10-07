@@ -1,8 +1,9 @@
 # Implementation plans
 
 The user selected plans for all six audit findings on 2026-10-06. These plans use local
-`main` at `7b74afa` as their source baseline. The active goal now authorizes
-implementation.
+`main` at `7b74afa` as their source baseline. Implementation is complete for all six
+plans. The individual plan files preserve their original instructions. This index records
+completion.
 
 The earlier [hardening and pruning list](hardening-pruning-list.md) records completed
 work. This index records the new selected work without reopening those completed units.
@@ -20,20 +21,20 @@ priorities shown to the user. Effort describes scope, rather than elapsed time. 
 | [003](003-resolve-receipt-path-components.md)   | 3             | Match receipt identity to filesystem path order.    | High     | Medium | None                                              | DONE   |
 | [004](004-parse-deno-task-options.md)           | 6             | Parse option values before Deno task names.         | Medium   | Medium | None                                              | DONE   |
 | [005](005-check-existing-workflow-recursion.md) | 4             | Inspect defined dependencies in existing workflows. | High     | Medium | 004: task option parsing                          | DONE   |
-| [006](006-finish-hook-rollback-before-exit.md)  | 5             | Finish hook rollback before cancellation completes. | Medium   | Large  | 004: task option parsing; 005: workflow recursion | TODO   |
+| [006](006-finish-hook-rollback-before-exit.md)  | 5             | Finish hook rollback before cancellation completes. | Medium   | Large  | 004: task option parsing; 005: workflow recursion | DONE   |
 
 Plans 001, 002, and 003 have independent implementation boundaries. Plans 004, 005, and
 006 share `src/hooks.ts` and its tests. Execute the three hook plans sequentially.
 
 Each executor must read the complete selected plan and compare source drift before
 editing. Each completed fix needs its own local commit on `main`. The maintainer owns
-pushes and repository backups. The active goal authorizes all six fixes.
+pushes and repository backups. The user authorized all six fixes.
 
 ## Objective and accepted direction
 
-The current objective is implementation of all six saved plans. The main agent owns
-integration, documentation, verification, and local commits. Workers own disjoint source
-and test files. Hook plans follow their dependency order.
+The completed objective covers all six saved plans. The main agent owns integration,
+documentation, verification, and local commits. Workers own disjoint source and test
+files. Hook plans follow their dependency order.
 
 Task parsing precedes workflow recursion because both checks need one invocation scanner.
 Existing workflows continue to accept undefined optional tasks. Foreign configurations
@@ -59,9 +60,9 @@ incorrect receipt identity, accepted recursive setup, and rejected valid task op
 startup probe used capability doubles and signaled no real process. The store probe called
 the public store in the same order as daemon completion.
 
-Cancellation during repository mutation remains source-confirmed and needs reproduction in
-Plan 006. No measured PID-reuse rate, rollback duration, queue capacity, or log capacity
-exists in this planning evidence.
+Plan 006 checked cancellation through controlled repository and native process fixtures.
+No measured production rollback duration, queue capacity, or log capacity exists in this
+planning evidence.
 
 ## Deferred and rejected areas
 
@@ -77,6 +78,15 @@ direction options. The user selected the six defects, rather than those options.
 migration and forced installer termination are explicit deferred boundaries.
 
 ## Worklog and ownership
+
+Plan 005, existing workflow validation, is committed locally as `a110a3b`.
+
+The user reverted the earlier Plan 006 continuation in `4a3b433`. The user then approved
+Plan 006 again. The current execution uses existing Deno and Swift code, without Bend. The
+main agent owns integration, final checks, documentation, and the local commit.
+
+The Plan 006 implementation commit directly follows `4a3b433` on local `main`. Its subject
+is `fix(hooks): cancel cooperatively and drain monitor installations`.
 
 Plan 003, receipt path resolution, is committed locally as `4deb5b2`. Its pre-commit gate
 passed 348 Deno tests and 307 native checks. The checkout was clean after that commit.
@@ -109,8 +119,12 @@ Completed: existing workflow validation passes 117 focused tests and the complet
 The gate passed 372 Deno tests and 307 native checks, with one platform test ignored. The
 main agent reviewed the changed lines and corrected root directory and option coverage.
 
-Next: the main agent commits workflow validation. Cooperative cancellation follows that
-commit. The local Swift compiler accepts the deferred application termination interface.
+Completed: Plan 006 finishes active bounded helpers and restoration before cancellation
+returns. The monitor retains installations and diagnostics while cleanup finishes. Normal
+Quit waits for installation completion. Rapid re-registration preserves automatic setup.
 
-No user decision remains necessary to start implementation. A stop condition during
-execution must name the failed assumption and the additional scope needed.
+The main agent reviewed every changed line and corrected all four confirmed review
+findings. The final gate passed 395 Deno tests and 339 native checks, with one platform
+test ignored. Public model probes and an AppKit process checked normal termination.
+
+Next: the maintainer owns repository backups and any push of the local commits.

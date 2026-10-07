@@ -496,11 +496,46 @@ fails while that repository has accepted requests.
 After folder registration succeeds, the app invokes the installed CLI to install the
 managed pre-commit hook. The menu action selects `ci/local-ci.yml` and job `check`. The
 app finds the CLI through the stable Homebrew paths and passes arguments directly. The
-command runs outside the main actor with a deadline of 120 seconds.
+command runs outside the main actor. The CLI owns its 120-second deadline for forward work
+through `--timeout-ms`.
 
 The CLI owns hook validation, conflict detection, and rollback. If hook installation
 fails, the app keeps the registered repository and shows the hook error. Status refreshes
 preserve that error. A subsequent successful action clears it.
+
+Hook operations share an optional `AbortSignal` with a tagged cancellation reason. SIGINT,
+SIGTERM, and timeout request cancellation before commit. Checkpoints follow each completed
+mutation and precede the final Git configuration command. Helpers keep their individual
+bounds and finish before cancellation checks.
+
+Restoration ignores the forward signal and attempts required actions in reverse order.
+Restoration preserves concurrent file and Git extension edits and reports failed attempts.
+Successful final `core.hooksPath` configuration commits the transaction. Later
+cancellation cannot change that success result. Cancellation exits with 130 for SIGINT,
+143 for SIGTERM, or 124 for timeout after restoration attempts finish.
+
+Installation captures output in private files and reads a bounded diagnostic tail after
+CLI exit. Cancellation sends SIGTERM once and waits for exit. The monitor applies no
+installation deadline, output-triggered termination, or SIGKILL escalation. Read-only
+inspection retains its existing bounds. An older CLI rejects `--timeout-ms` before
+mutation. The monitor never retries without that argument.
+
+The monitor retains installation tasks after cancellation requests. Daemon loss,
+repository removal, and path changes request cancellation while tasks finish cleanup. A
+retained task prevents duplicate installation during cleanup. Completion updates only the
+matching registration and repository path. Removal and path changes invalidate the
+registration token. Daemon loss preserves tokens for unchanged registrations in the saved
+snapshot. A failed removal preserves the registration token and installation diagnostic.
+Failed completions preserve diagnostics even after the repository row disappears.
+
+If registration succeeds during older cleanup, the monitor retains one automatic setup
+request for that registration. The request starts after cleanup completes. Removal, path
+changes, daemon loss, and normal Quit discard that pending request.
+
+Normal AppKit termination closes installation admission and waits for retained tasks. The
+application delegate replies after installation completion. An app with no installation
+can quit immediately. Forced termination and host crashes can interrupt restoration.
+Cleanup has no fixed deadline for the complete operation.
 
 The monitor does not submit or cancel CI. It opens repositories and reads selected spool
 logs without changing them.

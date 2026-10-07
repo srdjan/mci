@@ -1,4 +1,5 @@
 import {
+  type HookCancellationReason,
   hookScript,
   installHookWith,
   nativeHookCapabilities,
@@ -263,6 +264,46 @@ const hookSetCommand = (prefix: string): string =>
 const extensionEnableCommand = "config\0--local\0extensions.worktreeConfig\0true";
 const sharedHookReadCommand = "config\0--local\0--get\0core.hooksPath";
 
+const cancellationSignalWhen = (
+  predicate: () => boolean,
+  reason: HookCancellationReason = { tag: "SIGTERM" },
+): AbortSignal => {
+  const controller = new AbortController();
+  return new Proxy(controller.signal, {
+    get: (target, property): unknown => {
+      if (property === "aborted" && predicate()) controller.abort(reason);
+      return Reflect.get(target, property, target);
+    },
+  });
+};
+
+const textFileWhenPresent = (path: string): string | null => {
+  try {
+    return Deno.readTextFileSync(path);
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return null;
+    throw error;
+  }
+};
+
+const directoryWhenPresent = (path: string): boolean => {
+  try {
+    const info = Deno.lstatSync(path);
+    return info.isDirectory && !info.isSymlink;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
+  }
+};
+
+const absentGitValue = async (
+  repository: string,
+  args: readonly string[],
+): Promise<void> => {
+  const value = await fixtureGitResult(["-C", repository, ...args]);
+  assert(!value.ok, value.ok ? value.value : "");
+};
+
 const customConfig = (prefix: string): string =>
   `{\n  "tasks" : {\n    "test":"deno test",\n    "mci:ci" : ${
     JSON.stringify(`'${prefix}/bin/mci' ci '.github/workflows/ci.yml' --job 'check'`)
@@ -300,7 +341,7 @@ const assertGitRollbackFailure = async (
   );
   const operation = prior === "absent"
     ? "--unset-all extensions.worktreeConfig"
-    : "extensions.worktreeConfig false";
+    : `extensions.worktreeConfig ${shellQuote("false")}`;
   const action = prior === "absent"
     ? "remove extensions.worktreeConfig and confirm that it is absent."
     : "restore the prior extensions.worktreeConfig value and confirm the setting.";
@@ -1940,5 +1981,542 @@ Deno.test("rollback preserves an extension that was already true", async () => {
       ]),
       "true",
     );
+  });
+});
+
+Deno.test("rollback preserves a concurrent extension edit", async () => {
+  await withRepository(async (repository, prefix) => {
+    const delegated = capabilities(prefix);
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      {
+        ...delegated,
+        git: async (args: readonly string[]): Promise<Result<string>> => {
+          const command = args.slice(2).join("\0");
+          if (command === hookSetCommand(prefix)) {
+            await delegated.git([
+              "-C",
+              repository,
+              "config",
+              "--local",
+              "extensions.worktreeConfig",
+              "false",
+            ]);
+            return err("injected hook path failure");
+          }
+          return await delegated.git(args);
+        },
+      },
+    );
+
+    assert(!result.ok);
+    assert(result.error.includes("extensions.worktreeConfig changed before rollback"));
+    equal(
+      await readGit(repository, [
+        "config",
+        "--local",
+        "--type=bool",
+        "--get",
+        "extensions.worktreeConfig",
+      ]),
+      "false",
+    );
+  });
+});
+
+for (const concurrent of ["yes", "additional true"] as const) {
+  Deno.test(`rollback preserves concurrent extension ${concurrent}`, async () => {
+    await withRepository(async (repository, prefix) => {
+      const delegated = capabilities(prefix);
+      const result = await installHookWith(
+        repository,
+        ".github/workflows/ci.yml",
+        "check",
+        {
+          ...delegated,
+          git: async (args: readonly string[]): Promise<Result<string>> => {
+            if (args.slice(2).join("\0") === hookSetCommand(prefix)) {
+              await delegated.git([
+                "-C",
+                repository,
+                "config",
+                "--local",
+                ...(concurrent === "additional true" ? ["--add"] : []),
+                "extensions.worktreeConfig",
+                concurrent === "yes" ? "yes" : "true",
+              ]);
+              return err("injected hook path failure");
+            }
+            return await delegated.git(args);
+          },
+        },
+      );
+
+      assert(!result.ok);
+      assert(result.error.includes("extensions.worktreeConfig changed before rollback"));
+      equal(
+        await readGit(repository, [
+          "config",
+          "--local",
+          "--get-all",
+          "extensions.worktreeConfig",
+        ]),
+        concurrent === "yes" ? "yes" : "true\ntrue",
+      );
+    });
+  });
+}
+
+for (const prior of ["off", "no"] as const) {
+  Deno.test(`rollback restores the exact prior ${prior} extension spelling`, async () => {
+    await withRepository(async (repository, prefix) => {
+      await runGit(repository, [
+        "config",
+        "--local",
+        "extensions.worktreeConfig",
+        prior,
+      ]);
+      const result = await installHookWith(
+        repository,
+        ".github/workflows/ci.yml",
+        "check",
+        rollbackCapabilities(repository, prefix, {
+          primaryCommand: hookSetCommand(prefix),
+          primaryDetail: "injected hook path failure",
+        }),
+      );
+
+      assert(!result.ok);
+      assert(!result.error.includes("Rollback failed"));
+      equal(
+        await readGit(repository, [
+          "config",
+          "--local",
+          "--get",
+          "extensions.worktreeConfig",
+        ]),
+        prior,
+      );
+    });
+  });
+}
+
+Deno.test("hook setup cancels before mutation without changing state", async () => {
+  await withRepository(async (repository, prefix) => {
+    await Deno.remove(`${repository}/.github`, { recursive: true });
+    const beforeConfig = await Deno.readTextFile(`${repository}/deno.json`);
+    const controller = new AbortController();
+    controller.abort({ tag: "timeout", timeoutMs: 75 } satisfies HookCancellationReason);
+    const result = await setupHookWith(repository, capabilities(prefix), {
+      signal: controller.signal,
+    });
+
+    assert(!result.ok && result.error.includes("75 ms"));
+    equal(await Deno.readTextFile(`${repository}/deno.json`), beforeConfig);
+    assert(!await exists(`${repository}/ci/local-ci.yml`));
+    assert(!await exists(`${repository}/.gitignore`));
+  });
+});
+
+Deno.test("hook setup cancels after directory creation before workflow creation", async () => {
+  await withRepository(async (repository, prefix) => {
+    await Deno.remove(`${repository}/.github`, { recursive: true });
+    const directoryPath = `${repository}/ci`;
+    const workflowPath = `${directoryPath}/local-ci.yml`;
+    const beforeConfig = await Deno.readTextFile(`${repository}/deno.json`);
+    let workflowObserved = false;
+    const result = await setupHookWith(repository, capabilities(prefix), {
+      signal: cancellationSignalWhen(() => {
+        if (!directoryWhenPresent(directoryPath)) return false;
+        workflowObserved = textFileWhenPresent(workflowPath) !== null;
+        return true;
+      }),
+    });
+
+    assert(!result.ok && result.error.includes("SIGTERM"));
+    assert(!workflowObserved, "hook setup created the workflow before cancellation");
+    assert(!await exists(workflowPath));
+    assert(!await exists(directoryPath));
+    assert(!await exists(`${repository}/.gitignore`));
+    equal(await Deno.readTextFile(`${repository}/deno.json`), beforeConfig);
+  });
+});
+
+Deno.test("hook setup preserves concurrent directory contents after cancellation", async () => {
+  await withRepository(async (repository, prefix) => {
+    await Deno.remove(`${repository}/.github`, { recursive: true });
+    const directoryPath = `${repository}/ci`;
+    const workflowPath = `${directoryPath}/local-ci.yml`;
+    const concurrentPath = `${directoryPath}/concurrent.txt`;
+    const beforeConfig = await Deno.readTextFile(`${repository}/deno.json`);
+    let workflowObserved = false;
+    const result = await setupHookWith(repository, capabilities(prefix), {
+      signal: cancellationSignalWhen(() => {
+        if (!directoryWhenPresent(directoryPath)) return false;
+        Deno.writeTextFileSync(concurrentPath, "concurrent\n", { createNew: true });
+        workflowObserved = textFileWhenPresent(workflowPath) !== null;
+        return true;
+      }),
+    });
+
+    assert(!result.ok && result.error.includes("SIGTERM"));
+    assert(result.error.includes(`Rollback failed for ${directoryPath}`));
+    assert(!workflowObserved, "hook setup created the workflow before cancellation");
+    assert(!await exists(workflowPath));
+    assert(!await exists(`${repository}/.gitignore`));
+    equal(await Deno.readTextFile(`${repository}/deno.json`), beforeConfig);
+    equal(await Deno.readTextFile(concurrentPath), "concurrent\n");
+  });
+});
+
+Deno.test("hook setup cancellation preserves an existing workflow directory", async () => {
+  await withRepository(async (repository, prefix) => {
+    await Deno.remove(`${repository}/.github`, { recursive: true });
+    const directoryPath = `${repository}/ci`;
+    const markerPath = `${directoryPath}/existing.txt`;
+    await Deno.mkdir(directoryPath);
+    await Deno.writeTextFile(markerPath, "existing\n");
+    const result = await setupHookWith(repository, capabilities(prefix), {
+      signal: cancellationSignalWhen(() => directoryWhenPresent(directoryPath)),
+    });
+
+    assert(!result.ok && result.error.includes("SIGTERM"));
+    equal(await Deno.readTextFile(markerPath), "existing\n");
+    assert(!await exists(`${directoryPath}/local-ci.yml`));
+  });
+});
+
+Deno.test("hook setup cancels after workflow creation and removes the workflow", async () => {
+  await withRepository(async (repository, prefix) => {
+    await Deno.remove(`${repository}/.github`, { recursive: true });
+    const workflowPath = `${repository}/ci/local-ci.yml`;
+    const beforeConfig = await Deno.readTextFile(`${repository}/deno.json`);
+    const result = await setupHookWith(repository, capabilities(prefix), {
+      signal: cancellationSignalWhen(
+        () => textFileWhenPresent(workflowPath) !== null,
+        { tag: "SIGINT" },
+      ),
+    });
+
+    assert(!result.ok && result.error.includes("SIGINT"));
+    equal(await Deno.readTextFile(`${repository}/deno.json`), beforeConfig);
+    assert(!await exists(workflowPath));
+    assert(!await exists(`${repository}/.gitignore`));
+  });
+});
+
+Deno.test("hook setup cancels after ignore creation and restores setup files", async () => {
+  await withRepository(async (repository, prefix) => {
+    await Deno.remove(`${repository}/.github`, { recursive: true });
+    const ignorePath = `${repository}/.gitignore`;
+    const beforeConfig = await Deno.readTextFile(`${repository}/deno.json`);
+    const result = await setupHookWith(repository, capabilities(prefix), {
+      signal: cancellationSignalWhen(
+        () => textFileWhenPresent(ignorePath)?.includes(".mci/") === true,
+      ),
+    });
+
+    assert(!result.ok && result.error.includes("SIGTERM"));
+    equal(await Deno.readTextFile(`${repository}/deno.json`), beforeConfig);
+    assert(!await exists(`${repository}/ci/local-ci.yml`));
+    assert(!await exists(ignorePath));
+  });
+});
+
+Deno.test("hook installation cancels after config mutation and restores config", async () => {
+  await withRepository(async (repository, prefix) => {
+    const configPath = `${repository}/deno.json`;
+    const beforeConfig = await Deno.readTextFile(configPath);
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      capabilities(prefix),
+      {
+        signal: cancellationSignalWhen(
+          () => textFileWhenPresent(configPath)?.includes('"mci:ci"') === true,
+        ),
+      },
+    );
+
+    assert(
+      !result.ok && result.error.includes("SIGTERM"),
+      "hook installation returned success after config cancellation",
+    );
+    equal(await Deno.readTextFile(configPath), beforeConfig);
+    await absentGitValue(repository, [
+      "config",
+      "--local",
+      "--get",
+      "extensions.worktreeConfig",
+    ]);
+  });
+});
+
+Deno.test("hook installation cancels after extension mutation and restores state", async () => {
+  await withRepository(async (repository, prefix) => {
+    const configPath = `${repository}/deno.json`;
+    const beforeConfig = await Deno.readTextFile(configPath);
+    const controller = new AbortController();
+    const delegated = capabilities(prefix);
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      {
+        ...delegated,
+        git: async (args: readonly string[]): Promise<Result<string>> => {
+          const changed = await delegated.git(args);
+          if (args.slice(2).join("\0") === extensionEnableCommand) {
+            controller.abort({ tag: "SIGTERM" } satisfies HookCancellationReason);
+          }
+          return changed;
+        },
+      },
+      { signal: controller.signal },
+    );
+
+    assert(!result.ok && result.error.includes("SIGTERM"));
+    equal(await Deno.readTextFile(configPath), beforeConfig);
+    await absentGitValue(repository, [
+      "config",
+      "--local",
+      "--get",
+      "extensions.worktreeConfig",
+    ]);
+    await absentGitValue(repository, [
+      "config",
+      "--worktree",
+      "--get",
+      "core.hooksPath",
+    ]);
+  });
+});
+
+Deno.test("hook installation cancels at precommit after preflight", async () => {
+  await withRepository(async (repository, prefix) => {
+    const configPath = `${repository}/deno.json`;
+    const config = customConfig(prefix);
+    await Deno.writeTextFile(configPath, config);
+    await runGit(repository, [
+      "config",
+      "--local",
+      "extensions.worktreeConfig",
+      "true",
+    ]);
+    const controller = new AbortController();
+    const delegated = capabilities(prefix);
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      {
+        ...delegated,
+        git: async (args: readonly string[]): Promise<Result<string>> => {
+          const inspected = await delegated.git(args);
+          if (
+            args.slice(2).join("\0") ===
+              "rev-parse\0--path-format=absolute\0--git-path\0hooks"
+          ) {
+            controller.abort({ tag: "SIGTERM" } satisfies HookCancellationReason);
+          }
+          return inspected;
+        },
+      },
+      { signal: controller.signal },
+    );
+
+    assert(!result.ok && result.error.includes("SIGTERM"));
+    equal(await Deno.readTextFile(configPath), config);
+    equal(
+      await readGit(repository, [
+        "config",
+        "--local",
+        "--type=bool",
+        "--get",
+        "extensions.worktreeConfig",
+      ]),
+      "true",
+    );
+    await absentGitValue(repository, [
+      "config",
+      "--worktree",
+      "--get",
+      "core.hooksPath",
+    ]);
+  });
+});
+
+Deno.test("hook cancellation waits for an active helper before rollback", async () => {
+  await withRepository(async (repository, prefix) => {
+    const beforeConfig = await Deno.readTextFile(`${repository}/deno.json`);
+    const controller = new AbortController();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const delegated = capabilities(prefix);
+    let settled = false;
+    const installing = installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      {
+        ...delegated,
+        git: async (args: readonly string[]): Promise<Result<string>> => {
+          if (args.slice(2).join("\0") === extensionEnableCommand) {
+            started.resolve();
+            await release.promise;
+          }
+          return await delegated.git(args);
+        },
+      },
+      { signal: controller.signal },
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await started.promise;
+    controller.abort({ tag: "SIGTERM" } satisfies HookCancellationReason);
+    await Promise.resolve();
+    assert(!settled);
+    release.resolve();
+    const result = await installing;
+
+    assert(!result.ok && result.error.includes("SIGTERM"));
+    equal(await Deno.readTextFile(`${repository}/deno.json`), beforeConfig);
+    await absentGitValue(repository, [
+      "config",
+      "--local",
+      "--get",
+      "extensions.worktreeConfig",
+    ]);
+  });
+});
+
+Deno.test("hook cancellation reports every rollback failure and preserves concurrent edits", async () => {
+  await withRepository(async (repository, prefix) => {
+    const configPath = `${repository}/deno.json`;
+    const replacement = '{"tasks":{"test":"deno test"},"user":"concurrent"}\n';
+    const controller = new AbortController();
+    const delegated = capabilities(prefix);
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      {
+        ...delegated,
+        git: async (args: readonly string[]): Promise<Result<string>> => {
+          const command = args.slice(2).join("\0");
+          if (command === extensionEnableCommand) {
+            const enabled = await delegated.git(args);
+            await Deno.writeTextFile(configPath, replacement);
+            controller.abort({ tag: "SIGINT" } satisfies HookCancellationReason);
+            return enabled;
+          }
+          if (command === "config\0--local\0--unset-all\0extensions.worktreeConfig") {
+            return err("injected cancellation rollback failure");
+          }
+          return await delegated.git(args);
+        },
+      },
+      { signal: controller.signal },
+    );
+
+    assert(!result.ok && result.error.includes("SIGINT"));
+    assert(result.error.includes("injected cancellation rollback failure"));
+    assert(result.error.includes("deno.json changed before rollback"));
+    equal(await Deno.readTextFile(configPath), replacement);
+    equal(
+      await readGit(repository, [
+        "config",
+        "--local",
+        "--type=bool",
+        "--get",
+        "extensions.worktreeConfig",
+      ]),
+      "true",
+    );
+  });
+});
+
+Deno.test("hook installation commits when cancellation follows the final mutation", async () => {
+  await withRepository(async (repository, prefix) => {
+    const controller = new AbortController();
+    const delegated = capabilities(prefix);
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      {
+        ...delegated,
+        git: async (args: readonly string[]): Promise<Result<string>> => {
+          const configured = await delegated.git(args);
+          if (args.slice(2).join("\0") === hookSetCommand(prefix)) {
+            controller.abort({ tag: "SIGTERM" } satisfies HookCancellationReason);
+          }
+          return configured;
+        },
+      },
+      { signal: controller.signal },
+    );
+
+    assert(result.ok, result.ok ? "" : result.error);
+    assert((await Deno.readTextFile(`${repository}/deno.json`)).includes('"mci:ci"'));
+    equal(
+      await readGit(repository, ["config", "--worktree", "--get", "core.hooksPath"]),
+      `${prefix}/libexec/hooks`,
+    );
+  });
+});
+
+Deno.test("hook cancellation during rollback waits for every restoration attempt", async () => {
+  await withRepository(async (repository, prefix) => {
+    await Deno.remove(`${repository}/.github`, { recursive: true });
+    const configPath = `${repository}/deno.json`;
+    const beforeConfig = await Deno.readTextFile(configPath);
+    const controller = new AbortController();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const delegated = capabilities(prefix);
+    let settled = false;
+    const installing = setupHookWith(repository, {
+      ...delegated,
+      git: async (args: readonly string[]): Promise<Result<string>> => {
+        const command = args.slice(2).join("\0");
+        if (command === hookSetCommand(prefix)) {
+          return err("injected final mutation failure");
+        }
+        if (command === "config\0--local\0--unset-all\0extensions.worktreeConfig") {
+          started.resolve();
+          await release.promise;
+        }
+        return await delegated.git(args);
+      },
+    }, { signal: controller.signal }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await started.promise;
+    controller.abort({ tag: "SIGTERM" } satisfies HookCancellationReason);
+    await Promise.resolve();
+    assert(!settled);
+    assert((await Deno.readTextFile(configPath)).includes('"mci:ci"'));
+    assert(await exists(`${repository}/ci/local-ci.yml`));
+    assert(await exists(`${repository}/.gitignore`));
+    release.resolve();
+    const result = await installing;
+    assert(!result.ok && result.error.includes("injected final mutation failure"));
+    equal(await Deno.readTextFile(configPath), beforeConfig);
+    assert(!await exists(`${repository}/ci/local-ci.yml`));
+    assert(!await exists(`${repository}/.gitignore`));
+    await absentGitValue(repository, [
+      "config",
+      "--local",
+      "--get",
+      "extensions.worktreeConfig",
+    ]);
   });
 });

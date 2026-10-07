@@ -405,6 +405,19 @@ The monitor checks each repository's effective pre-commit hook and Deno task. A 
 hook shows `Hook installation required` beside the run history. `Retry hook installation`
 repeats the same automatic setup. The retry action does not start CI.
 
+Hook setup and installation accept `--timeout-ms <milliseconds>`. The value must be a
+positive integer no greater than 120000. The default is 120000 milliseconds. The CLI owns
+this deadline for forward work.
+
+SIGINT, SIGTERM, and deadline expiry request cancellation. The CLI finishes an active
+bounded helper and completes restoration attempts before exit. Cleanup can continue after
+the forward deadline. A committed installation returns success after late cancellation.
+
+The monitor waits for the CLI result during cancellation and normal Quit. It retains
+installation diagnostics, including results for removed repositories. An older CLI rejects
+the deadline argument before mutation. The monitor does not retry without that argument.
+Forced termination and host crashes can interrupt restoration.
+
 An inspection failure shows its own error instead of claiming that the hook is missing.
 `Retry hook check` repeats that read-only inspection. The monitor checks again after
 restart and during status refresh. Offline rows keep the last hook check and disable

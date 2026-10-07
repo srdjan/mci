@@ -745,6 +745,59 @@ cache or only the kernel buffers.
 
 ## Evidence limits
 
+### Hook cancellation and normal Quit
+
+The baseline public config-cancellation regression returned success after cancellation.
+The runtime assertion failed in 0.12 seconds. The probe used a temporary copy of
+`4a3b433`, without changing the working checkout.
+
+Current native installer checks linked against the baseline core failed nine assertions.
+The baseline lost restoration diagnostics, enforced the outer deadline, rejected late
+success, and stopped installation after large diagnostic output. The current checks pass
+with the revised core. A separate fixture preserves bounded inspection cancellation.
+
+Public hook tests cover cancellation before mutation, after directory, workflow, ignore,
+configuration, and extension changes, during an active helper, and during restoration.
+They also cover late committed success, restoration failure, and concurrent file and
+extension edits. CLI tests exercise timeout, SIGINT, SIGTERM, argument compatibility, and
+invalid deadlines.
+
+Review regressions failed before the corrections. Directory cancellation still created a
+workflow, concurrent `yes` lost its value, and prior `off` returned as `false`. The
+corrected tests preserve concurrent directory contents and exact Git extension values.
+They also preserve an additional `true` value and restore prior `off` and `no` values.
+
+Native checks cover one SIGTERM request, helper completion, retained diagnostics, older
+CLI refusal, bounded diagnostic tails, duplicate prevention, and normal Quit admission.
+Each new timed native scenario asserts completion below one second.
+
+The final complete gate passed 395 Deno tests and 339 native checks, with one platform
+test ignored. Formatting, lint, and type checks passed. CLI help includes the optional
+deadline argument for both hook commands.
+
+A temporary Unix socket exercised the current model through public actions. The probe
+passed repository removal, same-path re-registration, path changes, daemon loss,
+diagnostic retention, and deferred and immediate delegate replies. Late committed success
+updated an unchanged saved registration after daemon loss. A separate AppKit process
+invoked normal termination through the event loop. That process exited after installer
+restoration.
+
+Review probes reproduced two model defects. A failed removal discarded an installation
+diagnostic, and rapid re-registration skipped automatic installation after older cleanup.
+The corrected probes preserve diagnostics and start the new installation only after
+cleanup. Removal, path changes, daemon loss, and Quit discard pending setup requests.
+
+The code review completed with four confirmed findings. Each finding has a correction and
+targeted checks. The final complete gate passed after all four corrections.
+
+The first AppKit probe called termination inside a Swift task and stalled. A stack sample
+showed the task inside AppKit's nested termination loop. The revised probe schedules
+termination through the event loop, like a normal application action.
+
+Temporary probe artifacts remain under gitignored `demos/plan006/`. These checks establish
+the tested cancellation and normal Quit paths. Forced termination, host crashes, power
+loss, and a fixed deadline for complete restoration remain outside this evidence.
+
 ### Existing workflow dependencies
 
 Twelve initial public regressions failed because both installation routes accepted defined

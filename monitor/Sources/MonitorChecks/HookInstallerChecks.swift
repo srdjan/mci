@@ -74,11 +74,48 @@ private func shellQuote(_ value: String) -> String {
 
 @MainActor private func checkReaped(_ pid: Int32?, _ message: String) {
     guard let pid else {
-        check(false, "The cancellation fixture records its process identifier")
+        check(false, "The fixture records its process identifier: \(message)")
         return
     }
     errno = 0
     check(kill(pid, 0) == -1 && errno == ESRCH, message)
+}
+
+@MainActor private func waitForFile(_ path: String) async -> Bool {
+    let deadline = ContinuousClock.now + .milliseconds(300)
+    while ContinuousClock.now < deadline {
+        if FileManager.default.fileExists(atPath: path) { return true }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    return false
+}
+
+private actor InstallationCompletion {
+    private var result: Result<Void, HookInstallError>?
+
+    func record(_ result: Result<Void, HookInstallError>) {
+        self.result = result
+    }
+
+    func observedResult() -> Result<Void, HookInstallError>? {
+        result
+    }
+}
+
+private actor StartGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var isOpen = false
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func open() {
+        isOpen = true
+        continuation?.resume()
+        continuation = nil
+    }
 }
 
 @MainActor func checkHookInstaller() async {
@@ -122,7 +159,7 @@ private func shellQuote(_ value: String) -> String {
     check(hookError(successResult) == nil, "installer succeeds")
     equal(
         try? String(contentsOfFile: arguments, encoding: .utf8),
-        "hooks\nsetup\n\(repository)\n--replace-pre-push\n",
+        "hooks\nsetup\n\(repository)\n--replace-pre-push\n--timeout-ms\n1000\n",
         "installer passes exact arguments")
 
     let missingBeforeSuccess = root + "/missing before success"
@@ -158,82 +195,196 @@ private func shellQuote(_ value: String) -> String {
         check(false, "installer reports a launch failure")
     }
 
-    let timeout = root + "/timed out installer"
-    let timeoutPID = root + "/timeout pid"
+    let olderCLI = root + "/older installer"
+    let olderMutation = root + "/older mutation"
+    makeExecutable(olderCLI, """
+        #!/bin/sh
+        if [ "$#" -ne 4 ]; then
+            printf 'unknown option: --timeout-ms\n' >&2
+            exit 64
+        fi
+        printf 'mutated' > '\(olderMutation)'
+        """)
+    equal(
+        hookError(await HookInstaller(
+            executablePaths: [olderCLI], timeoutMilliseconds: 41
+        ).install(repository: repository)),
+        .failed(exitCode: 64, stderr: "unknown option: --timeout-ms\n"),
+        "an older installer rejects the timeout argument")
+    check(
+        !FileManager.default.fileExists(atPath: olderMutation),
+        "an older installer rejects the argument before mutation")
+
+    let timeout = root + "/child timed out installer"
     makeExecutable(timeout, """
         #!/bin/sh
-        printf '%s' "$$" > '\(timeoutPID)'
         trap '' TERM
-        while :; do :; done
+        sleep 0.15
+        printf 'forward operation timed out; restoration completed\n' >&2
+        exit 124
         """)
     let start = ContinuousClock.now
     let timeoutResult = await HookInstaller(
-        executablePaths: [timeout], timeoutMilliseconds: 250
+        executablePaths: [timeout], timeoutMilliseconds: 30
     ).install(repository: repository)
     equal(
         hookError(timeoutResult),
-        .timedOut,
-        "installer reports a timeout")
+        .failed(
+            exitCode: 124,
+            stderr: "forward operation timed out; restoration completed\n"),
+        "installer preserves the child-owned timeout diagnostic")
+    check(
+        start.duration(to: .now) >= .milliseconds(140),
+        "the monitor does not enforce the forwarded installation timeout")
     check(start.duration(to: .now) < .seconds(1), "timeout completes in under one second")
-    let pidText = try? String(contentsOfFile: timeoutPID, encoding: .utf8)
-    if let pidText, let pid = Int32(pidText) {
-        errno = 0
-        check(kill(pid, 0) == -1 && errno == ESRCH, "timeout process is terminated and reaped")
-    } else {
-        check(false, "timeout fixture records its process identifier")
-    }
 
     let cancelledExecutable = root + "/cancelled installer"
     let cancelledPID = root + "/cancelled pid"
+    let helperPIDPath = root + "/helper pid"
+    let cancellationGate = root + "/cancellation gate"
+    let termReceived = root + "/term received"
     makeExecutable(cancelledExecutable, """
         #!/bin/sh
+        cancelled=0
+        trap 'cancelled=1; printf "received\\n" >> "\(termReceived)"' TERM
+        /bin/sh -c 'trap "" TERM; while [ ! -f "\(cancellationGate)" ]; do sleep 0.01; done' &
+        helper="$!"
+        printf '%s' "$helper" > '\(helperPIDPath)'
         printf '%s' "$$" > '\(cancelledPID)'
-        trap '' TERM
-        while :; do :; done
+        while kill -0 "$helper" 2>/dev/null; do
+            wait "$helper" || true
+        done
+        if [ "$cancelled" -eq 1 ]; then
+            printf 'restoration failed: preserved diagnostic\n' >&2
+            exit 143
+        fi
         """)
     let cancelledInstaller = HookInstaller(
         executablePaths: [cancelledExecutable], timeoutMilliseconds: 1_000)
-    let alreadyCancelled = Task { await cancelledInstaller.install(repository: repository) }
+    let cancelledStart = StartGate()
+    let alreadyCancelled = Task {
+        await cancelledStart.wait()
+        return await cancelledInstaller.install(repository: repository)
+    }
     alreadyCancelled.cancel()
+    await cancelledStart.open()
     equal(hookError(await alreadyCancelled.value), .cancelled, "cancelled installation does not launch")
     check(!FileManager.default.fileExists(atPath: cancelledPID), "cancelled installation creates no process")
 
     let cancellationStart = ContinuousClock.now
     let runningInstallation = Task { await cancelledInstaller.install(repository: repository) }
     let installationPID = await waitForProcess(cancelledPID)
+    let helperPID = await waitForProcess(helperPIDPath)
     runningInstallation.cancel()
-    equal(hookError(await runningInstallation.value), .cancelled, "running installation reports cancellation")
+    check(await waitForFile(termReceived), "installation cancellation sends TERM")
+    let completion = InstallationCompletion()
+    let completionTask = Task { await completion.record(await runningInstallation.value) }
+    try? await Task.sleep(for: .milliseconds(150))
+    check(
+        await completion.observedResult() == nil,
+        "installation cancellation waits for the active helper and restoration")
+    writeFile(cancellationGate, "release")
+    await completionTask.value
+    equal(
+        hookError(await completion.observedResult()!),
+        .failed(exitCode: 143, stderr: "restoration failed: preserved diagnostic\n"),
+        "running installation preserves the restoration diagnostic")
+    equal(
+        try? String(contentsOfFile: termReceived, encoding: .utf8),
+        "received\n",
+        "installation cancellation sends TERM once")
     checkReaped(installationPID, "cancelled installer process is terminated and reaped")
+    checkReaped(helperPID, "cancelled installer helper is terminated and reaped")
     check(cancellationStart.duration(to: .now) < .seconds(1), "installation cancellation completes in under one second")
 
-    try? FileManager.default.removeItem(atPath: cancelledPID)
+    let lateSuccess = root + "/late success installer"
+    let latePIDPath = root + "/late success pid"
+    let lateGate = root + "/late success gate"
+    let lateTerm = root + "/late success term"
+    makeExecutable(lateSuccess, """
+        #!/bin/sh
+        trap 'printf "received\\n" >> "\(lateTerm)"' TERM
+        printf '%s' "$$" > '\(latePIDPath)'
+        while [ ! -f '\(lateGate)' ]; do sleep 0.01; done
+        exit 0
+        """)
+    let lateInstaller = HookInstaller(
+        executablePaths: [lateSuccess], timeoutMilliseconds: 1_000)
+    let lateStart = ContinuousClock.now
+    let lateInstallation = Task { await lateInstaller.install(repository: repository) }
+    let latePID = await waitForProcess(latePIDPath)
+    lateInstallation.cancel()
+    check(await waitForFile(lateTerm), "late cancellation sends TERM")
+    try? await Task.sleep(for: .milliseconds(150))
+    writeFile(lateGate, "release")
+    check(
+        hookError(await lateInstallation.value) == nil,
+        "a committed installer result succeeds after late cancellation")
+    check(
+        lateStart.duration(to: .now) < .seconds(1),
+        "late-success cancellation completes in under one second")
+    equal(
+        try? String(contentsOfFile: lateTerm, encoding: .utf8),
+        "received\n",
+        "late cancellation sends TERM once")
+    checkReaped(latePID, "late-success installer process is reaped")
+
+    let inspectionExecutable = root + "/cancelled inspection"
+    let inspectionPIDPath = root + "/inspection pid"
+    makeExecutable(inspectionExecutable, """
+        #!/bin/sh
+        trap '' TERM
+        printf '%s' "$$" > '\(inspectionPIDPath)'
+        while :; do :; done
+        """)
     let cancellationRepository = root + "/cancellation repository"
     try? FileManager.default.createDirectory(atPath: cancellationRepository, withIntermediateDirectories: true)
-    let cancelledInspector = HookInstaller(gitExecutablePath: cancelledExecutable)
-    let alreadyCancelledInspection = Task { await cancelledInspector.inspect(repository: cancellationRepository) }
+    let cancelledInspector = HookInstaller(gitExecutablePath: inspectionExecutable)
+    let inspectionStartGate = StartGate()
+    let alreadyCancelledInspection = Task {
+        await inspectionStartGate.wait()
+        return await cancelledInspector.inspect(repository: cancellationRepository)
+    }
     alreadyCancelledInspection.cancel()
+    await inspectionStartGate.open()
     equal(await alreadyCancelledInspection.value, .checkFailed("The hook inspection was cancelled."), "cancelled inspection does not launch")
-    check(!FileManager.default.fileExists(atPath: cancelledPID), "cancelled inspection creates no process")
+    check(!FileManager.default.fileExists(atPath: inspectionPIDPath), "cancelled inspection creates no process")
 
     let inspectionStart = ContinuousClock.now
     let runningInspection = Task { await cancelledInspector.inspect(repository: cancellationRepository) }
-    let inspectionPID = await waitForProcess(cancelledPID)
+    let inspectionPID = await waitForProcess(inspectionPIDPath)
     runningInspection.cancel()
     equal(await runningInspection.value, .checkFailed("The Git worktree root could not be read: The hook inspection was cancelled."), "running inspection reports cancellation")
     checkReaped(inspectionPID, "cancelled Git process is terminated and reaped")
     check(inspectionStart.duration(to: .now) < .seconds(1), "inspection cancellation completes in under one second")
 
     let noisy = root + "/noisy installer"
+    let noisyCompleted = root + "/noisy completed"
     makeExecutable(noisy, """
         #!/bin/sh
-        while :; do printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' >&2; done
+        head -c 70000 /dev/zero | tr '\\0' x >&2
+        sleep 0.15
+        printf completed > '\(noisyCompleted)'
+        printf '\nFINAL-DIAGNOSTIC\n' >&2
+        exit 23
         """)
-    equal(
-        hookError(await HookInstaller(
-            executablePaths: [noisy], timeoutMilliseconds: 2_000
-        ).install(repository: repository)),
-        .outputLimitExceeded,
-        "installer limits error output")
+    let noisyStart = ContinuousClock.now
+    let noisyResult = hookError(await HookInstaller(
+        executablePaths: [noisy], timeoutMilliseconds: 2_000
+    ).install(repository: repository))
+    if case .failed(let exitCode, let stderr) = noisyResult {
+        equal(exitCode, 23, "oversized installer output preserves the exit status")
+        check(stderr.utf8.count <= 64 * 1_024, "oversized installer diagnostics have a bounded tail")
+        check(
+            stderr.hasSuffix("\nFINAL-DIAGNOSTIC\n"),
+            "oversized installer diagnostics preserve the final detail")
+    } else {
+        check(false, "oversized installer output returns a bounded failure")
+    }
+    check(
+        FileManager.default.fileExists(atPath: noisyCompleted),
+        "oversized installer output does not terminate installation")
+    check(noisyStart.duration(to: .now) < .seconds(1), "oversized installer output completes in under one second")
 
     let inspected = root + "/inspected repository"
     try? FileManager.default.createDirectory(atPath: inspected, withIntermediateDirectories: true)
