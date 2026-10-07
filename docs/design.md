@@ -386,6 +386,15 @@ opaque context means mci trusts the command without inspecting its task configur
 Literal `ci` and `mci:ci` names still cause refusal. Quotes protect printed command text
 from invocation detection. The scanner does not implement the complete shell grammar.
 
+Both installation routes validate defined root dependencies in the selected workflow job.
+Generated workflows use strict task validation. Existing workflows stop successfully at
+undefined optional tasks. Both modes reject invalid defined commands, reached CI calls,
+and defined task cycles before mutation.
+
+Pure dot step directories identify the root. Named directories and parent components have
+opaque task context. Direct literal recursion still causes refusal in any context.
+Installation preserves accepted workflow bytes and all optional steps.
+
 With `--replace-pre-push`, setup can replace repository-owned `.githooks` configuration
 for the selected worktree. The flag authorizes disabling that directory's pre-push hook.
 Setup preserves the old hook files and shared Git settings. An unknown pre-commit hook or

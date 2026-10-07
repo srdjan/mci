@@ -3,7 +3,7 @@ import { rpc } from "./client.ts";
 import { captureCommand } from "./command.ts";
 import { servicePaths } from "./paths.ts";
 import { attempt, err, ok, type Result } from "./result.ts";
-import { planWorkflow } from "./workflow.ts";
+import { type Plan, planWorkflow } from "./workflow.ts";
 
 const legacyHookDirectory = ".mci-hooks";
 const hookName = "pre-commit";
@@ -290,9 +290,6 @@ const recursiveInvocations = (
   invocations.mciCi ||
   invocations.tasks.some(({ name }) => name === "ci" || name === "mci:ci");
 
-const recursiveStep = (script: string, repository: string): boolean =>
-  recursiveInvocations(inspectInvocations(script, repository));
-
 const regularFile = async (path: string): Promise<Result<"absent" | "file">> => {
   const info = await attempt(() => Deno.lstat(path));
   if (!info.ok) {
@@ -326,6 +323,7 @@ const validateTasks = (
   tasks: JsonObject,
   selected: readonly string[],
   repository: string,
+  mode: "strict" | "existing-workflow",
 ): Result<void> => {
   const visited = new Set<string>();
   const visiting = new Set<string>();
@@ -336,6 +334,11 @@ const validateTasks = (
       );
     }
     if (visited.has(name)) return ok(undefined);
+    if (!Object.hasOwn(tasks, name)) {
+      return mode === "existing-workflow"
+        ? ok(undefined)
+        : err(`deno.json must define a nonempty string task named ${name}.`);
+    }
     const script = tasks[name];
     if (typeof script !== "string" || !script.trim() || script.includes("\0")) {
       return err(`deno.json must define a nonempty string task named ${name}.`);
@@ -361,6 +364,28 @@ const validateTasks = (
     if (!checked.ok) return checked;
   }
   return ok(undefined);
+};
+
+const rootStepDirectory = (directory: string): boolean =>
+  directory.split("/").every((part) => part === "" || part === ".");
+
+const validateSelectedJob = (
+  plan: Plan,
+  tasks: JsonObject,
+  repository: string,
+): Result<void> => {
+  const selected: string[] = [];
+  for (const step of plan.steps) {
+    const invocations = inspectInvocations(step.script, repository);
+    if (recursiveInvocations(invocations)) {
+      return err("The workflow job invokes mci CI and would recurse through the hook.");
+    }
+    if (!rootStepDirectory(step.directory)) continue;
+    for (const invocation of invocations.tasks) {
+      if (invocation.kind === "root") selected.push(invocation.name);
+    }
+  }
+  return validateTasks(tasks, selected, repository, "existing-workflow");
 };
 
 const requireDirectory = async (
@@ -688,9 +713,23 @@ const installHookWithPolicy = async (
   if (!source.ok) return err(`Cannot read the workflow: ${source.error}`);
   const plan = planWorkflow(source.value, job);
   if (!plan.ok) return err(`The workflow cannot run job ${job}: ${plan.error}`);
-  if (plan.value.steps.some((step) => recursiveStep(step.script, real.value))) {
-    return err("The workflow job invokes mci CI and would recurse through the hook.");
+
+  const configPath = `${real.value}/deno.json`;
+  const configFile = await regularFile(configPath);
+  if (!configFile.ok || configFile.value !== "file") {
+    return err(`The repository must have a regular deno.json file.`);
   }
+  const oldConfig = await attempt(() => Deno.readTextFile(configPath));
+  if (!oldConfig.ok) return err(`Cannot read deno.json: ${oldConfig.error}`);
+  const config = await readConfig(configPath);
+  if (!config.ok) return config;
+  const currentTasks = config.value.tasks;
+  if (currentTasks !== undefined && !object(currentTasks)) {
+    return err("deno.json tasks must be an object.");
+  }
+  const tasks: JsonObject = object(currentTasks) ? currentTasks : {};
+  const verified = validateSelectedJob(plan.value, tasks, real.value);
+  if (!verified.ok) return verified;
 
   const prefix = await capabilities.brewPrefix();
   if (!prefix.ok) return prefix;
@@ -730,19 +769,6 @@ const installHookWithPolicy = async (
     return err(`The packaged hook at ${packagedHookPath} is not executable.`);
   }
 
-  const configPath = `${real.value}/deno.json`;
-  const configFile = await regularFile(configPath);
-  if (!configFile.ok || configFile.value !== "file") {
-    return err(`The repository must have a regular deno.json file.`);
-  }
-  const oldConfig = await attempt(() => Deno.readTextFile(configPath));
-  if (!oldConfig.ok) return err(`Cannot read deno.json: ${oldConfig.error}`);
-  const config = await readConfig(configPath);
-  if (!config.ok) return config;
-  const currentTasks = config.value.tasks;
-  if (currentTasks !== undefined && !object(currentTasks)) {
-    return err("deno.json tasks must be an object.");
-  }
   const task = hookTask(binary, workflow, job);
   const existingTask = object(currentTasks) ? currentTasks[taskName] : undefined;
   if (existingTask !== undefined && existingTask !== task) {
@@ -1048,16 +1074,20 @@ export const setupHookWith = async (
         "deno.json must define at least one standard task: fmt:check, lint, check, or test.",
       );
     }
-    const verified = validateTasks(tasks, selectedStandardTasks, real.value);
+    const verified = validateTasks(
+      tasks,
+      selectedStandardTasks,
+      real.value,
+      "strict",
+    );
     if (!verified.ok) return verified;
   } else {
     const workflow = await attempt(() => Deno.readTextFile(workflowPath));
     if (!workflow.ok) return err(`Cannot read the workflow: ${workflow.error}`);
     const plan = planWorkflow(workflow.value, setupJob);
     if (!plan.ok) return err(`The workflow cannot run job ${setupJob}: ${plan.error}`);
-    if (plan.value.steps.some((step) => recursiveStep(step.script, real.value))) {
-      return err("The workflow job invokes mci CI and would recurse through the hook.");
-    }
+    const verified = validateSelectedJob(plan.value, tasks, real.value);
+    if (!verified.ok) return verified;
   }
 
   const prefix = await capabilities.brewPrefix();

@@ -146,6 +146,79 @@ const capabilities = (prefix: string) => ({
   git: (args: readonly string[]) => fixtureGitResult(args),
 });
 
+type RepositorySnapshot = {
+  readonly workflow: string;
+  readonly config: string;
+  readonly gitignore: string;
+  readonly sharedGit: string;
+  readonly worktreeGit: string;
+};
+
+const repositorySnapshot = async (
+  repository: string,
+  workflowPath: string,
+): Promise<RepositorySnapshot> => ({
+  workflow: await Deno.readTextFile(workflowPath),
+  config: await Deno.readTextFile(`${repository}/deno.json`),
+  gitignore: await Deno.readTextFile(`${repository}/.gitignore`),
+  sharedGit: await Deno.readTextFile(`${repository}/.git/config`),
+  worktreeGit: await Deno.readTextFile(`${repository}/.git/config.worktree`),
+});
+
+const prepareSnapshotFiles = async (repository: string): Promise<void> => {
+  await Deno.writeTextFile(`${repository}/.gitignore`, "dist/\n");
+  await runGit(repository, [
+    "config",
+    "--local",
+    "extensions.worktreeConfig",
+    "true",
+  ]);
+  await runGit(repository, [
+    "config",
+    "--worktree",
+    "mci.snapshot",
+    "preserved",
+  ]);
+};
+
+type InstallationRoute = {
+  readonly name: string;
+  readonly workflowPath: (repository: string) => string;
+  readonly install: (
+    repository: string,
+    prefix: string,
+  ) => Promise<Result<void>>;
+};
+
+const installationRoutes: readonly InstallationRoute[] = [
+  {
+    name: "setup",
+    workflowPath: (repository) => `${repository}/ci/local-ci.yml`,
+    install: (repository, prefix) => setupHookWith(repository, capabilities(prefix)),
+  },
+  {
+    name: "explicit installation",
+    workflowPath: (repository) => `${repository}/.github/workflows/ci.yml`,
+    install: (repository, prefix) =>
+      installHookWith(
+        repository,
+        ".github/workflows/ci.yml",
+        "check",
+        capabilities(prefix),
+      ),
+  },
+];
+
+const workflowWithScript = (script: string, directory?: string): string =>
+  workflow.replace(
+    "      - run: deno task test\n        shell: bash",
+    `      - run: |\n${
+      script.split("\n").map((line) => `          ${line}`).join("\n")
+    }\n        shell: bash${
+      directory === undefined ? "" : `\n        working-directory: ${directory}`
+    }`,
+  );
+
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
 
 type RollbackFaults = {
@@ -535,6 +608,160 @@ Deno.test("hook setup preserves optional workflow tasks byte for byte", async ()
     equal(await Deno.readTextFile(`${repository}/ci/local-ci.yml`), existing);
   });
 });
+
+const existingWorkflowRefusals: readonly {
+  readonly name: string;
+  readonly tasks: (repository: string) => Readonly<Record<string, unknown>>;
+  readonly error: string;
+  readonly workflow?: string;
+}[] = [
+  {
+    name: "test to mci:ci",
+    tasks: () => ({ test: "deno task mci:ci" }),
+    error: "recurs",
+  },
+  {
+    name: "two dependency edges",
+    tasks: () => ({
+      test: "deno task prepare",
+      prepare: "deno task mci:ci",
+    }),
+    error: "recurs",
+  },
+  {
+    name: "defined dependency cycle",
+    tasks: () => ({
+      test: "deno task prepare",
+      prepare: "deno task test",
+    }),
+    error: "recursive Deno task dependency",
+  },
+  {
+    name: "root task --config option",
+    tasks: () => ({
+      test: "deno task --config deno.json prepare",
+      prepare: "deno task mci:ci",
+    }),
+    error: "recurs",
+  },
+  {
+    name: "root task --config equals option",
+    tasks: () => ({
+      test: "deno task --config=./deno.json prepare",
+      prepare: "deno task mci:ci",
+    }),
+    error: "recurs",
+  },
+  {
+    name: "root task -c option",
+    tasks: () => ({
+      test: "deno task -c deno.json prepare",
+      prepare: "deno task mci:ci",
+    }),
+    error: "recurs",
+  },
+  {
+    name: "root task absolute config option",
+    tasks: (repository) => ({
+      test: `deno task -c ${shellQuote(`${repository}/deno.json`)} prepare`,
+      prepare: "deno task mci:ci",
+    }),
+    error: "recurs",
+  },
+  {
+    name: "reached literal mci ci",
+    tasks: () => ({
+      test: "deno task prepare",
+      prepare: "mci ci ci/local-ci.yml --job check",
+    }),
+    error: "recurs",
+  },
+  {
+    name: "invalid defined dependency",
+    tasks: () => ({ test: "deno task broken", broken: null }),
+    error: "nonempty string task named broken",
+  },
+  {
+    name: "direct recursion from a changed step directory",
+    tasks: () => ({ test: "deno test" }),
+    error: "recurse",
+    workflow: workflowWithScript("deno task mci:ci", "package"),
+  },
+  {
+    name: "task recursion from a pure dot step directory",
+    tasks: () => ({ test: "deno task mci:ci" }),
+    error: "recurs",
+    workflow: workflowWithScript("deno task test", "././"),
+  },
+];
+
+for (const route of installationRoutes) {
+  for (const refusal of existingWorkflowRefusals) {
+    Deno.test(
+      `hook ${route.name} refuses existing workflow ${refusal.name} before mutation`,
+      async () => {
+        await withRepository(async (repository, prefix) => {
+          const workflowPath = route.workflowPath(repository);
+          if (route.name === "setup") await Deno.mkdir(`${repository}/ci`);
+          await Deno.writeTextFile(workflowPath, refusal.workflow ?? workflow);
+          await Deno.writeTextFile(
+            `${repository}/deno.json`,
+            `${JSON.stringify({ tasks: refusal.tasks(repository) })}\n`,
+          );
+          await prepareSnapshotFiles(repository);
+          const before = await repositorySnapshot(repository, workflowPath);
+
+          const result = await route.install(repository, prefix);
+
+          assert(
+            !result.ok && result.error.includes(refusal.error),
+            result.ok ? "installation succeeded" : result.error,
+          );
+          equal(await repositorySnapshot(repository, workflowPath), before);
+        });
+      },
+    );
+  }
+}
+
+for (const route of installationRoutes) {
+  Deno.test(
+    `hook ${route.name} accepts compatible task contexts in an existing workflow`,
+    async () => {
+      await withRepository(async (repository, prefix) => {
+        const workflowPath = route.workflowPath(repository);
+        if (route.name === "setup") await Deno.mkdir(`${repository}/ci`);
+        const existing = workflowWithScript(
+          [
+            "deno task build",
+            "deno task optional",
+            "deno task --config other.json test",
+            "deno task --cwd package test",
+          ].join("\n"),
+        ).replace(
+          "    steps:\n",
+          "    steps:\n" +
+            "      - run: deno task test\n" +
+            "        shell: bash\n" +
+            "        working-directory: package\n",
+        );
+        await Deno.writeTextFile(workflowPath, existing);
+        await Deno.writeTextFile(
+          `${repository}/deno.json`,
+          JSON.stringify({
+            tasks: {
+              build: "deno check .",
+              test: "deno task mci:ci",
+            },
+          }),
+        );
+
+        unwrap(await route.install(repository, prefix));
+        equal(await Deno.readTextFile(workflowPath), existing);
+      });
+    },
+  );
+}
 
 Deno.test("hook setup refuses a redirected ci directory", async () => {
   await withRepository(async (repository, prefix) => {

@@ -359,6 +359,11 @@ root task dependencies. Foreign configurations, changed directories, and workspa
 remain trusted commands outside root inspection. A literal `ci` or `mci:ci` task still
 causes refusal. Static inspection does not validate arbitrary shell programs.
 
+`mci hooks setup` and `mci hooks install` also traverse defined root task dependencies in
+existing workflows. Installation refuses recursive CI calls, defined cycles, and invalid
+defined commands. Undefined optional tasks remain accepted during installation. Generated
+workflows require every selected task and discovered root dependency.
+
 Setup adds the `mci:ci` task and selects the packaged Homebrew hook for the worktree.
 Setup can replace repository-owned `.githooks` configuration and disable its pre-push
 hook. Setup preserves the old hook files and shared Git settings. Sibling worktrees keep

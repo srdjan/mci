@@ -745,6 +745,19 @@ cache or only the kernel buffers.
 
 ## Evidence limits
 
+### Existing workflow dependencies
+
+Twelve initial public regressions failed because both installation routes accepted defined
+recursive graphs. The corrected focused run passed 117 tests with one platform test
+ignored. Each new test completed below one second.
+
+Tests cover direct and indirect CI dependencies, defined cycles, invalid defined commands,
+root configuration options, pure dot directories, and opaque contexts. Refusal preserves
+workflow, Deno configuration, ignore rules, and shared and worktree Git configuration.
+Compatibility tests preserve valid optional tasks and undefined optional tasks. The
+complete gate passed 372 Deno tests and 307 native checks, with one platform test ignored.
+Static inspection does not prove that arbitrary shell commands avoid recursion.
+
 ### Receipt path identity
 
 The public baseline regression selected the workspace workflow identity after
