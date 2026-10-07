@@ -516,6 +516,16 @@ command saves daemon output and a process identity in the private service direct
 command registers the checkout and opens the monitor for that service directory. If the
 monitor is absent, the command builds and installs it.
 
+Source launch observes child exit status before detaching the child. Startup captures PID,
+process group, and start time before readiness. Those fields must remain stable through
+the launcher-to-Deno transition. Readiness confirmation also captures the daemon command.
+
+Startup rollback checks child status and process ownership before signaling. Unknown
+status or changed ownership produces a cleanup diagnostic without a signal. Unresolved
+cleanup preserves the recovery record. Successful cleanup restores any prior launch
+record. Inspection and signaling remain separate operations; this check does not make
+ownership atomic.
+
 The command reopens a running monitor so the app reads the selected service directory. One
 installed monitor serves the user. Stop quits this shared monitor even when `MCI_HOME`
 selects another daemon directory.

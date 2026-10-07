@@ -745,6 +745,18 @@ cache or only the kernel buffers.
 
 ## Evidence limits
 
+### Source startup ownership
+
+Public service tests reproduced unchecked baseline signaling after readiness failure. The
+corrected service passed 28 focused tests. Tests cover changed identity, missing identity,
+inspection failure, early exit, unknown child status, owned termination, launcher command
+transition, and prior record restoration.
+
+A native probe confirmed child status observation after `unref()`. The integrated gate
+passed 348 Deno tests and 307 native checks, with one platform test ignored. The PID reuse
+cases use capability doubles and signal no unrelated process. Inspection and signaling
+remain separate operations.
+
 ### Recorded workflow results
 
 The public daemon regression failed on the baseline because projection failure changed the

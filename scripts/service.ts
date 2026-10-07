@@ -21,6 +21,7 @@ type PathKind = "absent" | "file" | "directory" | "other";
 
 export type DaemonLaunch = {
   readonly pid: number;
+  readonly exited: () => Result<boolean>;
 };
 
 export type DaemonLaunchOptions = {
@@ -73,9 +74,11 @@ const pathFrom = (relative: string): string =>
 const defaultDirectory = (home: string): string =>
   `${home}/Library/Application Support/mci`;
 
+const sameStableIdentity = (left: ProcessIdentity, right: ProcessIdentity): boolean =>
+  left.pid === right.pid && left.pgid === right.pgid && left.started === right.started;
+
 const sameIdentity = (left: ProcessIdentity, right: ProcessIdentity): boolean =>
-  left.pid === right.pid && left.pgid === right.pgid && left.started === right.started &&
-  left.command === right.command;
+  sameStableIdentity(left, right) && left.command === right.command;
 
 const parseRecord = (text: string): Result<SourceRecord> => {
   const parsed = (() => {
@@ -170,26 +173,102 @@ const waitForIdentityExit = async (
   return err(`Daemon process ${identity.pid} did not stop within 5000 ms`);
 };
 
+const stopLaunchedProcess = async (
+  identity: ProcessIdentity | null,
+  launch: DaemonLaunch,
+  exactCommand: boolean,
+  ownershipError: string | null,
+  capabilities: LifecycleCapabilities,
+): Promise<Result<void>> => {
+  const initialExit = launch.exited();
+  if (!initialExit.ok) {
+    return err(
+      `cleanup ownership is unresolved for launched PID ${launch.pid}: child status observation failed: ${initialExit.error}; no signal was sent`,
+    );
+  }
+  if (initialExit.value) return ok(undefined);
+  if (identity === null) {
+    return err(
+      `cleanup ownership is unresolved for launched PID ${launch.pid}: ${
+        ownershipError ?? "the process identity was not observed"
+      }; no signal was sent`,
+    );
+  }
+  const matches = (current: ProcessIdentity): boolean =>
+    exactCommand
+      ? sameIdentity(identity, current)
+      : sameStableIdentity(identity, current);
+  const current = await capabilities.inspectProcess(identity.pid);
+  const inspectedExit = launch.exited();
+  if (!inspectedExit.ok) {
+    return err(
+      `cleanup ownership is unresolved for launched PID ${launch.pid}: child status observation failed: ${inspectedExit.error}; no signal was sent`,
+    );
+  }
+  if (inspectedExit.value) return ok(undefined);
+  if (!current.ok) {
+    return err(
+      `cleanup ownership is unresolved for launched PID ${launch.pid}: ${current.error}; no signal was sent`,
+    );
+  }
+  if (current.value === null) return ok(undefined);
+  if (!matches(current.value)) {
+    return err(
+      `cleanup ownership is unresolved for launched PID ${launch.pid}: the process identity changed; no signal was sent`,
+    );
+  }
+  const signaled = await capabilities.signalProcess(identity.pid, "SIGTERM");
+  if (!signaled.ok) return signaled;
+  if (!signaled.value) return ok(undefined);
+  const signaledExit = launch.exited();
+  if (!signaledExit.ok) {
+    return err(
+      `Daemon process ${identity.pid} received SIGTERM, but child status observation failed: ${signaledExit.error}`,
+    );
+  }
+  if (signaledExit.value) return ok(undefined);
+  const end = capabilities.now() + 5000;
+  while (capabilities.now() < end) {
+    await capabilities.delay(50);
+    const delayedExit = launch.exited();
+    if (!delayedExit.ok) {
+      return err(
+        `Daemon process ${identity.pid} received SIGTERM, but child status observation failed: ${delayedExit.error}`,
+      );
+    }
+    if (delayedExit.value) return ok(undefined);
+    const inspected = await capabilities.inspectProcess(identity.pid);
+    if (!inspected.ok) return inspected;
+    if (inspected.value === null || !matches(inspected.value)) return ok(undefined);
+  }
+  return err(`Daemon process ${identity.pid} did not stop within 5000 ms`);
+};
+
 const rollbackDaemon = async (
   identity: ProcessIdentity | null,
-  launchedPid: number | null,
+  launch: DaemonLaunch | null,
+  exactCommand: boolean,
+  ownershipError: string | null,
   record: string,
   capabilities: LifecycleCapabilities,
   recordSaved: boolean,
+  previousRecord: string | null,
 ): Promise<string | null> => {
-  if (identity === null && launchedPid === null) return null;
-  const stopped = identity !== null
-    ? await stopMatchingProcess(identity, capabilities)
-    : launchedPid !== null
-    ? await capabilities.signalProcess(launchedPid, "SIGTERM").then((result) =>
-      result.ok ? ok(undefined) : result
-    )
+  if (launch === null) return null;
+  const stopped = await stopLaunchedProcess(
+    identity,
+    launch,
+    exactCommand,
+    ownershipError,
+    capabilities,
+  );
+  const recordRollback = stopped.ok && recordSaved
+    ? previousRecord === null
+      ? await capabilities.removeFile(record)
+      : await capabilities.writeText(record, previousRecord)
     : ok(undefined);
-  const removed = stopped.ok && recordSaved
-    ? await capabilities.removeFile(record)
-    : ok(undefined);
-  const failures = [stopped, removed].filter((result) => !result.ok).map((result) =>
-    result.ok ? "" : result.error
+  const failures = [stopped, recordRollback].filter((result) => !result.ok).map(
+    (result) => result.ok ? "" : result.error,
   );
   return failures.length === 0 ? null : failures.join("; ");
 };
@@ -206,9 +285,12 @@ export const start = async (
   const executable = `${bundle}/Contents/MacOS/${executableName}`;
   const record = `${paths.value.directory}/${recordName}`;
   let launchedIdentity: ProcessIdentity | null = null;
-  let launchedPid: number | null = null;
+  let launched: DaemonLaunch | null = null;
+  let requireExactCommand = false;
+  let ownershipError: string | null = null;
   let openedMonitor = false;
   let recordSaved = false;
+  let previousRecord: string | null = null;
 
   const fail = async (primary: string): Promise<Result<void>> => {
     const failures = [primary];
@@ -218,10 +300,13 @@ export const start = async (
     }
     const rollback = await rollbackDaemon(
       launchedIdentity,
-      launchedPid,
+      launched,
+      requireExactCommand,
+      ownershipError,
       record,
       capabilities,
       recordSaved,
+      previousRecord,
     );
     if (rollback !== null) failures.push(`daemon rollback: ${rollback}`);
     return err(failures.join("; "));
@@ -245,7 +330,7 @@ export const start = async (
     const log = `${paths.value.directory}/daemon.log`;
     const logged = await capabilities.makePrivateFile(log);
     if (!logged.ok) return err(`Cannot prepare the daemon log: ${logged.error}`);
-    const launched = await capabilities.launchDaemon({
+    const launchResult = await capabilities.launchDaemon({
       command: "/usr/bin/nohup",
       args: [
         "/bin/sh",
@@ -258,14 +343,43 @@ export const start = async (
       cwd: capabilities.workspace,
       env: { MCI_DAEMON_LOG: log },
     });
-    if (!launched.ok) return err(`Cannot launch the daemon: ${launched.error}`);
-    launchedPid = launched.value.pid;
+    if (!launchResult.ok) return err(`Cannot launch the daemon: ${launchResult.error}`);
+    launched = launchResult.value;
+    const beforeInspection = launched.exited();
+    if (!beforeInspection.ok) {
+      ownershipError = `child status observation failed: ${beforeInspection.error}`;
+    } else if (!beforeInspection.value) {
+      const inspected = await capabilities.inspectProcess(launched.pid);
+      const afterInspection = launched.exited();
+      if (!afterInspection.ok) {
+        ownershipError = `child status observation failed: ${afterInspection.error}`;
+      } else if (afterInspection.value) {
+        ownershipError = null;
+      } else if (!inspected.ok) {
+        ownershipError = `initial process inspection failed: ${inspected.error}`;
+      } else if (inspected.value === null) {
+        ownershipError = "the initial process identity was not observed";
+      } else if (inspected.value.pid !== launched.pid) {
+        ownershipError = "the initial process identity used a different PID";
+      } else {
+        launchedIdentity = inspected.value;
+      }
+    }
     daemon = await waitForDaemon(capabilities);
     if (!daemon.ok) return await fail(daemon.error);
-    if (daemon.value.pid !== launchedPid) {
+    if (daemon.value.pid !== launched.pid) {
       return await fail(
-        `The responding daemon PID ${daemon.value.pid} differs from launched PID ${launchedPid}`,
+        `The responding daemon PID ${daemon.value.pid} differs from launched PID ${launched.pid}`,
       );
+    }
+    const beforeConfirmation = launched.exited();
+    if (!beforeConfirmation.ok) {
+      return await fail(
+        `Cannot observe the launched daemon exit status: ${beforeConfirmation.error}`,
+      );
+    }
+    if (beforeConfirmation.value) {
+      return await fail("The launched daemon exited before ownership confirmation");
     }
     const inspected = await capabilities.inspectProcess(daemon.value.pid);
     if (!inspected.ok || inspected.value === null) {
@@ -275,12 +389,37 @@ export const start = async (
         }`,
       );
     }
+    const afterConfirmation = launched.exited();
+    if (!afterConfirmation.ok) {
+      return await fail(
+        `Cannot observe the launched daemon exit status: ${afterConfirmation.error}`,
+      );
+    }
+    if (afterConfirmation.value) {
+      return await fail("The launched daemon exited during ownership confirmation");
+    }
+    if (
+      launchedIdentity === null ||
+      !sameStableIdentity(launchedIdentity, inspected.value)
+    ) {
+      return await fail("The ready daemon does not match the launched process identity");
+    }
     launchedIdentity = inspected.value;
+    requireExactCommand = true;
     const recordKind = await capabilities.pathKind(record);
     if (
       !recordKind.ok || (recordKind.value !== "absent" && recordKind.value !== "file")
     ) {
       return await fail("The source daemon launch record is not a real file");
+    }
+    if (recordKind.value === "file") {
+      const existing = await capabilities.readText(record);
+      if (!existing.ok) {
+        return await fail(
+          `Cannot preserve the source daemon launch record: ${existing.error}`,
+        );
+      }
+      previousRecord = existing.value;
     }
     const saved = await capabilities.writeText(
       record,
@@ -559,8 +698,29 @@ export const nativeCapabilities: LifecycleCapabilities = {
       }).spawn()
     );
     if (!launched.ok) return launched;
+    const status: { exited: boolean; error: string | null } = {
+      exited: false,
+      error: null,
+    };
+    const observer = {
+      status,
+      observation: launched.value.status.then(
+        () => {
+          status.exited = true;
+        },
+        (error) => {
+          status.error = message(error);
+        },
+      ),
+    };
     launched.value.unref();
-    return ok({ pid: launched.value.pid });
+    return ok({
+      pid: launched.value.pid,
+      exited: () =>
+        observer.status.error === null
+          ? ok(observer.status.exited)
+          : err(observer.status.error),
+    });
   },
   inspectProcess: inspectProcessIdentity,
   signalProcess: (pid, signal) => {

@@ -41,7 +41,9 @@ type SceneOptions = {
   readonly signalError?: string;
   readonly monitorNeverReady?: boolean;
   readonly inspect?: readonly (ProcessIdentity | null)[];
+  readonly inspectResults?: readonly Result<ProcessIdentity | null>[];
   readonly pings?: readonly Result<Snapshot>[];
+  readonly exitObservations?: readonly Result<boolean>[];
   readonly unresponsive?: boolean;
 };
 
@@ -56,6 +58,8 @@ const scene = (options: SceneOptions = {}) => {
   let now = 0;
   let inspectIndex = 0;
   let pingIndex = 0;
+  let exitIndex = 0;
+  let exitObservation: Result<boolean> = ok(false);
   let launch: DaemonLaunchOptions | undefined;
   const capabilities: LifecycleCapabilities = {
     home,
@@ -79,11 +83,21 @@ const scene = (options: SceneOptions = {}) => {
       launch = input;
       daemon = true;
       process = identity();
-      return resolved(ok({ pid: 42 }));
+      return resolved(ok({
+        pid: 42,
+        exited: () => {
+          calls.push("exited");
+          const queued = options.exitObservations?.[exitIndex++];
+          if (queued !== undefined) exitObservation = queued;
+          return exitObservation;
+        },
+      }));
     },
     inspectProcess: () => {
       calls.push("inspect");
+      const result = options.inspectResults?.[inspectIndex];
       const queued = options.inspect?.[inspectIndex++];
+      if (result !== undefined) return resolved(result);
       return resolved(ok(queued === undefined ? process : queued));
     },
     signalProcess: () => {
@@ -231,8 +245,113 @@ Deno.test("start failure stops only the daemon launched by this invocation", asy
   const subject = scene({ monitorNeverReady: true });
   const result = await start(subject.capabilities);
   assert(!result.ok);
-  assert(subject.calls.includes("signal"));
+  equal(subject.calls.filter((call) => call === "signal").length, 1);
+  const signalIndex = subject.calls.indexOf("signal");
+  assert(subject.calls.slice(signalIndex + 1).includes("inspect"));
   assert(subject.calls.includes("remove"));
+});
+
+Deno.test("start readiness failure does not signal a changed launched process", async () => {
+  const subject = scene({
+    unresponsive: true,
+    inspect: [identity(), identity("replacement start")],
+  });
+  const result = await start(subject.capabilities);
+  assert(!result.ok && result.error.includes("did not become ready"));
+  assert(result.error.includes("cleanup ownership is unresolved"));
+  assert(!subject.calls.includes("signal"));
+});
+
+Deno.test("start readiness failure does not signal an unobserved launched process", async () => {
+  const subject = scene({ unresponsive: true, inspect: [null] });
+  const result = await start(subject.capabilities);
+  assert(!result.ok && result.error.includes("did not become ready"));
+  assert(result.error.includes("cleanup ownership is unresolved"));
+  assert(!subject.calls.includes("signal"));
+});
+
+Deno.test("start preserves readiness and inspection errors when ownership is unknown", async () => {
+  const subject = scene({
+    unresponsive: true,
+    inspectResults: [err("inspection refused")],
+  });
+  const result = await start(subject.capabilities);
+  assert(!result.ok && result.error.includes("did not become ready"));
+  assert(result.error.includes("inspection refused"));
+  assert(result.error.includes("cleanup ownership is unresolved"));
+  assert(!subject.calls.includes("signal"));
+});
+
+Deno.test("start readiness failure does not signal a child that exits during inspection", async () => {
+  const subject = scene({
+    unresponsive: true,
+    exitObservations: [ok(false), ok(true)],
+  });
+  const result = await start(subject.capabilities);
+  assert(!result.ok && result.error.includes("did not become ready"));
+  assert(!subject.calls.includes("signal"));
+});
+
+Deno.test("start reports unknown child status without signaling", async () => {
+  const subject = scene({
+    unresponsive: true,
+    exitObservations: [ok(false), ok(false), err("status observation failed")],
+  });
+  const result = await start(subject.capabilities);
+  assert(!result.ok && result.error.includes("did not become ready"));
+  assert(result.error.includes("child status observation failed"));
+  assert(result.error.includes("status observation failed"));
+  assert(result.error.includes("no signal was sent"));
+  assert(!subject.calls.includes("signal"));
+});
+
+Deno.test("start preserves its recovery record when child status becomes unknown", async () => {
+  const subject = scene({
+    monitorNeverReady: true,
+    exitObservations: [
+      ok(false),
+      ok(false),
+      ok(false),
+      ok(false),
+      err("status observation failed"),
+    ],
+  });
+  const result = await start(subject.capabilities);
+  assert(!result.ok && result.error.includes("status observation failed"));
+  assert(subject.writes.has(record));
+  assert(!subject.calls.includes("signal"));
+  assert(!subject.calls.includes("remove"));
+});
+
+Deno.test("start accepts the launcher to Deno command transition", async () => {
+  const launcher = identity(
+    "Mon Oct  6 12:00:00 2026",
+    "/usr/bin/nohup /bin/sh -c exec deno",
+  );
+  const daemon = identity(
+    "Mon Oct  6 12:00:00 2026",
+    "deno run /repo/src/main.ts daemon",
+  );
+  const subject = scene({ monitor: true, inspect: [launcher, daemon] });
+  const result = await start(subject.capabilities);
+  assert(result.ok, result.ok ? "" : result.error);
+  equal(
+    subject.writes.get(record),
+    JSON.stringify({
+      pid: daemon.pid,
+      started: daemon.started,
+      command: daemon.command,
+    }),
+  );
+});
+
+Deno.test("start restores a foreign launch record after later failure", async () => {
+  const subject = scene({ owner: "foreign" });
+  subject.writes.set(record, "foreign record");
+  const result = await start(subject.capabilities);
+  assert(!result.ok && result.error.includes("was not installed by mci"));
+  equal(subject.writes.get(record), "foreign record");
+  equal(subject.calls.filter((call) => call === "signal").length, 1);
 });
 
 Deno.test("stop is repeatable when both components are absent", async () => {
