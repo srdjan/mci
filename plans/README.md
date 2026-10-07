@@ -78,6 +78,9 @@ migration and forced installer termination are explicit deferred boundaries.
 
 ## Worklog and ownership
 
+Plan 006, cooperative cancellation, is committed locally as `8ce0843`. Its pre-commit gate
+passed 388 Deno tests and 339 native checks, with one platform test ignored.
+
 Plan 005, workflow validation, is committed locally as `a110a3b`. Its pre-commit gate
 passed 372 Deno tests and 307 native checks, with one platform test ignored.
 
@@ -131,14 +134,20 @@ plans.
 
 Completed: the final gate passed 388 Deno tests and 339 native checks, with one platform
 test ignored. Formatting, lint, type checks, layer checks, and suppression checks passed.
-The final review receipt reports no code findings. Its remaining conditions concern the
-local commit and this index. The main agent will record the commit below.
+The final review receipt reports no code findings. The local commit and index now satisfy
+its remaining conditions. All six fixes have separate local commits.
 
 Current: Decision 1 awaits authorization for the configured Advisor model,
 `gpt-6-sol/high`, instead of the required `gpt-5.6-sol/high`. Code completion does not
 include that consultation.
 
-Next: the main agent will commit Plan 006 on local main and record its commit.
+Completion audit: each plan meets its public behavior checks, compatibility rules, file
+scope, complete gate, and local commit requirements. The AppKit probe confirms the normal
+termination boundary. Forced termination, power-loss durability, and cross-platform
+release claims remain outside the accepted scope.
+
+Next: the user owns Decision 1, which authorizes one read-only consultation with the
+configured Advisor model. The main agent owns that consultation after authorization.
 
 No user decision remains necessary to start implementation. A stop condition during
 execution must name the failed assumption and the additional scope needed.
