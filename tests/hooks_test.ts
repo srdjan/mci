@@ -182,6 +182,23 @@ const prepareSnapshotFiles = async (repository: string): Promise<void> => {
   ]);
 };
 
+const writeBareWorktreeConfig = async (repository: string): Promise<void> => {
+  const path = `${repository}/.git/config`;
+  const source = await Deno.readTextFile(path);
+  await Deno.writeTextFile(path, `${source}\n[extensions]\n\tworktreeConfig\n`);
+};
+
+const replaceWorktreeConfigWithBare = async (repository: string): Promise<void> => {
+  const path = `${repository}/.git/config`;
+  const source = await Deno.readTextFile(path);
+  const replacement = source.replace(
+    /^[ \t]*worktreeConfig = true$/m,
+    "\tworktreeConfig",
+  );
+  assert(replacement !== source);
+  await Deno.writeTextFile(path, replacement);
+};
+
 type InstallationRoute = {
   readonly name: string;
   readonly workflowPath: (repository: string) => string;
@@ -209,6 +226,29 @@ const installationRoutes: readonly InstallationRoute[] = [
       ),
   },
 ];
+
+for (const route of installationRoutes) {
+  Deno.test(`hook ${route.name} preserves a bare worktreeConfig entry`, async () => {
+    await withRepository(async (repository, prefix) => {
+      await writeBareWorktreeConfig(repository);
+      const before = await Deno.readTextFile(`${repository}/.git/config`);
+
+      unwrap(await route.install(repository, prefix));
+
+      equal(await Deno.readTextFile(`${repository}/.git/config`), before);
+      equal(
+        await readGit(repository, [
+          "config",
+          "--local",
+          "--type=bool",
+          "--get",
+          "extensions.worktreeConfig",
+        ]),
+        "true",
+      );
+    });
+  });
+}
 
 const workflowWithScript = (script: string, directory?: string): string =>
   workflow.replace(
@@ -1933,6 +1973,44 @@ Deno.test("rollback restores a prior false extension value", async () => {
   });
 });
 
+Deno.test("rollback restores a prior empty extension value", async () => {
+  await withRepository(async (repository, prefix) => {
+    await runGit(repository, [
+      "config",
+      "--local",
+      "extensions.worktreeConfig",
+      "",
+    ]);
+    const before = await Deno.readTextFile(`${repository}/.git/config`);
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      rollbackCapabilities(repository, prefix, {
+        primaryCommand: hookSetCommand(prefix),
+        primaryDetail: "injected hook path failure",
+      }),
+    );
+
+    assert(!result.ok);
+    assert(result.error.startsWith(
+      "Cannot set worktree core.hooksPath: injected hook path failure",
+    ));
+    assert(!result.error.includes("Rollback failed"));
+    equal(await Deno.readTextFile(`${repository}/.git/config`), before);
+    equal(
+      await readGit(repository, [
+        "config",
+        "--local",
+        "--type=bool",
+        "--get",
+        "extensions.worktreeConfig",
+      ]),
+      "false",
+    );
+  });
+});
+
 Deno.test("rollback preserves an extension that was already true", async () => {
   await withRepository(async (repository, prefix) => {
     await runGit(repository, [
@@ -2023,6 +2101,44 @@ Deno.test("rollback preserves a concurrent extension edit", async () => {
       ]),
       "false",
     );
+  });
+});
+
+Deno.test("rollback preserves a concurrent bare extension edit", async () => {
+  await withRepository(async (repository, prefix) => {
+    const delegated = capabilities(prefix);
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      {
+        ...delegated,
+        git: async (args: readonly string[]): Promise<Result<string>> => {
+          const command = args.slice(2).join("\0");
+          if (command === hookSetCommand(prefix)) {
+            await replaceWorktreeConfigWithBare(repository);
+            return err("injected hook path failure");
+          }
+          return await delegated.git(args);
+        },
+      },
+    );
+
+    assert(!result.ok);
+    assert(result.error.includes("extensions.worktreeConfig changed before rollback"));
+    equal(
+      await readGit(repository, [
+        "config",
+        "--local",
+        "--type=bool",
+        "--get",
+        "extensions.worktreeConfig",
+      ]),
+      "true",
+    );
+    const config = await Deno.readTextFile(`${repository}/.git/config`);
+    assert(config.includes("\n\tworktreeConfig\n"));
+    assert(!config.includes("worktreeConfig = true"));
   });
 });
 

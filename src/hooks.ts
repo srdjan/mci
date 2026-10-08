@@ -345,20 +345,20 @@ const missingGitValue = (result: Result<string>): boolean =>
 const extensionConfigName = "extensions.worktreeConfig";
 const extensionConfigPattern = "^extensions\\.worktreeConfig$";
 
-const parseNullGitValues = (source: string): Result<readonly string[]> => {
+const parseNullGitValues = (
+  source: string,
+): Result<readonly (string | null)[]> => {
   if (!source.endsWith("\0")) {
     return err("Git returned malformed null-delimited configuration output.");
   }
-  const values: string[] = [];
+  const values: (string | null)[] = [];
   for (const record of source.slice(0, -1).split("\0")) {
     const separator = record.indexOf("\n");
-    if (
-      separator < 1 ||
-      record.slice(0, separator).toLowerCase() !== extensionConfigName.toLowerCase()
-    ) {
+    const key = separator === -1 ? record : record.slice(0, separator);
+    if (key.toLowerCase() !== extensionConfigName.toLowerCase()) {
       return err("Git returned an unexpected configuration record.");
     }
-    values.push(record.slice(separator + 1));
+    values.push(separator === -1 ? null : record.slice(separator + 1));
   }
   return ok(values);
 };
@@ -366,7 +366,7 @@ const parseNullGitValues = (source: string): Result<readonly string[]> => {
 const readRawExtensionValues = async (
   repository: string,
   capabilities: HookCapabilities,
-): Promise<Result<readonly string[]>> => {
+): Promise<Result<readonly (string | null)[]>> => {
   const result = await capabilities.git([
     "-C",
     repository,
