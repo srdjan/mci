@@ -1,7 +1,9 @@
 # Implementation plans
 
-The [minimal design audit](minimal-design-audit.md) records the next simplification
-options. The audit is complete; its proposed code changes remain unselected.
+The [minimal design audit](minimal-design-audit.md) records six bounded simplifications
+completed on 2026-10-08. The [implementation worklog](minimal-design-worklog.md) records
+their local commits, checks, and measured source counts. Findings 7-8 remain unselected
+because they require compatibility evidence. Findings 9-11 retain necessary boundaries.
 
 All six findings from the 2026-10-06 audit are complete. The user then authorized the
 complete 2026-10-08 backlog: eight hardening items, three pruning items, and documentation

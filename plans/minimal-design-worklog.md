@@ -38,6 +38,38 @@ Baseline files: `daemon.ts` 1314, `workspace.ts` 257, `cli.ts` 527, `ipc.ts` 70,
 production files will count in the final total. Tests and documentation will have separate
 counts. Line reduction alone does not establish behavior preservation.
 
+## Final measurements
+
+| Production file | Baseline lines | Final lines | Change |
+| --------------- | -------------: | ----------: | -----: |
+| `daemon.ts`     |           1314 |        1286 |    -28 |
+| `workspace.ts`  |            257 |         280 |    +23 |
+| `cli.ts`        |            527 |         525 |     -2 |
+| `ipc.ts`        |             70 |          78 |     +8 |
+| `worker.ts`     |            193 |         184 |     -9 |
+| `client.ts`     |            228 |         221 |     -7 |
+| `hooks.ts`      |           1587 |        1620 |    +33 |
+| Total           |           4176 |        4194 |    +18 |
+
+The production diff adds 359 lines and removes 341. No new production module was added.
+Fewer rule owners and explicit lock lifetime account for the design change. The scoped
+production line count increased by 18, so this work establishes no overall line reduction.
+
+| Changed test file   | Baseline lines | Final lines | Change |
+| ------------------- | -------------: | ----------: | -----: |
+| `workspace_test.ts` |            154 |         189 |    +35 |
+| `cli_test.ts`       |           1090 |        1169 |    +79 |
+| `ipc_test.ts`       |             38 |         118 |    +80 |
+| `hooks_test.ts`     |           2658 |        2718 |    +60 |
+| Total               |           3940 |        4194 |   +254 |
+
+The test diff adds 256 lines and replaces two import lines. Nine tests were added. No test
+or existing assertion was deleted.
+
+Documentation adds 207 lines and removes 19 across five files. Net change: 188 lines. The
+documentation scope contains this worklog, the audit, the plan index, the design, and
+`VERIFICATION.md`. These counts exclude production code and tests.
+
 ## Decisions and evidence limits
 
 Reader counts have one admission call and exclusive release routes. The count above one is
@@ -55,7 +87,7 @@ validation code while retaining resource checks at the same transaction boundari
 No tests will be deleted to improve a metric. No benchmark supports a latency claim.
 Public APIs and persisted formats will retain their current contracts.
 
-## Next action and ownership
+## Execution evidence
 
 Finding 1 passed 76 daemon and race tests. Its diff adds 22 production lines and removes
 35. `daemon.ts` decreased from 1314 to 1301 lines. No tests changed.
@@ -103,5 +135,17 @@ Finding 6 adds 183 production lines and removes 150. `hooks.ts` increased from 1
 owners. Review removed an unnecessary helper around the existing file-check API. Two
 public characterization tests add 60 lines. No existing test was removed.
 
-Current: commit finding 6, then reconcile final documentation. The main agent owns review,
-verification, integration, and commits. The user owns repository backups.
+Finding 6 committed as `5cf8c7d` after 462 Deno tests and 339 native checks passed. Every
+code commit passed formatting, lint, types, Deno tests, and native checks through the
+configured local pre-commit hook. The main agent observed each completed invocation.
+
+## Next action and ownership
+
+Completed: all six authorized simplifications, focused checks, source review, and local
+code commits. Documentation records the final status and measured scope. Findings 7-8
+remain unselected; findings 9-11 retain their existing boundaries. No browser session
+opened during this execution.
+
+The documentation commit runs the same configured gate. No production work remains in the
+accepted scope. Next: the repository maintainer owns backups and any additional release
+acceptance checks. The main agent does not push.

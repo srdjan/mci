@@ -1,5 +1,25 @@
 # Verification
 
+## Minimal design simplifications (2026-10-08)
+
+All six selected simplifications have separate local commits. The final code commit is
+`5cf8c7d`. Its gate passed formatting, lint, types, 462 Deno tests, and 339 native checks.
+One opposite-platform test was ignored.
+
+The main agent reviewed each source diff and ran the focused checks. Nine new public tests
+cover recovery without fresh run allocation, CLI preflight, complete writes, and hook
+diagnosis. The [implementation worklog](plans/minimal-design-worklog.md) records each unit
+and its baseline evidence.
+
+The seven production files grew by 18 lines overall. The four changed test files grew by
+254 lines. Shared validation rules retain transaction rechecks and exact diagnostics.
+Recovery holds the permanent lock without creating fresh run state. No latency benchmark
+supports a performance claim.
+
+Findings 7-8 remain unselected because they require compatibility evidence. Findings 9-11
+retain their existing boundaries. Documentation reconciliation runs the same local gate in
+its separate commit.
+
 ## Documentation reconciliation (2026-10-08)
 
 The tracked source hook calls `deno task ci`. The packaged hook calls `deno task mci:ci`.
@@ -16,8 +36,9 @@ The backlog records all eight hardening items and three pruning items as complet
 Documentation retains capacity, platform, visual, and power-loss evidence limits. This
 unit changes no hook, task, source code, configuration, or automatic trigger.
 
-The last code commit is `8d60d14`. Its local gate passed 453 Deno tests and 339 native
-checks, with one opposite-platform test ignored. Link checks pass for README and docs.
+At that baseline, the last code commit was `8d60d14`. Its gate passed 453 Deno tests and
+339 native checks, with one opposite-platform test ignored. Link checks pass for README
+and docs.
 
 Relative links resolve in 23 documents, including the plan index and ledger. Formatting
 passes. The independent review found no persistent factual defect or lost constraint.

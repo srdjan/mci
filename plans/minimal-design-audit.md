@@ -6,7 +6,8 @@ The best next step is bounded consolidation before new features. A full rewrite 
 established recovery behavior at unnecessary risk.
 
 This audit reviews local `main` at `10b7f10` on 2026-10-08. The initial worktree was
-clean. Production code remains unchanged.
+clean. Production code was unchanged at that baseline. Source line references describe
+that baseline.
 
 The audit covers the runner, workflow parser, daemon, storage, client, installation,
 session receipts, package scripts, and native monitor. Two read-only agents examined
@@ -19,6 +20,17 @@ evidence.
 These are design findings, not confirmed runtime defects. Source inspection establishes
 duplicated responsibility and unnecessary state. Runtime checks establish the current
 baseline, not preservation after a future change.
+
+## Execution status
+
+The user selected findings 1-6 after this audit. All six code units are complete on local
+`main`. The [implementation worklog](minimal-design-worklog.md) records each commit and
+its acceptance checks. The final code gate passed 462 Deno tests and 339 native checks.
+One opposite-platform test was ignored.
+
+The seven production files grew from 4176 to 4194 lines. Shared rules and explicit lock
+ownership reduce duplicated responsibilities. The changes do not reduce the total line
+count. Findings 7-8 remain unselected; findings 9-11 retain their existing boundaries.
 
 ## Required behavior
 
@@ -57,7 +69,7 @@ is useful. The design needs fewer repeated policies within those boundaries.
 | Execution and process recovery           | `runner.ts`, `process.ts`, `workspace.ts` |
 | Request ordering and ownership           | `daemon.ts`                               |
 | Durable records and projections          | `daemon-store.ts`                         |
-| Transport framing and complete writes    | `ipc.ts` and one small writer function    |
+| Transport framing and complete writes    | `ipc.ts`                                  |
 | Hook rules and installation transactions | `hooks.ts`                                |
 | User commands and session reporting      | CLI and Codex adapters                    |
 | Display and native interaction           | Swift monitor                             |
@@ -326,9 +338,9 @@ Focused logs reside at `/private/tmp/mci-simplification-runner-tests-approved.lo
 checks do not establish all monitor, installer, or daemon behavior. The local pre-commit
 gate provides the full documentation-commit check.
 
-No benchmark establishes future line savings or latency improvement. Measure the same
-module scope before and after each accepted change. Reject a change that moves complexity
-without reducing it.
+No benchmark establishes a latency improvement. The implementation worklog measures the
+same module scope before and after the accepted changes. It records source growth and the
+responsibilities that each shared function now owns.
 
 ## Worklog and next action
 
@@ -336,14 +348,12 @@ Objective: identify unnecessary complexity and a smaller design before new featu
 Constraints: preserve functionality, local `main`, isolated local commits, no push, and no
 additional automatic CI trigger.
 
-Completed: current-state audit, source reconciliation, six bounded findings, two
-conditional consolidations, three retained proposals, and focused baseline checks. No
-implementation scope has been accepted from this report.
+Completed: the audit, all six selected simplifications, public characterization checks,
+source review, and isolated local commits. Execution followed findings 1-6 in numerical
+order. The implementation worklog retains the plan and evidence limits.
 
-Recommended execution order: findings 1-3, then 4-5, then 6. Each finding needs its own
-plan, regression checks, and commit. Findings 7-8 need compatibility decisions before
-execution.
+Findings 7-8 require compatibility decisions before execution. The user owns those
+decisions. Findings 9-11 remain retained boundaries.
 
-The main agent owns implementation plans and verification after scope selection. The user
-owns scope selection, package compatibility decisions, and repository backups. The next
-action is the user's selection of cleanup scope.
+Next: the repository maintainer owns repository backups and any additional release
+acceptance checks. The main agent does not push.

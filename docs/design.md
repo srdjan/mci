@@ -13,7 +13,7 @@ the authority of the invoking user.
 | `workspace.ts`    | Workspace exclusion, private scripts, and run recovery journals                |
 | `runner.ts`       | Step order, environment filtering, deadlines, and final results                |
 | `protocol.ts`     | Exact daemon request, response, snapshot, and terminal record shapes           |
-| `ipc.ts`          | Bounded newline-delimited JSON transport                                       |
+| `ipc.ts`          | Bounded newline-delimited JSON transport and complete byte writes              |
 | `client.ts`       | Daemon requests, request-log streaming, and caller cancellation                |
 | `daemon.ts`       | Registration, queues, worker ownership, snapshots, and shutdown                |
 | `daemon-store.ts` | Registry, request journal, result projection, and spool retention              |
@@ -219,6 +219,10 @@ The runner resolves the workspace to a canonical directory before acquiring its 
 permanent `.mci/lock` file identifies the lock inode. A nonblocking exclusive file lock
 prevents cooperating runners from sharing the workspace during execution. The operating
 system releases the lock when the owning file descriptor closes.
+
+Registration and daemon startup recover state under the same permanent lock. Recovery
+alone creates no run directory or journal. The workspace module releases the lock after
+recovery completes.
 
 The runner creates a private `run-*` directory beneath `.mci/`. The journal records its
 format version, private directory, and active process record. The runner writes the
