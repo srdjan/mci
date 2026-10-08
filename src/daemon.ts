@@ -23,11 +23,6 @@ import { type Env, type Plan, planWorkflow } from "./workflow.ts";
 import { recoverWorkspace } from "./workspace.ts";
 import { decodeWorkerRecord } from "./worker.ts";
 
-type Owner = {
-  readonly connection: Deno.UnixConn;
-  connected: boolean;
-};
-
 type Job = {
   readonly id: string;
   readonly repository: MutableRepository;
@@ -38,7 +33,8 @@ type Job = {
   started: string;
   readonly log: string;
   readonly control: string;
-  readonly owner: Owner;
+  readonly connection: Deno.UnixConn;
+  connected: boolean;
   readonly result: Promise<Terminal>;
   readonly resolve: (terminal: Terminal) => void;
   readonly stop: AbortController;
@@ -63,8 +59,8 @@ type DaemonRuntime = {
   readonly store: DaemonStore;
   readonly instance: string;
   readonly repositories: Map<string, MutableRepository>;
-  readonly holds: Map<string, number>;
-  readonly obsolete: Map<string, { readonly path: string; readonly id: string }>;
+  readonly connectedRequests: Set<string>;
+  readonly obsolete: Map<string, string>;
   management: Promise<void>;
   readonly routing: Map<string, Promise<void>>;
   readonly resolvePath: (path: string) => Promise<Result<string>>;
@@ -144,10 +140,6 @@ const publishFinal = async (runtime: DaemonRuntime, id: string): Promise<void> =
   }
 };
 
-const hold = (runtime: DaemonRuntime, id: string): void => {
-  runtime.holds.set(id, (runtime.holds.get(id) ?? 0) + 1);
-};
-
 const blockRetention = (
   runtime: DaemonRuntime,
   path: string,
@@ -163,19 +155,14 @@ const blockRetention = (
 };
 
 const release = async (runtime: DaemonRuntime, id: string): Promise<void> => {
-  const count = runtime.holds.get(id) ?? 0;
-  if (count > 1) {
-    runtime.holds.set(id, count - 1);
-    return;
-  }
-  runtime.holds.delete(id);
-  const obsolete = runtime.obsolete.get(id);
-  if (obsolete === undefined) return;
+  runtime.connectedRequests.delete(id);
+  const path = runtime.obsolete.get(id);
+  if (path === undefined) return;
   if (runtime.store.pending().some((request) => request.id === id)) return;
-  const removed = await runtime.store.removeRun(obsolete.path, obsolete.id);
+  const removed = await runtime.store.removeRun(path, id);
   if (removed.ok) runtime.obsolete.delete(id);
   else {
-    const blocked = blockRetention(runtime, obsolete.path, removed.error);
+    const blocked = blockRetention(runtime, path, removed.error);
     await publish(runtime);
     if (blocked !== undefined) pump(runtime, blocked);
   }
@@ -188,10 +175,10 @@ const retire = async (
 ): Promise<void> => {
   if (terminal === null) return;
   if (
-    (runtime.holds.get(terminal.id) ?? 0) > 0 ||
+    runtime.connectedRequests.has(terminal.id) ||
     runtime.store.pending().some((request) => request.id === terminal.id)
   ) {
-    runtime.obsolete.set(terminal.id, { path, id: terminal.id });
+    runtime.obsolete.set(terminal.id, path);
     return;
   }
   const removed = await runtime.store.removeRun(path, terminal.id);
@@ -607,7 +594,7 @@ const newJob = (
   shell: string,
   log: string,
   control: string,
-  owner: Owner,
+  connection: Deno.UnixConn,
 ): Job => {
   let resolve = (_terminal: Terminal): void => {};
   const result = new Promise<Terminal>((done) => resolve = done);
@@ -621,7 +608,8 @@ const newJob = (
     started: new Date().toISOString(),
     log,
     control,
-    owner,
+    connection,
+    connected: true,
     result,
     resolve,
     stop: new AbortController(),
@@ -644,14 +632,14 @@ const watchSubmission = async (
       if (!decoded.ok || decoded.value.op !== "cancel") break;
       await cancelQueued(runtime, job, decoded.value.reason);
     }
-    job.owner.connected = false;
+    job.connected = false;
     if (job.repository.active === job || job.repository.queue.includes(job)) {
       await cancelQueued(runtime, job, "SIGTERM");
     }
   })();
   const terminal = await job.result;
-  if (job.owner.connected) {
-    await sendJson(job.owner.connection, {
+  if (job.connected) {
+    await sendJson(job.connection, {
       version: 1,
       type: "result",
       result: terminal,
@@ -659,7 +647,7 @@ const watchSubmission = async (
   }
   await inbound;
   await release(runtime, job.id);
-  closeConnection(job.owner.connection);
+  closeConnection(job.connection);
 };
 
 const rollbackSubmission = async (
@@ -723,7 +711,6 @@ const prepareSubmission = async (
     closeConnection(connection);
     return null;
   }
-  const owner: Owner = { connection, connected: true };
   const job = newJob(
     id,
     repository,
@@ -732,7 +719,7 @@ const prepareSubmission = async (
     shell.value,
     allocated.value.log,
     allocated.value.control,
-    owner,
+    connection,
   );
   const pending: PendingRequest = {
     id,
@@ -769,7 +756,7 @@ const prepareSubmission = async (
     return null;
   }
   repository.queue.push(job);
-  hold(runtime, id);
+  runtime.connectedRequests.add(id);
   const sent = await sendJson(connection, {
     version: 1,
     type: "accepted",
@@ -777,7 +764,7 @@ const prepareSubmission = async (
     log: job.log,
   });
   if (!sent.ok) {
-    owner.connected = false;
+    job.connected = false;
     await cancelQueued(runtime, job, "SIGTERM");
     await release(runtime, id);
     closeConnection(connection);
@@ -968,7 +955,7 @@ const prepareRuntime = async (
     store,
     instance: crypto.randomUUID(),
     repositories: new Map(),
-    holds: new Map(),
+    connectedRequests: new Set(),
     obsolete: new Map(),
     management: Promise.resolve(),
     routing: new Map(),
