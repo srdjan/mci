@@ -5,8 +5,9 @@ The user selected plans for all six audit findings on 2026-10-06. These plans us
 plans. The individual plan files preserve their original instructions. This index records
 completion.
 
-The earlier [hardening and pruning list](hardening-pruning-list.md) records completed
-work. This index records the new selected work without reopening those completed units.
+The refreshed [hardening and pruning list](hardening-pruning-list.md) records proposed
+work from the 2026-10-08 review. This index preserves completion of the six selected
+plans.
 
 ## Execution order and status
 
