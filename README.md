@@ -270,15 +270,21 @@ instead of terminating an unrelated process.
 
 ## Develop and validate
 
-Install this repository's tracked development hook after cloning:
+This repository provides a tracked development hook. After cloning, its installation
+command is:
 
 ```sh
 deno task hooks:install
 ```
 
-Git runs `.githooks/pre-commit` before each commit. The hook calls `deno task ci` from the
-repository root. That task submits the local YAML to the daemon, which saves the output
-under `.mci/ci/`. The hook needs a running daemon and a registered checkout.
+This command sets the repository-local hook path to `.githooks`. A worktree setting takes
+precedence. The tracked hook calls `deno task ci` from the repository root. Managed
+installation sets the worktree hook path to the packaged hook, which calls
+`deno task mci:ci`. This checkout currently selects the packaged hook through its worktree
+configuration. Git runs one effective pre-commit hook before each commit.
+
+Both paths submit `ci/local-ci.yml`, job `check`, to the local daemon. The daemon saves
+output under `.mci/ci/`. Both hooks need a running daemon and a registered checkout.
 
 The local YAML selects the four standard tasks and the optional `app:check` task. A failed
 check blocks the commit, and the checks include unstaged changes.
@@ -449,7 +455,7 @@ OS boundaries.
 `deno task ci` submits the local YAML to the daemon, which saves its output.
 
 Read [docs/design.md](docs/design.md) for module responsibilities, recovery rules, and
-release ownership. Open hardening and pruning work lives in
+release ownership. The completed hardening and pruning ledger lives in
 [plans/hardening-pruning-list.md](plans/hardening-pruning-list.md). The local workflow
 lives in `ci/local-ci.yml` and uses the current checkout and installed Deno. Automatic CI
 runs only through the pre-commit hook. GitHub serves only as a repository backup service.

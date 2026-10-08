@@ -7,6 +7,12 @@ The tracked hook lives at `.githooks/pre-commit` and calls `deno task ci`.
 `deno task hooks:install` installs the hook path in the local Git configuration. Manual
 checks remain available for diagnosis and release evidence.
 
+Git selects one effective pre-commit hook for each worktree. Managed installation selects
+the packaged Homebrew hook, which calls `deno task mci:ci`. Both paths submit
+`ci/local-ci.yml`, job `check`, to the local daemon. The tracked source hook remains
+supported. A worktree setting takes precedence over a repository-local setting. Inspect
+effective Git configuration before identifying the active hook.
+
 CI YAML calls Deno tasks directly. Saved CI logs and status remain gitignored under
 `.mci/ci/`. One local daemon serves one user and multiple repositories. Each repository
 uses a FIFO queue, while different repositories can run concurrently. Restart interrupts

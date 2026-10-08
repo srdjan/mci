@@ -336,13 +336,19 @@ directly.
 GitHub serves only as a repository backup service. The repository has no GitHub Actions
 workflow or remote test trigger.
 
-Automatic CI runs only through `.githooks/pre-commit`. The hook resolves the repository
-root and calls `deno task ci`.
+Automatic CI runs only through Git's effective pre-commit hook. Git selects one hook path
+for the worktree. The tracked source hook resolves the repository root and calls
+`deno task ci`. The packaged hook calls `deno task mci:ci`. Both tasks submit
+`ci/local-ci.yml`, job `check`, to the local daemon.
 
-`deno task hooks:install` sets the local Git hook path to `.githooks`. Each clone needs
-its own installation because Git does not copy local configuration. The checks cover the
-working tree, including unstaged changes. Manual verification and compilation remain
-available. `VERIFICATION.md` records observed coverage and keeps evidence limits explicit.
+`deno task hooks:install` sets the repository-local hook path to `.githooks`. A worktree
+setting takes precedence. Managed hook installation sets the packaged Homebrew path for
+the worktree. This checkout currently selects the packaged hook through
+`.git/config.worktree`. Each clone needs its own configuration because Git does not copy
+local settings. The checks cover the working tree, including unstaged changes.
+
+Manual verification and compilation remain available. `VERIFICATION.md` records observed
+coverage and keeps evidence limits explicit.
 
 ## Homebrew package and managed hooks
 

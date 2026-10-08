@@ -4,10 +4,9 @@
 
 This review identifies eight hardening items and three pruning items on local `main` at
 `c1215f2`, dated 2026-10-08. The user authorized the complete list. All eight hardening
-items are complete. P3, shared native primitives, is complete. P1, obsolete control files,
-is complete. P2, unused declarations, passes focused validation. The review covers Deno
-execution, daemon storage, hook installation, service control, packaging, and the native
-monitor.
+items, all three pruning items, and documentation reconciliation are complete. The review
+covers Deno execution, daemon storage, hook installation, service control, packaging, and
+the native monitor.
 
 The earlier list had no open items. Its six hardening units and two pruning units remain
 complete. The six plans in [README.md](README.md) also remain complete. The labels below
@@ -202,16 +201,22 @@ Any output policy must preserve cooperative restoration instead of terminating t
 installer during cleanup. No safe maximum or failure threshold was measured in this
 review.
 
-Documentation reconciliation remains a small follow-up.
-[docs/design.md:312](../docs/design.md#L312) describes the tracked source hook as the
-automatic path. [README.md:399](../README.md#L399) describes the packaged hook, which
-current local Git configuration selects. The documentation needs to distinguish the
-supported source path from the packaged path. The tracked source hook and the single
-pre-commit trigger remain repository requirements. Visual checks, VoiceOver checks,
-minimum macOS support, Intel execution, and startup at the next login remain existing
-evidence gaps.
+Documentation reconciliation is complete through
+[Plan 017](017-reconcile-hook-documentation.md). README, design, and repository
+instructions distinguish the supported source hook from the packaged hook. Git selects one
+effective pre-commit hook. The source hook calls `deno task ci`; the packaged hook calls
+`deno task mci:ci`. Both submit the same local workflow and job. Effective Git
+configuration currently selects the packaged hook for this checkout.
+
+Visual checks, VoiceOver checks, minimum macOS support, Intel execution, and startup at
+the next login remain existing evidence gaps.
 
 ## Validation and retained boundaries
+
+The final code gate at `8d60d14` passed formatting, lint, types, 453 Deno tests, and 339
+native checks. One opposite-platform test was ignored. Each isolated unit has its own
+local commit and validation. [README.md](README.md) maps plans to commits, and
+[VERIFICATION.md](../VERIFICATION.md) records detailed evidence.
 
 Formatting, lint, and type checks passed before the advisory edit. A focused run passed 27
 tests across workflow validation, command capture, protocol decoding, and IPC framing.
@@ -242,9 +247,9 @@ boundary has lower priority than the listed application failures.
 
 ## Next action and ownership
 
-Completed: all eight hardening items, shared native primitives, and obsolete control files
-pass the complete gate. Unused declarations pass focused validation. The main agent owns
-documentation reconciliation next.
+Completed: all eight hardening items, all three pruning items, and documentation
+reconciliation. No numbered item remains open. Capacity and additional platform checks
+remain unselected directions with their stated evidence limits.
 
-Each accepted unit needs its own local commit on `main`. The repository maintainer owns
-pushes and repository backups.
+Next: the repository maintainer owns pushes, repository backups, and any additional
+release acceptance checks. The main agent does not push.

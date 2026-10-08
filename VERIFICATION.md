@@ -1,5 +1,28 @@
 # Verification
 
+## Documentation reconciliation (2026-10-08)
+
+The tracked source hook calls `deno task ci`. The packaged hook calls `deno task mci:ci`.
+Effective Git configuration selects the packaged hook through `.git/config.worktree`. Both
+Deno tasks submit `ci/local-ci.yml`, job `check`, to the local daemon. README, design, and
+repository instructions now distinguish these paths.
+
+The local hook setting is `.githooks`. The enabled worktree configuration overrides it
+with the packaged path. README and design explain that `hooks:install` sets the local path
+and does not override a worktree setting.
+
+The plan index consolidates completion status and preserves individual execution plans.
+The backlog records all eight hardening items and three pruning items as complete.
+Documentation retains capacity, platform, visual, and power-loss evidence limits. This
+unit changes no hook, task, source code, configuration, or automatic trigger.
+
+The last code commit is `8d60d14`. Its local gate passed 453 Deno tests and 339 native
+checks, with one opposite-platform test ignored. Link checks pass for README and docs.
+
+Relative links resolve in 23 documents, including the plan index and ledger. Formatting
+passes. The independent review found no persistent factual defect or lost constraint.
+Completion requires the final configured gate, local commit, and clean checkout.
+
 ## Unused declarations (2026-10-08)
 
 Repository searches found no caller of `protocolVersion`. Installation paths never return
@@ -13,6 +36,9 @@ cover inspection output limits, installation output, cancellation, and restorati
 The independent review found no defects. The retained private inspection error is
 `CommandError.outputLimitExceeded`. The review confirmed no producer or caller of the
 removed installation error and no protocol export consumer.
+
+The Plan 016 commit is `8d60d14`. Its complete gate passed 453 Deno tests and 339 native
+checks, with one opposite-platform test ignored.
 
 ## Recovered control files (2026-10-08)
 
@@ -32,7 +58,7 @@ line. These filesystem checks establish the tested host only.
 The Plan 015 commit is `731c299`. Its gate passed 453 Deno tests and 339 native checks,
 with one opposite-platform test ignored.
 
-### Doctor health status
+## Doctor health status (2026-10-08)
 
 The public baseline command returned zero after an unavailable daemon check. Its
 regression failed in 7 ms. The correction returns aggregate health and prints every
