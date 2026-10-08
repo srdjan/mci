@@ -19,7 +19,7 @@ work on local `main` and commit each complete unit. The user owns pushes.
 | 2       | Share repository state loading.                                        | Startup and registration, busy locks, latest results, first-error precedence.      | Done    |
 | 3       | Recover workspaces without fresh run allocation.                       | Recovery, exclusion, journal retention, no fresh run state, lock release.          | Done    |
 | 4       | Share CLI workflow preparation.                                        | Exit codes, diagnostics, receipts, validation order, parent and signal behavior.   | Done    |
-| 5       | Share complete-write handling.                                         | Short writes, zero writes, exceptions, exact diagnostics, file and socket callers. | Pending |
+| 5       | Share complete-write handling.                                         | Short writes, zero writes, exceptions, exact diagnostics, file and socket callers. | Done    |
 | 6       | Share hook preflight rules without stale snapshots.                    | Concurrent edits, permissions, recursion, worktrees, cancellation, rollback.       | Pending |
 
 Each unit starts with current source and caller checks. I will add a characterization
@@ -79,6 +79,15 @@ Finding 4 passed 29 CLI tests, with one opposite-platform test ignored. Its diff
 production lines and removes 63. `cli.ts` decreased from 527 to 525 lines. Two public
 tests characterize command-specific read precedence and Bash failure receipts.
 
-Current: commit finding 4, then share complete-write handling. The main agent owns review,
+Finding 4 committed as `ad372bf` after 457 Deno tests and 339 native checks passed.
+Finding 5 passed 91 IPC, worker, client, daemon, and race tests. Three IPC checks also
+passed against the previous source in an isolated temporary directory. Two new helper
+tests cover empty input and exact failure diagnostics. No existing test was removed.
+
+Finding 5 adds 28 production lines and removes 45. `daemon.ts` now has 1286 lines;
+`ipc.ts` has 78, `worker.ts` has 184, and `client.ts` has 221. The shared writer retains
+framing, budgets, caller diagnostics, and caller synchronization.
+
+Current: commit finding 5, then share hook preflight rules. The main agent owns review,
 verification, integration, and commits. Read-only delegates can prepare later findings
 without changing their source files before the preceding unit passes.

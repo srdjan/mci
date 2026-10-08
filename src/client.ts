@@ -1,5 +1,5 @@
 // @light-fp adapter
-import { readJson, sendJson } from "./ipc.ts";
+import { readJson, sendJson, writeAll } from "./ipc.ts";
 import { servicePaths } from "./paths.ts";
 import {
   decodeResponse,
@@ -51,17 +51,6 @@ export const rpc = async (request: Request, home?: string): Promise<Result<Snaps
   }
 };
 
-const writeTerminal = async (bytes: Uint8Array): Promise<Result<void>> => {
-  let rest = bytes;
-  while (rest.length > 0) {
-    const written = await attempt(() => Deno.stdout.write(rest));
-    if (!written.ok) return written;
-    if (written.value <= 0) return err("Terminal writer returned zero bytes");
-    rest = rest.subarray(written.value);
-  }
-  return ok(undefined);
-};
-
 export type SubmissionPolicy = {
   readonly acceptanceMs?: number;
   readonly cancellationMs?: number;
@@ -91,7 +80,11 @@ const tailRequest = async (
       const read = await attempt(() => file.read(buffer));
       if (!read.ok) return read;
       if (read.value !== null) {
-        const sent = await writeTerminal(buffer.subarray(0, read.value));
+        const sent = await writeAll(
+          Deno.stdout,
+          buffer.subarray(0, read.value),
+          "Terminal writer returned zero bytes",
+        );
         if (!sent.ok) return sent;
       } else if (finished()) return ok(undefined);
       else await new Promise<void>((resolve) => setTimeout(resolve, 25));

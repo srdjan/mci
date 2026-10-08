@@ -1,3 +1,4 @@
+import { writeAll } from "./ipc.ts";
 import { attempt, err, ok, type Result } from "./result.ts";
 import { type RunEvent, runPlan, type RunResult } from "./runner.ts";
 import { type Env, type Plan, type Step, validDirectory } from "./workflow.ts";
@@ -101,17 +102,6 @@ export const decodeWorkerRecord = (value: unknown): Result<WorkerRecord> => {
   return err("invalid worker record");
 };
 
-const writeAll = async (file: Deno.FsFile, bytes: Uint8Array): Promise<Result<void>> => {
-  let offset = 0;
-  while (offset < bytes.length) {
-    const written = await attempt(() => file.write(bytes.subarray(offset)));
-    if (!written.ok) return written;
-    if (written.value === 0) return err("control write returned zero bytes");
-    offset += written.value;
-  }
-  return ok(undefined);
-};
-
 const openControl = async (path: string): Promise<Result<Deno.FsFile>> => {
   const found = await attempt(() => Deno.lstat(path));
   if (!found.ok) return found;
@@ -156,6 +146,7 @@ export const runWorker = async (controlPath: string): Promise<number> => {
     const written = await writeAll(
       control,
       encoder.encode(`${JSON.stringify(record)}\n`),
+      "control write returned zero bytes",
     );
     if (!written.ok) return written;
     return await attempt(() => control.syncData());

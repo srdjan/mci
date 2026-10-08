@@ -1,4 +1,4 @@
-import { readJson, sendJson } from "../src/ipc.ts";
+import { readJson, sendJson, writeAll } from "../src/ipc.ts";
 import { assert, equal } from "./helpers.ts";
 
 const reader = (bytes: Uint8Array) => {
@@ -13,6 +13,86 @@ const reader = (bytes: Uint8Array) => {
     },
   };
 };
+
+Deno.test("IPC complete writes handle short writes and empty input", async () => {
+  const output: number[] = [];
+  const result = await writeAll(
+    {
+      write: (bytes) => {
+        const count = Math.min(bytes.length, 2);
+        output.push(...bytes.subarray(0, count));
+        return Promise.resolve(count);
+      },
+    },
+    new Uint8Array([1, 2, 3, 4, 5]),
+    "writer stopped",
+  );
+  equal(result, { ok: true, value: undefined });
+  equal(output, [1, 2, 3, 4, 5]);
+
+  let writes = 0;
+  const empty = await writeAll(
+    {
+      write: () => {
+        writes++;
+        return Promise.resolve(0);
+      },
+    },
+    new Uint8Array(),
+    "writer stopped",
+  );
+  equal(empty, { ok: true, value: undefined });
+  equal(writes, 0);
+});
+
+Deno.test("IPC complete writes preserve zero diagnostics and write errors", async () => {
+  for (const count of [0, -1]) {
+    const stopped = await writeAll(
+      { write: () => Promise.resolve(count) },
+      new Uint8Array([1]),
+      "exact zero diagnostic",
+    );
+    equal(stopped, { ok: false, error: "exact zero diagnostic" });
+  }
+  const failed = await writeAll(
+    {
+      write: () => {
+        throw new Error("write failed");
+      },
+    },
+    new Uint8Array([1]),
+    "unused diagnostic",
+  );
+  equal(failed, { ok: false, error: "write failed" });
+
+  const ipc = await sendJson({ write: () => Promise.resolve(0) }, {});
+  equal(ipc, { ok: false, error: "IPC writer returned zero bytes" });
+});
+
+Deno.test("IPC sends complete JSON frames through short writes", async () => {
+  const output: number[] = [];
+  const counts: number[] = [];
+  const sent = await sendJson({
+    write: (bytes) => {
+      const count = Math.min(bytes.length, 2);
+      counts.push(count);
+      output.push(...bytes.subarray(0, count));
+      return Promise.resolve(count);
+    },
+  }, { ok: true });
+  equal(sent, { ok: true, value: undefined });
+  equal(counts, [2, 2, 2, 2, 2, 2]);
+  equal(output, Array.from(new TextEncoder().encode('{"ok":true}\n')));
+
+  const negative = await sendJson({ write: () => Promise.resolve(-1) }, null);
+  equal(negative, { ok: false, error: "IPC writer returned zero bytes" });
+  const failed = await sendJson({
+    write: () => {
+      throw new Error("IPC write failed");
+    },
+  }, null);
+  equal(failed, { ok: false, error: "IPC write failed" });
+});
 
 Deno.test("IPC handles complete frames and rejects truncated UTF-8", async () => {
   const frames = await Array.fromAsync(

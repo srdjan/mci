@@ -5,20 +5,28 @@ type Writer = { readonly write: (bytes: Uint8Array) => Promise<number> };
 type Reader = { readonly read: (bytes: Uint8Array) => Promise<number | null> };
 const maximumMessageBytes = 4 * 1024 * 1024;
 
+export const writeAll = async (
+  writer: Writer,
+  bytes: Uint8Array,
+  zeroDiagnostic: string,
+): Promise<Result<void>> => {
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = await attempt(() => writer.write(bytes.subarray(offset)));
+    if (!written.ok) return written;
+    if (written.value <= 0) return err(zeroDiagnostic);
+    offset += written.value;
+  }
+  return ok(undefined);
+};
+
 export const sendJson = async (writer: Writer, value: unknown): Promise<Result<void>> => {
   const encoded = await attempt(() =>
     new TextEncoder().encode(JSON.stringify(value) + "\n")
   );
   if (!encoded.ok) return encoded;
   if (encoded.value.length > maximumMessageBytes) return err("IPC message exceeds 4 MiB");
-  let rest = encoded.value;
-  while (rest.length > 0) {
-    const written = await attempt(() => writer.write(rest));
-    if (!written.ok) return written;
-    if (written.value <= 0) return err("IPC writer returned zero bytes");
-    rest = rest.subarray(written.value);
-  }
-  return ok(undefined);
+  return await writeAll(writer, encoded.value, "IPC writer returned zero bytes");
 };
 
 export async function* readJson(reader: Reader): AsyncGenerator<Result<unknown>> {

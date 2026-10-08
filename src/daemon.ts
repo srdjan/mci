@@ -3,7 +3,7 @@ import {
   openDaemonStore,
   type PendingRequest,
 } from "./daemon-store.ts";
-import { readJson, sendJson } from "./ipc.ts";
+import { readJson, sendJson, writeAll } from "./ipc.ts";
 import { type ServicePaths, servicePaths } from "./paths.ts";
 import {
   type Active,
@@ -185,17 +185,6 @@ const retire = async (
   if (!removed.ok) blockRetention(runtime, path, removed.error);
 };
 
-const writeAll = async (file: Deno.FsFile, bytes: Uint8Array): Promise<Result<void>> => {
-  let offset = 0;
-  while (offset < bytes.length) {
-    const written = await attempt(() => file.write(bytes.subarray(offset)));
-    if (!written.ok) return written;
-    if (written.value === 0) return err("request log write returned zero bytes");
-    offset += written.value;
-  }
-  return ok(undefined);
-};
-
 const readControl = async (
   job: Job,
   consumed: number,
@@ -256,7 +245,9 @@ const drainWorkerOutput = async (
   let chain = Promise.resolve<Result<void>>(ok(undefined));
   const append = (chunk: Uint8Array): Promise<Result<void>> => {
     const copy = chunk.slice();
-    const next = chain.then((prior) => prior.ok ? writeAll(file, copy) : prior);
+    const next = chain.then((prior) =>
+      prior.ok ? writeAll(file, copy, "request log write returned zero bytes") : prior
+    );
     chain = next;
     return next;
   };
