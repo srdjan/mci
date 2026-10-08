@@ -9,20 +9,25 @@ The refreshed [hardening and pruning list](hardening-pruning-list.md) records pr
 work from the 2026-10-08 review. This index preserves completion of the six selected
 plans.
 
+The user selected option 1, exact monitor shutdown, for planning on 2026-10-08.
+[Plan 007](007-exact-monitor-shutdown.md) records that selected work at baseline
+`11e034b`. Implementation remains pending.
+
 ## Execution order and status
 
 Plan numbers show the recommended execution order. Audit finding numbers preserve the six
 priorities shown to the user. Effort describes scope, rather than elapsed time. Status is
 `TODO` until execution starts, then `IN PROGRESS`, `DONE`, or `BLOCKED` with a reason.
 
-| Plan                                            | Audit finding | Outcome                                             | Priority | Effort | Depends on                                        | Status |
-| ----------------------------------------------- | ------------- | --------------------------------------------------- | -------- | ------ | ------------------------------------------------- | ------ |
-| [001](001-preserve-recorded-results.md)         | 1             | Preserve recorded results after projection failure. | High     | Medium | None                                              | DONE   |
-| [002](002-check-startup-rollback-ownership.md)  | 2             | Check ownership before startup rollback signals.    | High     | Medium | None                                              | DONE   |
-| [003](003-resolve-receipt-path-components.md)   | 3             | Match receipt identity to filesystem path order.    | High     | Medium | None                                              | DONE   |
-| [004](004-parse-deno-task-options.md)           | 6             | Parse option values before Deno task names.         | Medium   | Medium | None                                              | DONE   |
-| [005](005-check-existing-workflow-recursion.md) | 4             | Inspect defined dependencies in existing workflows. | High     | Medium | 004: task option parsing                          | DONE   |
-| [006](006-finish-hook-rollback-before-exit.md)  | 5             | Finish hook rollback before cancellation completes. | Medium   | Large  | 004: task option parsing; 005: workflow recursion | DONE   |
+| Plan                                            | Audit finding              | Outcome                                             | Priority | Effort | Depends on                                        | Status |
+| ----------------------------------------------- | -------------------------- | --------------------------------------------------- | -------- | ------ | ------------------------------------------------- | ------ |
+| [001](001-preserve-recorded-results.md)         | 1                          | Preserve recorded results after projection failure. | High     | Medium | None                                              | DONE   |
+| [002](002-check-startup-rollback-ownership.md)  | 2                          | Check ownership before startup rollback signals.    | High     | Medium | None                                              | DONE   |
+| [003](003-resolve-receipt-path-components.md)   | 3                          | Match receipt identity to filesystem path order.    | High     | Medium | None                                              | DONE   |
+| [004](004-parse-deno-task-options.md)           | 6                          | Parse option values before Deno task names.         | Medium   | Medium | None                                              | DONE   |
+| [005](005-check-existing-workflow-recursion.md) | 4                          | Inspect defined dependencies in existing workflows. | High     | Medium | 004: task option parsing                          | DONE   |
+| [006](006-finish-hook-rollback-before-exit.md)  | 5                          | Finish hook rollback before cancellation completes. | Medium   | Large  | 004: task option parsing; 005: workflow recursion | DONE   |
+| [007](007-exact-monitor-shutdown.md)            | H1: exact monitor shutdown | Confirm monitor exit before bundle mutation.        | High     | Medium | None                                              | TODO   |
 
 Plans 001, 002, and 003 have independent implementation boundaries. Plans 004, 005, and
 006 share `src/hooks.ts` and its tests. Execute the three hook plans sequentially.
@@ -36,6 +41,12 @@ pushes and repository backups. The user authorized all six fixes.
 The completed objective covers all six saved plans. The main agent owns integration,
 documentation, verification, and local commits. Workers own disjoint source and test
 files. Hook plans follow their dependency order.
+
+The current objective covers planning for exact monitor shutdown only. The main advisor
+owns Plan 007 and its review. The shared helper preserves existing capability interfaces
+and command budgets. Packaged rollback must confirm exit before destination removal.
+SIGTERM remains forced termination; normal application Quit retains its cleanup contract.
+Homebrew location changes and other backlog items remain unselected.
 
 Task parsing precedes workflow recursion because both checks need one invocation scanner.
 Existing workflows continue to accept undefined optional tasks. Foreign configurations
@@ -128,4 +139,7 @@ The main agent reviewed every changed line and corrected all four confirmed revi
 findings. The final gate passed 395 Deno tests and 339 native checks, with one platform
 test ignored. Public model probes and an AppKit process checked normal termination.
 
-Next: the maintainer owns repository backups and any push of the local commits.
+Completed: Plan 007 records exact monitor shutdown and guarded packaged rollback. The
+focused baseline passed 67 tests in 324 ms. Implementation remains pending.
+
+Next: the maintainer owns the decision to execute Plan 007 and any repository backup.

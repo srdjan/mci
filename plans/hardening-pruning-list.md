@@ -31,6 +31,10 @@ Runtime checks remain required where the evidence says source inspection only.
 
 ### H1: Match the exact monitor executable and wait for exit
 
+The user selected this item for planning on 2026-10-08.
+[Plan 007](007-exact-monitor-shutdown.md) records the execution scope; implementation
+remains pending.
+
 Evidence: [src/install.ts:126](../src/install.ts#L126) and
 [scripts/install-monitor.ts:328](../scripts/install-monitor.ts#L328) construct a
 prefix-only process pattern. A pure pattern probe confirmed that the pattern matches both
