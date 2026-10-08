@@ -54,6 +54,9 @@ Medium | Small | None | DONE |
 | [014](014-return-doctor-health-status.md) | H8: doctor exit status | Return failure
 after any failed check. | Medium | Small | None | DONE |
 
+| [015](015-prune-recovered-control-files.md) | P1: obsolete control files | Retain
+controls only for pending recovery. | Medium | Small | None | DONE |
+
 Plans 001, 002, and 003 have independent implementation boundaries. Plans 004, 005, and
 006 share `src/hooks.ts` and its tests. Execute the three hook plans sequentially.
 
@@ -122,9 +125,11 @@ edits, is committed as `a4a7763`. Plan 010, planner and worker input, is committ
 snapshot diagnostics, is committed as `81b3368`. Its gate passed 433 Deno tests and 339
 native checks, with one opposite-platform test ignored. Plan 013, shared Homebrew
 location, is committed as `0005b90`. Its gate passed 443 Deno tests and 339 native checks,
-with one opposite-platform test ignored. Plan 014, doctor exit status, passes six focused
-tests. The public command regression failed before correction. The native fixture reads
-the normal tool cache and isolates daemon state through `MCI_HOME`.
+with one opposite-platform test ignored. Plan 014, doctor exit status, is committed as
+`75d673e`. Its gate passed 449 Deno tests and 339 native checks, with one platform test
+ignored. Six focused tests passed. The public command regression failed before correction.
+The native fixture reads the normal tool cache and isolates daemon state through
+`MCI_HOME`.
 
 The concurrency guard retains a check-to-rename gap. Unselected names remain display
 metadata. Failed journal cleanup retains request files. Cleanup faults block repository
@@ -212,5 +217,6 @@ boundaries.
 Completed: Plan 008 preserves configuration permissions. The focused suites passed 134
 tests. Type, lint, layer, and suppression checks pass. The review found no defects.
 
-Next: the main agent owns P1, obsolete control files. The maintainer owns repository
-backups.
+Completed: Plan 015 separates pending controls from retained terminal records and logs.
+Five focused tests passed in 871 ms. The main agent reviewed source and public tests.
+Next: the main agent owns P2, unused declarations. The maintainer owns repository backups.

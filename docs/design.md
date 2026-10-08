@@ -151,6 +151,11 @@ before it spawns the worker. After a daemon crash, restart recovery records INTE
 only for a request that began. A request that never began is not a result. Recovery
 finishes its journal entry, removes its spool files, and keeps the latest result.
 
+Startup retains logs and terminal records for pending requests and the latest result. It
+retains worker control files only for pending journal entries. Successful recovery removes
+obsolete controls, including files left after normal deletion fails. Failed recovery
+retains pending controls for the next restart.
+
 A crash between the journal write and the worker spawn records INTERRUPTED for a worker
 that never ran. This order keeps the safe direction. A journal entry without the `begun`
 key comes from an older daemon. The new daemon reads such an entry as begun.

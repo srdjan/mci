@@ -203,6 +203,194 @@ Deno.test("restart accepts a pending completion found only in latest.json", () =
     }
   }));
 
+Deno.test("repeated restart removes recovered terminal control and retains evidence", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-controls-" });
+    try {
+      const recovery = await prepareRecovery(workspace, directory);
+      const terminal = await recovery.save("recorded", "2026-10-03T18:00:01.000Z");
+      assert((await recovery.store.writeTerminal(workspace, terminal)).ok);
+      assert((await recovery.store.projectTerminal(workspace, terminal)).ok);
+      const control = `${workspace}/.mci/ci/requests/${terminal.id}.jsonl`;
+      const record = `${workspace}/.mci/ci/requests/${terminal.id}.json`;
+      assert(await exists(control));
+
+      for (let restart = 0; restart < 2; restart += 1) {
+        const daemon = await startDaemon({ directory });
+        assert(daemon.ok, daemon.ok ? "" : daemon.error);
+        try {
+          equal(daemon.value.snapshot().repositories[0]?.latest, terminal);
+          assert(!await exists(control));
+          assert(await exists(record));
+          assert(await exists(terminal.log));
+        } finally {
+          await daemon.value.close();
+        }
+      }
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
+Deno.test("restart removes interrupted control and retains terminal evidence", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-controls-" });
+    try {
+      const recovery = await prepareRecovery(workspace, directory);
+      const pending = await recovery.save("interrupted", "2026-10-03T18:00:01.000Z");
+      const control = `${workspace}/.mci/ci/requests/${pending.id}.jsonl`;
+      const record = `${workspace}/.mci/ci/requests/${pending.id}.json`;
+      const daemon = await startDaemon({ directory });
+      assert(daemon.ok, daemon.ok ? "" : daemon.error);
+      try {
+        const terminal = daemon.value.snapshot().repositories[0]?.latest;
+        equal(terminal?.id, pending.id);
+        equal(terminal?.kind, "interrupted");
+        assert(!await exists(control));
+        assert(await exists(record));
+        assert(await exists(pending.log));
+      } finally {
+        await daemon.value.close();
+      }
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
+Deno.test("failed startup finish retains control until a later restart", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-controls-" });
+    let recovered: Terminal | null = null;
+    try {
+      const recovery = await prepareRecovery(workspace, directory);
+      const pending = await recovery.save("pending-control", "2026-10-03T18:00:01.000Z");
+      const control = `${workspace}/.mci/ci/requests/${pending.id}.jsonl`;
+      const record = `${workspace}/.mci/ci/requests/${pending.id}.json`;
+      const first = await startDaemon({
+        directory,
+        openStore: async (paths) => {
+          const store = await openDaemonStore(paths);
+          return store.ok
+            ? ok({
+              ...store.value,
+              finish: () => Promise.resolve(err("injected journal failure")),
+            })
+            : store;
+        },
+      });
+      assert(first.ok, first.ok ? "" : first.error);
+      try {
+        recovered = first.value.snapshot().repositories[0]?.latest ?? null;
+        equal(recovered?.id, pending.id);
+        equal(recovered?.kind, "interrupted");
+        assert(
+          first.value.snapshot().repositories[0]?.blocked?.includes("journal cleanup"),
+        );
+        equal(
+          JSON.parse(await Deno.readTextFile(`${directory}/requests.json`)).requests
+            .length,
+          1,
+        );
+        assert(await exists(control));
+        assert(await exists(record));
+        assert(await exists(pending.log));
+      } finally {
+        await first.value.close();
+      }
+
+      assert(recovered !== null);
+      const restarted = await startDaemon({ directory });
+      assert(restarted.ok, restarted.ok ? "" : restarted.error);
+      try {
+        equal(restarted.value.snapshot().repositories[0]?.latest, recovered);
+        equal(
+          JSON.parse(await Deno.readTextFile(`${directory}/requests.json`)).requests,
+          [],
+        );
+        assert(!await exists(control));
+        assert(await exists(record));
+        assert(await exists(pending.log));
+      } finally {
+        await restarted.value.close();
+      }
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
+Deno.test("restart removes control left by failed live deletion", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-controls-" });
+    const requests = `${workspace}/.mci/ci/requests`;
+    let restricted = false;
+    let completed: Terminal | null = null;
+    try {
+      const first = await startDaemon({
+        directory,
+        openStore: async (paths) => {
+          const store = await openDaemonStore(paths);
+          if (!store.ok) return store;
+          return ok({
+            ...store.value,
+            finish: async (id) => {
+              const finished = await store.value.finish(id);
+              if (finished.ok) {
+                await Deno.chmod(requests, 0o500);
+                restricted = true;
+              }
+              return finished;
+            },
+          });
+        },
+      });
+      assert(first.ok, first.ok ? "" : first.error);
+      try {
+        assert(
+          (await rpc({ version: 1, op: "register", path: workspace }, directory)).ok,
+        );
+        const result = await submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "leftover-control.yml",
+            job: "check",
+            source: fixture("      - run: printf once >> executions"),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+        assert(result.ok, result.ok ? "" : result.error);
+        equal(result.value.kind, "success");
+        completed = result.value;
+        assert(restricted);
+        assert(await exists(`${requests}/${result.value.id}.jsonl`));
+        assert(await exists(`${requests}/${result.value.id}.json`));
+        assert(await exists(result.value.log));
+      } finally {
+        if (restricted) await Deno.chmod(requests, 0o700);
+        await first.value.close();
+      }
+
+      assert(completed !== null);
+      const restarted = await startDaemon({ directory });
+      assert(restarted.ok, restarted.ok ? "" : restarted.error);
+      try {
+        equal(restarted.value.snapshot().repositories[0]?.latest, completed);
+        assert(!await exists(`${requests}/${completed.id}.jsonl`));
+        assert(await exists(`${requests}/${completed.id}.json`));
+        assert(await exists(completed.log));
+        equal(await Deno.readTextFile(`${workspace}/executions`), "once");
+      } finally {
+        await restarted.value.close();
+      }
+    } finally {
+      if (restricted && await exists(requests)) await Deno.chmod(requests, 0o700);
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
+
 Deno.test("restart restores a durable completion after latest projection fails", () =>
   inWorkspace(async (workspace) => {
     const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-projection-" });

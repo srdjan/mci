@@ -3,11 +3,11 @@
 ## Scope and result
 
 This review identifies eight hardening items and three pruning items on local `main` at
-`c1215f2`, dated 2026-10-08. The user authorized the complete list. Seven hardening items
-are complete. H8, doctor exit status, also passes focused validation. P3, shared native
-primitives, is complete. P1, obsolete control files, and P2, unused declarations, remain
-open. The review covers Deno execution, daemon storage, hook installation, service
-control, packaging, and the native monitor.
+`c1215f2`, dated 2026-10-08. The user authorized the complete list. All eight hardening
+items are complete. P3, shared native primitives, is complete. P1, obsolete control files,
+passes focused validation. P2, unused declarations, remains open. The review covers Deno
+execution, daemon storage, hook installation, service control, packaging, and the native
+monitor.
 
 The earlier list had no open items. Its six hardening units and two pruning units remain
 complete. The six plans in [README.md](README.md) also remain complete. The labels below
@@ -159,19 +159,15 @@ new test finished below one second. Native operations retain their existing boun
 
 ### P1: Remove obsolete worker control files after recovery
 
-Evidence: [src/daemon.ts:970](../src/daemon.ts#L970) finishes recovery of a recorded
-terminal without removing its worker control file. Interrupted recovery also retains that
-file at [src/daemon.ts:1009](../src/daemon.ts#L1009). The daemon keeps the latest request
-identifier at [src/daemon.ts:1025](../src/daemon.ts#L1025). The store preserves every
-matching `.log`, `.json`, and `.jsonl` file at
-[src/daemon-store.ts:670](../src/daemon-store.ts#L670). The latest request can therefore
-retain obsolete `.jsonl` data through repeated restarts.
+[Plan 015](015-prune-recovered-control-files.md) records the corrected retention rule.
+Startup retains control files only for pending journal entries. The latest result keeps
+its terminal record and log. Successful recovery removes obsolete control files.
 
-The proposed change retains files by purpose, rather than identifier alone. Pending
-requests keep recovery files; completed requests keep their terminal record and log.
-Checks must cover recorded completion, interruption, failed normal deletion, pending
-recovery, and connected log readers. This review establishes retention through source
-inspection; it ran no recovery probe for this item.
+The public baseline regression retained a recovered latest control. Four recovery tests
+pass after correction. They cover recorded completion, interruption, failed normal
+deletion, pending cleanup failure, and repeated restart. An existing connected-reader test
+also passes. Every new test finished below one second. Pruning retains existing
+regular-file checks and repository blocking after cleanup failures.
 
 ### P2: Remove unreachable installation error and unused version export
 
@@ -251,9 +247,9 @@ boundary has lower priority than the listed application failures.
 
 ## Next action and ownership
 
-Completed: all eight hardening items pass focused validation. Shared native primitives are
-complete. The main agent owns P1, obsolete control files, next. Unused declarations and
-documentation reconciliation remain after that unit.
+Completed: all eight hardening items and shared native primitives pass the complete gate.
+Obsolete control files pass focused validation. The main agent owns P2, unused
+declarations, next. Documentation reconciliation remains after that unit.
 
 Each accepted unit needs its own local commit on `main`. The repository maintainer owns
 pushes and repository backups.

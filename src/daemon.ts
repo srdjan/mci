@@ -1068,11 +1068,11 @@ const prepareRuntime = async (
     await retire(runtime, state.repository.path, previous);
   }
   for (const state of runtime.repositories.values()) {
-    const keep = store.pending().filter((pending) =>
+    const controls = store.pending().filter((pending) =>
       pending.repositoryId === state.repository.id
     ).map((pending) => pending.id);
-    if (state.latest !== null) keep.push(state.latest.id);
-    const pruned = await store.pruneRuns(state.repository.path, keep);
+    const keep = state.latest === null ? controls : [...controls, state.latest.id];
+    const pruned = await store.pruneRuns(state.repository.path, keep, controls);
     if (!pruned.ok) state.blocked ??= `request retention failed: ${pruned.error}`;
   }
   const published = await publish(runtime);

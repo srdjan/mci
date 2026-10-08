@@ -42,7 +42,11 @@ export type DaemonStore = {
   readonly projectTerminal: (path: string, terminal: Terminal) => Promise<Result<void>>;
   readonly writeSnapshot: (snapshot: Snapshot) => Promise<Result<void>>;
   readonly removeRun: (path: string, id: string) => Promise<Result<void>>;
-  readonly pruneRuns: (path: string, keep: readonly string[]) => Promise<Result<void>>;
+  readonly pruneRuns: (
+    path: string,
+    keep: readonly string[],
+    controls: readonly string[],
+  ) => Promise<Result<void>>;
 };
 
 const object = (value: unknown): value is Readonly<Record<string, unknown>> =>
@@ -653,7 +657,7 @@ export const openDaemonStore = async (
       snapshotChain = update;
       return update;
     },
-    pruneRuns: async (path, keep) => {
+    pruneRuns: async (path, keep, controls) => {
       const mci = await presentDirectory(`${path}/.mci`);
       if (!mci.ok) return mci;
       if (mci.value) {
@@ -670,7 +674,9 @@ export const openDaemonStore = async (
         for await (const entry of Deno.readDir(directory)) {
           if (!entry.isFile || entry.isSymlink) continue;
           const match = /^(.*)\.(log|jsonl|json)$/.exec(entry.name);
-          const stale = match !== null && !keep.includes(match[1]!);
+          const stale = match !== null &&
+            (!keep.includes(match[1]!) ||
+              (match[2] === "jsonl" && !controls.includes(match[1]!)));
           if (!stale && !temporary(entry.name)) continue;
           await Deno.remove(`${directory}/${entry.name}`);
         }

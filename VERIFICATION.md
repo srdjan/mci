@@ -1,5 +1,20 @@
 # Verification
 
+## Recovered control files (2026-10-08)
+
+The baseline public recovery test failed in 111 ms because the latest control survived
+startup. Startup now retains control files only for pending journal entries. The latest
+terminal record and log remain available.
+
+Five focused tests passed in 871 ms. New recovery tests took 67 through 199 ms. They cover
+recorded completion, interruption, pending cleanup failure, repeated restart, and failed
+live deletion. The live deletion fixture restricts its private request directory after
+journal cleanup. Restart removes the leftover control and preserves the original result.
+The connected-reader regression passed in 339 ms and retains its existing log policy.
+
+Type, lint, layer, and suppression checks passed. The main agent reviewed every changed
+line. These filesystem checks establish the tested host only.
+
 ### Doctor health status
 
 The public baseline command returned zero after an unavailable daemon check. Its
@@ -10,6 +25,9 @@ Checks cover healthy, unavailable, blocked, and invalid repository states.
 Type, lint, layer, and suppression checks passed. The first native fixture changed HOME
 and triggered a dependency download. The corrected fixture retains HOME and isolates
 daemon state through `MCI_HOME`. Diagnostics perform no repair or service mutation.
+
+The Plan 014 commit is `75d673e`. Its gate passed 449 Deno tests and 339 native checks,
+with one opposite-platform test ignored.
 
 ## Shared Homebrew location (2026-10-08)
 
