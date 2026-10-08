@@ -2,7 +2,8 @@
 import { rpc } from "./client.ts";
 import { captureCommand } from "./command.ts";
 import { findBrew } from "./homebrew.ts";
-import { servicePaths } from "./paths.ts";
+import { type ServicePaths, servicePaths } from "./paths.ts";
+import type { Snapshot } from "./protocol.ts";
 import { attempt, err, ok, type Result } from "./result.ts";
 import { type Plan, planWorkflow } from "./workflow.ts";
 
@@ -1391,14 +1392,52 @@ export const installHook = (
 ): Promise<Result<void>> =>
   installHookWith(repository, workflow, job, nativeHookCapabilities, options);
 
-const status = (name: string, passed: boolean, detail: string): string =>
-  `${passed ? "PASS" : "FAIL"} ${name}: ${detail}`;
+export type DoctorCheck = {
+  readonly name: string;
+  readonly passed: boolean;
+  readonly detail: string;
+};
+
+export type DoctorReport = {
+  readonly checks: readonly DoctorCheck[];
+  readonly healthy: boolean;
+};
+
+export type DoctorCapabilities = {
+  readonly platform: string;
+  readonly command: (executable: string, args: readonly string[]) => Promise<
+    Result<{
+      readonly code: number;
+      readonly stdout: string;
+      readonly stderr: string;
+    }>
+  >;
+  readonly findBrew: () => Promise<Result<string>>;
+  readonly brewPrefix: () => Promise<Result<string>>;
+  readonly ping: () => Promise<Result<Snapshot>>;
+  readonly paths: () => Result<ServicePaths>;
+  readonly regularFile: (path: string) => Promise<Result<"absent" | "file">>;
+  readonly recoveryEntries: () => Promise<Result<readonly string[]>>;
+  readonly realPath: (path: string) => Promise<Result<string>>;
+  readonly git: (args: readonly string[]) => Promise<Result<string>>;
+};
+
+const status = (name: string, passed: boolean, detail: string): DoctorCheck => ({
+  name,
+  passed,
+  detail,
+});
 
 /** Report installation, daemon, registry, hook, and recovery state. */
-export const doctor = async (repository?: string): Promise<Result<readonly string[]>> => {
-  const reports: string[] = [];
-  reports.push(status("platform", Deno.build.os === "darwin", Deno.build.os));
-  const deno = await command("/usr/bin/env", ["deno", "--version"]);
+export const doctorWith = async (
+  repository: string | undefined,
+  capabilities: DoctorCapabilities,
+): Promise<Result<DoctorReport>> => {
+  const reports: DoctorCheck[] = [];
+  reports.push(
+    status("platform", capabilities.platform === "darwin", capabilities.platform),
+  );
+  const deno = await capabilities.command("/usr/bin/env", ["deno", "--version"]);
   reports.push(
     status(
       "Deno",
@@ -1410,7 +1449,7 @@ export const doctor = async (repository?: string): Promise<Result<readonly strin
         : deno.error,
     ),
   );
-  const bash = await command("/bin/bash", ["--version"]);
+  const bash = await capabilities.command("/bin/bash", ["--version"]);
   reports.push(
     status(
       "Bash",
@@ -1422,11 +1461,11 @@ export const doctor = async (repository?: string): Promise<Result<readonly strin
         : bash.error,
     ),
   );
-  const brew = await findBrew();
+  const brew = await capabilities.findBrew();
   reports.push(status("Homebrew", brew.ok, brew.ok ? brew.value : brew.error));
-  const prefix = await nativeBrewPrefix();
+  const prefix = await capabilities.brewPrefix();
   reports.push(status("formula", prefix.ok, prefix.ok ? prefix.value : prefix.error));
-  const daemon = await rpc({ version: 1, op: "ping" });
+  const daemon = await capabilities.ping();
   reports.push(
     status(
       "daemon",
@@ -1434,10 +1473,12 @@ export const doctor = async (repository?: string): Promise<Result<readonly strin
       daemon.ok ? `pid ${daemon.value.pid}` : daemon.error,
     ),
   );
-  const paths = servicePaths();
+  const paths = capabilities.paths();
   if (!paths.ok) reports.push(status("service paths", false, paths.error));
   else {
-    const legacy = await regularFile(`${paths.value.directory}/monitor.json`);
+    const legacy = await capabilities.regularFile(
+      `${paths.value.directory}/monitor.json`,
+    );
     reports.push(
       status(
         "legacy registry",
@@ -1445,7 +1486,7 @@ export const doctor = async (repository?: string): Promise<Result<readonly strin
         !legacy.ok ? legacy.error : legacy.value === "file" ? "present" : "absent",
       ),
     );
-    const registry = await regularFile(paths.value.registry);
+    const registry = await capabilities.regularFile(paths.value.registry);
     reports.push(
       status(
         "daemon registry",
@@ -1453,17 +1494,7 @@ export const doctor = async (repository?: string): Promise<Result<readonly strin
         registry.ok ? registry.value : registry.error,
       ),
     );
-    const entries = await attempt(async () => {
-      const names: string[] = [];
-      for await (
-        const entry of Deno.readDir(`${Deno.env.get("HOME") ?? ""}/Applications`)
-      ) {
-        if (entry.name.startsWith(".mci-monitor-") && entry.isDirectory) {
-          names.push(entry.name);
-        }
-      }
-      return names;
-    });
+    const entries = await capabilities.recoveryEntries();
     reports.push(
       status(
         "recovery",
@@ -1481,7 +1512,7 @@ export const doctor = async (repository?: string): Promise<Result<readonly strin
       ? daemon.value.repositories.find((entry) => entry.id === repository)
       : undefined;
     const root = byId === undefined
-      ? await attempt(() => Deno.realPath(repository))
+      ? await capabilities.realPath(repository)
       : ok(byId.path);
     const state = byId ??
       (daemon.ok && root.ok
@@ -1508,7 +1539,7 @@ export const doctor = async (repository?: string): Promise<Result<readonly strin
     }
     if (!root.ok) reports.push(status("repository path", false, root.error));
     else {
-      const configured = await nativeGit([
+      const configured = await capabilities.git([
         "-C",
         root.value,
         "config",
@@ -1525,5 +1556,32 @@ export const doctor = async (repository?: string): Promise<Result<readonly strin
       );
     }
   }
-  return ok(reports);
+  return ok({ checks: reports, healthy: reports.every((check) => check.passed) });
 };
+
+const nativeDoctorCapabilities: DoctorCapabilities = {
+  platform: Deno.build.os,
+  command,
+  findBrew,
+  brewPrefix: nativeBrewPrefix,
+  ping: () => rpc({ version: 1, op: "ping" }),
+  paths: servicePaths,
+  regularFile,
+  recoveryEntries: () =>
+    attempt(async () => {
+      const names: string[] = [];
+      for await (
+        const entry of Deno.readDir(`${Deno.env.get("HOME") ?? ""}/Applications`)
+      ) {
+        if (entry.name.startsWith(".mci-monitor-") && entry.isDirectory) {
+          names.push(entry.name);
+        }
+      }
+      return names;
+    }),
+  realPath: (path) => attempt(() => Deno.realPath(path)),
+  git: nativeGit,
+};
+
+export const doctor = (repository?: string): Promise<Result<DoctorReport>> =>
+  doctorWith(repository, nativeDoctorCapabilities);

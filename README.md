@@ -64,6 +64,9 @@ mci logs "$PWD" --follow
 mci doctor "$PWD"
 ```
 
+`mci doctor` prints every check. It returns zero when all checks pass and one when any
+check fails. Existing scripts must treat a nonzero status as an unhealthy installation.
+
 `mci ci` requires a registered repository and a running daemon. It waits for the submitted
 request and streams that request's log.
 

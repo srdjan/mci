@@ -1,5 +1,16 @@
 # Verification
 
+### Doctor health status
+
+The public baseline command returned zero after an unavailable daemon check. Its
+regression failed in 7 ms. The correction returns aggregate health and prints every
+report. Six final focused tests passed in 140 ms. The native CLI test passed in 69 ms.
+Checks cover healthy, unavailable, blocked, and invalid repository states.
+
+Type, lint, layer, and suppression checks passed. The first native fixture changed HOME
+and triggered a dependency download. The corrected fixture retains HOME and isolates
+daemon state through `MCI_HOME`. Diagnostics perform no repair or service mutation.
+
 ## Shared Homebrew location (2026-10-08)
 
 The public baseline service regression failed in 2 ms because bare `brew` was outside
@@ -16,6 +27,9 @@ after absence.
 Type, lint, layer, and suppression checks passed. The main agent reviewed every changed
 line. This unit completes the Homebrew part of shared native primitives. Earlier monitor
 process consolidation remains complete.
+
+The Plan 013 commit is `0005b90`. Its local gate passed 443 Deno tests and 339 native
+checks, with one opposite-platform test ignored.
 
 ## Final snapshot diagnostics (2026-10-08)
 

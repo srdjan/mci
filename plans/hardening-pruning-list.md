@@ -4,10 +4,10 @@
 
 This review identifies eight hardening items and three pruning items on local `main` at
 `c1215f2`, dated 2026-10-08. The user authorized the complete list. Seven hardening items
-are complete. H8, doctor exit status, remains open. P3, shared native primitives, is
-complete. P1, obsolete control files, and P2, unused declarations, remain open. The review
-covers Deno execution, daemon storage, hook installation, service control, packaging, and
-the native monitor.
+are complete. H8, doctor exit status, also passes focused validation. P3, shared native
+primitives, is complete. P1, obsolete control files, and P2, unused declarations, remain
+open. The review covers Deno execution, daemon storage, hook installation, service
+control, packaging, and the native monitor.
 
 The earlier list had no open items. Its six hardening units and two pruning units remain
 complete. The six plans in [README.md](README.md) also remain complete. The labels below
@@ -139,17 +139,15 @@ stop no user service. Every new test finished below one second.
 
 ### H8: Return failure for failed doctor checks
 
-Evidence: [src/hooks.ts:1522](../src/hooks.ts#L1522) returns success after collecting
-failed checks. The CLI returns zero for that result at
-[src/cli.ts:324](../src/cli.ts#L324). A public diagnostic against a missing repository
-printed failed registration and path checks, then exited zero. The probe ran outside the
-sandbox and reached the current local daemon. Scripts that inspect only the exit status
-cannot detect those failures.
+[Plan 014](014-return-doctor-health-status.md) records the completed source change. Doctor
+returns structured outcomes and aggregate health. The CLI preserves every report and
+returns one if any check fails. Healthy reports return zero. README documents this
+exit-status change for callers.
 
-The proposed change returns structured check outcomes and an aggregate health status. The
-CLI continues to print every report and returns a nonzero status when a required check
-fails. Checks must cover healthy, unavailable, and invalid-repository cases. The executor
-must document this exit-status change for existing callers.
+The public baseline command returned zero for an unavailable daemon. Six focused tests
+pass after correction. They cover healthy, unavailable, blocked, and invalid repository
+states, printed reports, and native CLI failure with an isolated daemon directory. Every
+new test finished below one second. Native operations retain their existing bounds.
 
 ## Ordered pruning list
 
@@ -253,9 +251,9 @@ boundary has lower priority than the listed application failures.
 
 ## Next action and ownership
 
-Completed: seven hardening items and shared native primitives have validated units. The
-main agent owns H8, doctor exit status, next. Obsolete control files, unused declarations,
-and documentation reconciliation remain after that unit.
+Completed: all eight hardening items pass focused validation. Shared native primitives are
+complete. The main agent owns P1, obsolete control files, next. Unused declarations and
+documentation reconciliation remain after that unit.
 
 Each accepted unit needs its own local commit on `main`. The repository maintainer owns
 pushes and repository backups.

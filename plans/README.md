@@ -51,6 +51,9 @@ capability | DONE |
 native primitives | Share supported location across installers and service control. |
 Medium | Small | None | DONE |
 
+| [014](014-return-doctor-health-status.md) | H8: doctor exit status | Return failure
+after any failed check. | Medium | Small | None | DONE |
+
 Plans 001, 002, and 003 have independent implementation boundaries. Plans 004, 005, and
 006 share `src/hooks.ts` and its tests. Execute the three hook plans sequentially.
 
@@ -118,7 +121,10 @@ edits, is committed as `a4a7763`. Plan 010, planner and worker input, is committ
 `72c96e4`. Plan 011, submission rollback, is committed as `3d1f46c`. Plan 012, final
 snapshot diagnostics, is committed as `81b3368`. Its gate passed 433 Deno tests and 339
 native checks, with one opposite-platform test ignored. Plan 013, shared Homebrew
-location, is in progress.
+location, is committed as `0005b90`. Its gate passed 443 Deno tests and 339 native checks,
+with one opposite-platform test ignored. Plan 014, doctor exit status, passes six focused
+tests. The public command regression failed before correction. The native fixture reads
+the normal tool cache and isolates daemon state through `MCI_HOME`.
 
 The concurrency guard retains a check-to-rename gap. Unselected names remain display
 metadata. Failed journal cleanup retains request files. Cleanup faults block repository
@@ -135,9 +141,9 @@ block further repository work. Failed journal cleanup retains request files. Pla
 final snapshot diagnostics, passes both public fault regressions. Snapshot faults retain
 workflow results and do not add a repository block.
 
-Remaining order: doctor status, recovery files, and unused declarations. Homebrew
-consolidation completes the remaining part of P3, shared native primitives. Existing
-process consolidation remains complete.
+Remaining order: recovery files and unused declarations. Homebrew consolidation completes
+the remaining part of P3, shared native primitives. Existing process consolidation remains
+complete.
 
 The maintainer authorized all numbered items. Capacity measurement remains an unselected
 direction option. Existing platform, visual, and power-loss evidence limits remain
@@ -206,4 +212,5 @@ boundaries.
 Completed: Plan 008 preserves configuration permissions. The focused suites passed 134
 tests. Type, lint, layer, and suppression checks pass. The review found no defects.
 
-Next: the main agent owns H8, doctor exit status. The maintainer owns repository backups.
+Next: the main agent owns P1, obsolete control files. The maintainer owns repository
+backups.

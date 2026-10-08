@@ -8,7 +8,13 @@ import {
 } from "./ci-receipt.ts";
 import { codexCommand } from "./codex.ts";
 import { runDaemon } from "./daemon.ts";
-import { doctor, type HookCancellationReason, installHook, setupHook } from "./hooks.ts";
+import {
+  doctor,
+  type DoctorReport,
+  type HookCancellationReason,
+  installHook,
+  setupHook,
+} from "./hooks.ts";
 import { setup } from "./install.ts";
 import { managementCommand } from "./management.ts";
 import { attempt, err, ok, type Result } from "./result.ts";
@@ -290,6 +296,24 @@ const runCi = async (
   }
 };
 
+export const doctorCommand = async (repository: string | undefined, capabilities: {
+  readonly inspect: (repository?: string) => Promise<Result<DoctorReport>>;
+  readonly stdout: (text: string) => void;
+  readonly stderr: (text: string) => void;
+} = { inspect: doctor, stdout: console.log, stderr: console.error }): Promise<number> => {
+  const result = await capabilities.inspect(repository);
+  if (!result.ok) {
+    capabilities.stderr(result.error);
+    return 1;
+  }
+  capabilities.stdout(
+    result.value.checks.map((check) =>
+      `${check.passed ? "PASS" : "FAIL"} ${check.name}: ${check.detail}`
+    ).join("\n"),
+  );
+  return result.value.healthy ? 0 : 1;
+};
+
 export const main = async (args: readonly string[]): Promise<number> => {
   const parent = Deno.ppid;
   if (args.length === 1 && ["--help", "-h"].includes(args[0]!)) {
@@ -322,14 +346,9 @@ export const main = async (args: readonly string[]): Promise<number> => {
     return 0;
   }
   if (args[0] === "doctor" && args.length <= 2) {
-    const result = await doctor(args[1]);
-    if (!result.ok) {
-      console.error(result.error);
-      return 1;
-    }
-    console.log(result.value.join("\n"));
-    return 0;
+    return await doctorCommand(args[1]);
   }
+
   if (args[0] === "hooks" && args[1] === "setup") {
     const parsed = parseHookSetup(args);
     if (!parsed.ok) {

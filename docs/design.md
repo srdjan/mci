@@ -137,6 +137,10 @@ direct `mci run`, does not block the repository. The worker acquires the workspa
 each job, so recovery still precedes the next command. `mci doctor` reads `blocked`, so it
 reports such a repository as ready.
 
+Doctor reports contain each check's name, passed state, and detail. Aggregate health
+requires every check to pass. The CLI prints all reports and returns one after any failed
+check.
+
 A request that leaves the queue before it starts is not a result. Its own client receives
 the terminal, and the daemon removes its journal entry and spool. It never replaces the
 latest completed result or `latest.log`. This rule also covers a queued request at
