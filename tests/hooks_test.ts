@@ -1275,6 +1275,37 @@ Deno.test("hook installation rejects a nested directory before config reads", as
   });
 });
 
+Deno.test("hook setup rejects a nested directory before config reads", async () => {
+  await withRepository(async (repository, prefix) => {
+    const nested = `${repository}/nested`;
+    await Deno.mkdir(nested);
+    const marker = `${nested}/marker`;
+    await Deno.writeTextFile(marker, "preserved\n");
+    const commands: string[] = [];
+    let homebrewCalled = false;
+    const delegated = capabilities(prefix);
+    const result = await setupHookWith(nested, {
+      ...delegated,
+      brewPrefix: () => {
+        homebrewCalled = true;
+        return Promise.resolve(err("unexpected Homebrew lookup"));
+      },
+      git: (args: readonly string[]): Promise<Result<string>> => {
+        commands.push(args.slice(2).join("\0"));
+        return delegated.git(args);
+      },
+    });
+
+    assert(!result.ok && result.error.includes("Git worktree root"));
+    equal(commands, ["rev-parse\0--show-toplevel"]);
+    assert(!homebrewCalled);
+    equal(await Deno.readTextFile(marker), "preserved\n");
+    assert(!await exists(`${nested}/deno.json`));
+    assert(!await exists(`${nested}/ci`));
+    assert(!await exists(`${nested}/.gitignore`));
+  });
+});
+
 Deno.test("hook installation rejects a redirected worktree without mutation", async () => {
   await withRepository(async (repository, prefix) => {
     const redirected = `${repository}/redirected`;
@@ -1298,6 +1329,35 @@ Deno.test("hook installation rejects a redirected worktree without mutation", as
     );
 
     assert(!result.ok && result.error.includes("Git worktree root"));
+    equal(await Deno.readTextFile(configPath), configBefore);
+    equal(await Deno.readTextFile(gitConfigPath), gitConfigBefore);
+    assert(!await exists(`${repository}/.git/config.worktree`));
+  });
+});
+
+Deno.test("hook installation diagnoses unsafe shared worktree before root mismatch", async () => {
+  await withRepository(async (repository, prefix) => {
+    const redirected = `${repository}/redirected`;
+    await Deno.mkdir(redirected);
+    await runGit(repository, ["config", "--local", "core.worktree", redirected]);
+    const workflowPath = `${repository}/.github/workflows/ci.yml`;
+    const configPath = `${repository}/deno.json`;
+    const gitConfigPath = `${repository}/.git/config`;
+    const workflowBefore = await Deno.readTextFile(workflowPath);
+    const configBefore = await Deno.readTextFile(configPath);
+    const gitConfigBefore = await Deno.readTextFile(gitConfigPath);
+
+    const result = await installHookWith(
+      repository,
+      ".github/workflows/ci.yml",
+      "check",
+      capabilities(prefix),
+    );
+
+    assert(!result.ok && result.error.includes("Cannot enable worktreeConfig"));
+    assert(!result.ok && result.error.includes("shared core.worktree is set"));
+    assert(result.ok || !result.error.includes("Git worktree root"));
+    equal(await Deno.readTextFile(workflowPath), workflowBefore);
     equal(await Deno.readTextFile(configPath), configBefore);
     equal(await Deno.readTextFile(gitConfigPath), gitConfigBefore);
     assert(!await exists(`${repository}/.git/config.worktree`));

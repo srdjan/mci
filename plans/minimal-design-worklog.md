@@ -13,14 +13,14 @@ work on local `main` and commit each complete unit. The user owns pushes.
 
 ## Plan and status
 
-| Finding | Change                                                                 | Acceptance evidence                                                                | Status  |
-| ------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------- |
-| 1       | Replace reader counts and the `Owner` wrapper with single-owner state. | Connected logs, disconnect, cancellation, failed acceptance, retention failure.    | Done    |
-| 2       | Share repository state loading.                                        | Startup and registration, busy locks, latest results, first-error precedence.      | Done    |
-| 3       | Recover workspaces without fresh run allocation.                       | Recovery, exclusion, journal retention, no fresh run state, lock release.          | Done    |
-| 4       | Share CLI workflow preparation.                                        | Exit codes, diagnostics, receipts, validation order, parent and signal behavior.   | Done    |
-| 5       | Share complete-write handling.                                         | Short writes, zero writes, exceptions, exact diagnostics, file and socket callers. | Done    |
-| 6       | Share hook preflight rules without stale snapshots.                    | Concurrent edits, permissions, recursion, worktrees, cancellation, rollback.       | Pending |
+| Finding | Change                                                                 | Acceptance evidence                                                                | Status |
+| ------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------ |
+| 1       | Replace reader counts and the `Owner` wrapper with single-owner state. | Connected logs, disconnect, cancellation, failed acceptance, retention failure.    | Done   |
+| 2       | Share repository state loading.                                        | Startup and registration, busy locks, latest results, first-error precedence.      | Done   |
+| 3       | Recover workspaces without fresh run allocation.                       | Recovery, exclusion, journal retention, no fresh run state, lock release.          | Done   |
+| 4       | Share CLI workflow preparation.                                        | Exit codes, diagnostics, receipts, validation order, parent and signal behavior.   | Done   |
+| 5       | Share complete-write handling.                                         | Short writes, zero writes, exceptions, exact diagnostics, file and socket callers. | Done   |
+| 6       | Share hook preflight rules without stale snapshots.                    | Concurrent edits, permissions, recursion, worktrees, cancellation, rollback.       | Done   |
 
 Each unit starts with current source and caller checks. I will add a characterization
 check when existing public tests do not cover the changed behavior. I will review each
@@ -88,6 +88,20 @@ Finding 5 adds 28 production lines and removes 45. `daemon.ts` now has 1286 line
 `ipc.ts` has 78, `worker.ts` has 184, and `client.ts` has 221. The shared writer retains
 framing, budgets, caller diagnostics, and caller synchronization.
 
-Current: commit finding 5, then share hook preflight rules. The main agent owns review,
-verification, integration, and commits. Read-only delegates can prepare later findings
-without changing their source files before the preceding unit passes.
+Finding 5 committed as `f62cebf` after 460 Deno tests and 339 native checks passed.
+Finding 6's two characterization tests passed before production changes. Setup root
+failure stops before configuration or Homebrew reads. Installation preserves unsafe
+shared-worktree diagnostics before a deferred root mismatch.
+
+Finding 6 passed 152 hook and CLI tests, with one opposite-platform test ignored. Four
+shared functions now own configuration, root inspection, workflow planning, and packaged
+hook validation. Setup and installation keep their different root and read diagnostics.
+Installation still rechecks resources after setup mutations.
+
+Finding 6 adds 183 production lines and removes 150. `hooks.ts` increased from 1587 to
+1620 lines. Explicit types preserve the distinct policies while eliminating duplicate rule
+owners. Review removed an unnecessary helper around the existing file-check API. Two
+public characterization tests add 60 lines. No existing test was removed.
+
+Current: commit finding 6, then reconcile final documentation. The main agent owns review,
+verification, integration, and commits. The user owns repository backups.
