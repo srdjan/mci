@@ -817,6 +817,29 @@ const okResponse = (runtime: DaemonRuntime): Response => ({
   snapshot: snapshot(runtime),
 });
 
+const loadRepositoryState = async (
+  repository: Repository,
+  store: DaemonStore,
+): Promise<MutableRepository> => {
+  const state: MutableRepository = {
+    repository,
+    queue: [],
+    active: null,
+    latest: null,
+    blocked: null,
+    accepting: 0,
+    acceptance: Promise.resolve(),
+    removing: false,
+  };
+  const recovered = await recoverWorkspace(repository.path);
+  // A busy lock is not a block: the worker recovers the workspace before each job.
+  if (!recovered.ok) state.blocked = recovered.error;
+  const latest = await store.readLatest(repository);
+  if (!latest.ok) state.blocked ??= latest.error;
+  else state.latest = latest.value;
+  return state;
+};
+
 const manageRepositories = async (
   runtime: DaemonRuntime,
   request: Extract<Request, { readonly op: "register" | "unregister" }>,
@@ -825,22 +848,7 @@ const manageRepositories = async (
     const registered = await runtime.store.register(request.path);
     if (!registered.ok) return responseError("storage", registered.error);
     if (runtime.repositories.has(registered.value.id)) return okResponse(runtime);
-    const state: MutableRepository = {
-      repository: registered.value,
-      queue: [],
-      active: null,
-      latest: null,
-      blocked: null,
-      accepting: 0,
-      acceptance: Promise.resolve(),
-      removing: false,
-    };
-    const recovered = await recoverWorkspace(registered.value.path);
-    // A busy lock is not a block: the worker recovers the workspace before each job.
-    if (!recovered.ok) state.blocked = recovered.error;
-    const latest = await runtime.store.readLatest(registered.value);
-    if (!latest.ok) state.blocked ??= latest.error;
-    else state.latest = latest.value;
+    const state = await loadRepositoryState(registered.value, runtime.store);
     runtime.repositories.set(registered.value.id, state);
     const published = await publish(runtime);
     return published.ok ? okResponse(runtime) : responseError("storage", published.error);
@@ -966,21 +974,7 @@ const prepareRuntime = async (
     closed: false,
   };
   for (const repository of store.repositories()) {
-    const state: MutableRepository = {
-      repository,
-      queue: [],
-      active: null,
-      latest: null,
-      blocked: null,
-      accepting: 0,
-      acceptance: Promise.resolve(),
-      removing: false,
-    };
-    const recovered = await recoverWorkspace(repository.path);
-    if (!recovered.ok) state.blocked = recovered.error;
-    const latest = await store.readLatest(repository);
-    if (!latest.ok) state.blocked ??= latest.error;
-    else state.latest = latest.value;
+    const state = await loadRepositoryState(repository, store);
     runtime.repositories.set(repository.id, state);
   }
   const durableLatest = new Map(

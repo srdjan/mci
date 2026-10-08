@@ -16,7 +16,7 @@ work on local `main` and commit each complete unit. The user owns pushes.
 | Finding | Change                                                                 | Acceptance evidence                                                                | Status  |
 | ------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------- |
 | 1       | Replace reader counts and the `Owner` wrapper with single-owner state. | Connected logs, disconnect, cancellation, failed acceptance, retention failure.    | Done    |
-| 2       | Share repository state loading.                                        | Startup and registration, busy locks, latest results, first-error precedence.      | Pending |
+| 2       | Share repository state loading.                                        | Startup and registration, busy locks, latest results, first-error precedence.      | Done    |
 | 3       | Recover workspaces without fresh run allocation.                       | Recovery, exclusion, journal retention, no fresh run state, lock release.          | Pending |
 | 4       | Share CLI workflow preparation.                                        | Exit codes, diagnostics, receipts, validation order, parent and signal behavior.   | Pending |
 | 5       | Share complete-write handling.                                         | Short writes, zero writes, exceptions, exact diagnostics, file and socket callers. | Pending |
@@ -60,6 +60,10 @@ Public APIs and persisted formats will retain their current contracts.
 Finding 1 passed 76 daemon and race tests. Its diff adds 22 production lines and removes
 35. `daemon.ts` decreased from 1314 to 1301 lines. No tests changed.
 
-Current: commit finding 1, then share repository state loading. The main agent owns
+Finding 1 committed as `84952f9` after 453 Deno tests and 339 native checks passed.
+Finding 2 passed 34 focused loading tests. Its diff adds 25 production lines and removes
+31. `daemon.ts` decreased from 1301 to 1295 lines. No tests changed.
+
+Current: commit finding 2, then separate recovery from run allocation. The main agent owns
 review, verification, integration, and commits. Read-only delegates can prepare later
 findings without changing their source files before the preceding unit passes.
