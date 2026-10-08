@@ -1,5 +1,8 @@
 # Implementation plans
 
+The [minimal design audit](minimal-design-audit.md) records the next simplification
+options. The audit is complete; its proposed code changes remain unselected.
+
 All six findings from the 2026-10-06 audit are complete. The user then authorized the
 complete 2026-10-08 backlog: eight hardening items, three pruning items, and documentation
 reconciliation. Each code unit has its own local commit and complete validation.
