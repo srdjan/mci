@@ -6,7 +6,7 @@ import {
 } from "../src/daemon-store.ts";
 import { startDaemon } from "../src/daemon.ts";
 import { type ServicePaths, servicePaths } from "../src/paths.ts";
-import type { Terminal } from "../src/protocol.ts";
+import { decodeSnapshot, type Terminal } from "../src/protocol.ts";
 import { err, ok, type Result } from "../src/result.ts";
 import {
   assert,
@@ -744,6 +744,220 @@ const withRaceDaemon = async (
     await Deno.remove(directory, { recursive: true });
   }
 };
+
+Deno.test("completed final snapshot failure is reported and later repaired", () =>
+  inWorkspace(async (workspace) => {
+    const diagnostics: string[] = [];
+    let failedFinal = false;
+    let recorded: Terminal | null = null;
+    const openStore = async (paths: ServicePaths): Promise<Result<DaemonStore>> => {
+      const opened = await openDaemonStore(paths);
+      if (!opened.ok) return opened;
+      return ok({
+        ...opened.value,
+        writeTerminal: async (path, terminal) => {
+          const written = await opened.value.writeTerminal(path, terminal);
+          if (written.ok) recorded = terminal;
+          return written;
+        },
+        writeSnapshot: async (current) => {
+          const repository = current.repositories[0];
+          if (
+            !failedFinal && repository?.active === null &&
+            repository.latest !== null && repository.queued === 0
+          ) {
+            failedFinal = true;
+            return err("injected completed final snapshot failure");
+          }
+          return await opened.value.writeSnapshot(current);
+        },
+      });
+    };
+
+    await withRaceDaemon(
+      openStore,
+      async (directory) => {
+        assert(
+          (await rpc({ version: 1, op: "register", path: workspace }, directory)).ok,
+        );
+        const run = (workflow: string, command: string) =>
+          submit(
+            {
+              version: 1,
+              op: "submit",
+              path: workspace,
+              workflow,
+              job: "check",
+              source: fixture(`      - run: ${command}`),
+              env: capturedEnv(),
+            },
+            new AbortController().signal,
+            directory,
+          );
+        const completed = await run("completed-final.yml", "touch completed-final");
+        assert(completed.ok, completed.ok ? "" : completed.error);
+        equal(completed.value.kind, "success");
+        equal(completed.value.code, 0);
+        equal(recorded, completed.value);
+
+        const status = await rpc({ version: 1, op: "status" }, directory);
+        assert(status.ok, status.ok ? "" : status.error);
+        equal(status.value.repositories[0]?.latest, completed.value);
+        equal(status.value.repositories[0]?.blocked, null);
+
+        const stale = decodeSnapshot(
+          JSON.parse(await Deno.readTextFile(`${directory}/snapshot.json`)),
+        );
+        assert(stale.ok, stale.ok ? "" : stale.error);
+        equal(stale.value.repositories[0]?.active?.id, completed.value.id);
+        equal(stale.value.repositories[0]?.latest, null);
+        equal(diagnostics.length, 1);
+        assert(diagnostics[0]?.includes(completed.value.id));
+        assert(diagnostics[0]?.includes("final snapshot"));
+        assert(diagnostics[0]?.includes("injected completed final snapshot failure"));
+
+        const repaired = await run("repair-final.yml", "touch repair-final");
+        assert(repaired.ok, repaired.ok ? "" : repaired.error);
+        const fallback = decodeSnapshot(
+          JSON.parse(await Deno.readTextFile(`${directory}/snapshot.json`)),
+        );
+        assert(fallback.ok, fallback.ok ? "" : fallback.error);
+        equal(fallback.value.repositories[0]?.active, null);
+        equal(fallback.value.repositories[0]?.latest, repaired.value);
+        equal(fallback.value.repositories[0]?.blocked, null);
+      },
+      undefined,
+      (detail) => diagnostics.push(detail),
+    );
+  }));
+
+Deno.test("queued cancellation final snapshot failure preserves state and repairs", () =>
+  inWorkspace(async (workspace) => {
+    const diagnostics: string[] = [];
+    const queuedAccepted = Promise.withResolvers<PendingRequest>();
+    let priorId: string | null = null;
+    let armed = false;
+    let failedFinal = false;
+    const openStore = async (paths: ServicePaths): Promise<Result<DaemonStore>> => {
+      const opened = await openDaemonStore(paths);
+      if (!opened.ok) return opened;
+      return ok({
+        ...opened.value,
+        accept: async (request) => {
+          const accepted = await opened.value.accept(request);
+          if (accepted.ok && request.workflow === "cancelled-final.yml") {
+            queuedAccepted.resolve(request);
+          }
+          return accepted;
+        },
+        writeSnapshot: async (current) => {
+          const repository = current.repositories[0];
+          if (
+            armed && !failedFinal && repository !== undefined &&
+            repository.active !== null &&
+            repository.queued === 0 && repository.latest?.id === priorId
+          ) {
+            failedFinal = true;
+            return err("injected cancelled final snapshot failure");
+          }
+          return await opened.value.writeSnapshot(current);
+        },
+      });
+    };
+
+    await withRaceDaemon(
+      openStore,
+      async (directory) => {
+        assert(
+          (await rpc({ version: 1, op: "register", path: workspace }, directory)).ok,
+        );
+        const run = (
+          workflow: string,
+          command: string,
+          signal = new AbortController().signal,
+        ) =>
+          submit(
+            {
+              version: 1,
+              op: "submit",
+              path: workspace,
+              workflow,
+              job: "check",
+              source: fixture(`      - run: ${command}`),
+              env: capturedEnv(),
+            },
+            signal,
+            directory,
+          );
+        const prior = await run("prior-final.yml", "touch prior-final");
+        assert(prior.ok, prior.ok ? "" : prior.error);
+        priorId = prior.value.id;
+
+        const active = run(
+          "active-final.yml",
+          "touch active-final-ready; while [ ! -f release-active-final ]; do sleep 0.01; done",
+        );
+        const controller = new AbortController();
+        let queued: ReturnType<typeof submit> | null = null;
+        try {
+          await waitFor(() => exists(`${workspace}/active-final-ready`));
+          queued = run(
+            "cancelled-final.yml",
+            "touch rejected-final-cancellation",
+            controller.signal,
+          );
+          const request = await queuedAccepted.promise;
+          await waitFor(async () => {
+            const status = await rpc({ version: 1, op: "status" }, directory);
+            return status.ok && status.value.repositories[0]?.queued === 1;
+          });
+          armed = true;
+          controller.abort("SIGINT");
+          const cancelled = await queued;
+          assert(cancelled.ok, cancelled.ok ? "" : cancelled.error);
+          equal(cancelled.value.id, request.id);
+          equal(cancelled.value.kind, "cancelled");
+          assert(!await exists(`${workspace}/rejected-final-cancellation`));
+
+          const status = await rpc({ version: 1, op: "status" }, directory);
+          assert(status.ok, status.ok ? "" : status.error);
+          equal(status.value.repositories[0]?.queued, 0);
+          equal(status.value.repositories[0]?.latest, prior.value);
+          equal(status.value.repositories[0]?.blocked, null);
+
+          const stale = decodeSnapshot(
+            JSON.parse(await Deno.readTextFile(`${directory}/snapshot.json`)),
+          );
+          assert(stale.ok, stale.ok ? "" : stale.error);
+          equal(stale.value.repositories[0]?.queued, 1);
+          equal(stale.value.repositories[0]?.latest, prior.value);
+          equal(diagnostics.length, 1);
+          assert(diagnostics[0]?.includes(request.id));
+          assert(diagnostics[0]?.includes("final snapshot"));
+          assert(diagnostics[0]?.includes("injected cancelled final snapshot failure"));
+
+          await Deno.writeTextFile(`${workspace}/release-active-final`, "release");
+          const completed = await active;
+          assert(completed.ok, completed.ok ? "" : completed.error);
+          const repaired = decodeSnapshot(
+            JSON.parse(await Deno.readTextFile(`${directory}/snapshot.json`)),
+          );
+          assert(repaired.ok, repaired.ok ? "" : repaired.error);
+          equal(repaired.value.repositories[0]?.active, null);
+          equal(repaired.value.repositories[0]?.queued, 0);
+          equal(repaired.value.repositories[0]?.latest, completed.value);
+          equal(repaired.value.repositories[0]?.blocked, null);
+          assert(!await exists(`${workspace}/rejected-final-cancellation`));
+        } finally {
+          controller.abort("SIGINT");
+          await Deno.writeTextFile(`${workspace}/release-active-final`, "release");
+          await Promise.all([active, ...(queued === null ? [] : [queued])]);
+        }
+      },
+      undefined,
+      (detail) => diagnostics.push(detail),
+    );
+  }));
 
 Deno.test("submission rollback reports acceptance and file cleanup failures", () =>
   inWorkspace(async (workspace) => {

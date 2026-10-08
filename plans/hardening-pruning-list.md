@@ -3,11 +3,11 @@
 ## Scope and result
 
 This review identifies eight hardening items and three pruning items on local `main` at
-`c1215f2`, dated 2026-10-08. The user authorized the complete list. H1, exact monitor
-shutdown, H2, existing file permissions, H3, concurrent Codex edits, and H4, planner and
-worker input, and H5, submission rollback diagnostics, are complete. Three hardening items
-and three pruning items remain open. The review covers Deno execution, daemon storage,
-hook installation, service control, packaging, and the native monitor.
+`c1215f2`, dated 2026-10-08. The user authorized the complete list. H1 through H6 are
+complete. Those items cover monitor shutdown, permissions, concurrency, worker input,
+submission rollback, and snapshot diagnostics. Two hardening items and three pruning items
+remain open. The review covers Deno execution, daemon storage, hook installation, service
+control, packaging, and the native monitor.
 
 The earlier list had no open items. Its six hardening units and two pruning units remain
 complete. The six plans in [README.md](README.md) also remain complete. The labels below
@@ -114,20 +114,15 @@ protocol field. Power-loss durability remains outside this evidence.
 
 ### H6: Surface final snapshot publication failures
 
-Evidence: [src/daemon.ts:481](../src/daemon.ts#L481) clears active state, then discards
-the final snapshot write result. The unstarted request path also discards publication
-failure at [src/daemon.ts:503](../src/daemon.ts#L503). The store returns those failures at
-[src/daemon-store.ts:649](../src/daemon-store.ts#L649). If the final write fails,
-`snapshot.json` can retain active or queued state until another publication succeeds. The
-monitor uses that file when the daemon becomes unavailable, as documented in
-[docs/design.md:485](../docs/design.md#L485).
+[Plan 012](012-report-final-snapshot-failures.md) records the completed fix. Both
+settlement routes now report failed final publication through daemon diagnostics. The
+message identifies the request and failed operation. Recorded results, client results,
+live latest state, and existing blocks remain unchanged.
 
-The proposed change exposes snapshot failure through an explicit daemon diagnostic policy.
-It must preserve the recorded workflow result and existing terminal projection rules.
-Checks must inject final snapshot failure, read live status, and inspect the fallback
-snapshot. The executor must distinguish diagnostic failure from workflow failure. This
-item resolves the separate question deferred in [README.md:73](README.md#L73); the runtime
-fault remains untested here.
+Both public fault regressions passed. They compare live status with stale fallback state
+and confirm repair after later publication. Snapshot failure alone does not block
+execution. Service startup saves diagnostics in `daemon.log`. Power-loss durability
+remains unmeasured.
 
 ### H7: Resolve Homebrew through supported absolute paths
 

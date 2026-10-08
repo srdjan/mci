@@ -116,6 +116,11 @@ chain step ends. A client that does not read its response cannot stall later man
 requests. The daemon publishes the snapshot before it resolves a job result. A shutdown
 therefore ends after the last snapshot write.
 
+A failed final publication writes a diagnostic to stderr with the request identifier. The
+daemon preserves the workflow result and live status. Snapshot failure alone does not
+block execution. The fallback file can retain active or queued state until a later
+publication succeeds. Service startup saves stderr in `daemon.log`.
+
 The daemon resolves request paths in one chain for each path text. A stalled volume delays
 only requests for its own path. An unregister request no longer reports busy after the
 result frame of a finished client, even if that client keeps its connection open.

@@ -43,6 +43,10 @@ accepted plans with display metadata. | Medium | Small | None | DONE |
 | [011](011-report-submission-rollback.md) | H5: submission rollback | Preserve rejection
 and cleanup diagnostics. | High | Medium | None | DONE |
 
+| [012](012-report-final-snapshot-failures.md) | H6: final snapshot diagnostics | Report
+fallback publication faults without changing results. | Medium | Small | 011: diagnostic
+capability | DONE |
+
 Plans 001, 002, and 003 have independent implementation boundaries. Plans 004, 005, and
 006 share `src/hooks.ts` and its tests. Execute the three hook plans sequentially.
 
@@ -121,13 +125,15 @@ exact monitor shutdown, is complete at `c5fb75d`. H2, existing file permissions,
 complete. The main agent owns planning, review, validation, status, and local commits.
 Workers own only each unit's assigned source and test files.
 
-The next submission cleanup unit will block further repository work after cleanup failure.
-Failed journal cleanup will retain request files. Rejection will preserve the primary
-error and each attempted cleanup diagnostic.
+Plan 011, submission rollback diagnostics, is committed as `3d1f46c`. Its gate passed 431
+Deno tests and 339 native checks, with one opposite-platform test ignored. Cleanup faults
+block further repository work. Failed journal cleanup retains request files. Plan 012,
+final snapshot diagnostics, passes both public fault regressions. Snapshot faults retain
+workflow results and do not add a repository block.
 
-Remaining order: snapshot diagnostics, Homebrew location, doctor status, recovery files,
-and unused declarations. Homebrew consolidation completes the remaining part of P3, shared
-native primitives. Existing process consolidation remains complete.
+Remaining order: Homebrew location, doctor status, recovery files, and unused
+declarations. Homebrew consolidation completes the remaining part of P3, shared native
+primitives. Existing process consolidation remains complete.
 
 The maintainer authorized all numbered items. Capacity measurement remains an unselected
 direction option. Existing platform, visual, and power-loss evidence limits remain
@@ -196,5 +202,5 @@ boundaries.
 Completed: Plan 008 preserves configuration permissions. The focused suites passed 134
 tests. Type, lint, layer, and suppression checks pass. The review found no defects.
 
-Next: the main agent owns H6, final snapshot diagnostics. The maintainer owns repository
+Next: the main agent owns H7, absolute Homebrew location. The maintainer owns repository
 backups.

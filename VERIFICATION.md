@@ -1,5 +1,22 @@
 # Verification
 
+## Final snapshot diagnostics (2026-10-08)
+
+The baseline completion regression failed in 212 ms because no diagnostic reached the
+reporter. The queued cancellation regression also reproduced missing diagnostics. Recorded
+results and live status stayed correct while the fallback file retained stale state.
+
+The corrected two-test run passed in 858 ms. Individual tests took 388 and 468 ms. Both
+settlement routes identify the request and failed final publication. The tests preserve
+client results, recorded results, latest state, and repository admission. Later
+publication repairs fallback state. Type, lint, layer, and suppression checks passed.
+
+The main agent reviewed every changed line. The tests use public socket operations and
+native store wrappers. These checks do not establish snapshot durability after power loss.
+
+The preceding Plan 011 commit is `3d1f46c`. Its complete gate passed 431 Deno tests and
+339 native checks, with one opposite-platform test ignored.
+
 ## Submission rollback (2026-10-08)
 
 The baseline acceptance path returned only the primary error after request removal failed.

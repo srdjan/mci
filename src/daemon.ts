@@ -135,6 +135,15 @@ const publish = async (
 ): Promise<Result<void>> =>
   await runtime.store.writeSnapshot(snapshot(runtime, candidate));
 
+const publishFinal = async (runtime: DaemonRuntime, id: string): Promise<void> => {
+  const published = await publish(runtime);
+  if (!published.ok) {
+    runtime.reportDiagnostic(
+      `mci daemon: final snapshot write failed for ${id}: ${published.error}`,
+    );
+  }
+};
+
 const hold = (runtime: DaemonRuntime, id: string): void => {
   runtime.holds.set(id, (runtime.holds.get(id) ?? 0) + 1);
 };
@@ -484,7 +493,7 @@ const complete = async (
   }
   if (repository.active === job) repository.active = null;
   job.child = null;
-  await publish(runtime);
+  await publishFinal(runtime, job.id);
   job.resolve(result);
   pump(runtime, repository);
 };
@@ -504,7 +513,7 @@ const settleUnstarted = async (
   }
   await retire(runtime, repository.repository.path, result);
   job.child = null;
-  await publish(runtime);
+  await publishFinal(runtime, job.id);
   job.resolve(result);
 };
 
