@@ -546,6 +546,48 @@ Deno.test("Codex installer merges hooks, migrates the legacy hook, and is idempo
     }
   }));
 
+Deno.test("Codex installer preserves existing hook configuration permissions", () =>
+  inWorkspace(async (workspace) => {
+    const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-codex-" });
+    try {
+      for (const mode of [0o600, 0o400, 0o1600]) {
+        const repository = `${workspace}/mode-${mode.toString(8)}`;
+        const path = `${repository}/.codex/hooks.json`;
+        await Deno.mkdir(`${repository}/.codex`, { recursive: true });
+        await Deno.writeTextFile(path, '{"project":"kept"}\n');
+        await Deno.chmod(path, mode);
+
+        const first = await cli(workspace, home, ["codex", "install", repository])
+          .output();
+        equal(first.code, 0);
+        equal((await Deno.stat(path)).mode! & 0o7777, mode);
+
+        const second = await cli(workspace, home, ["codex", "install", repository])
+          .output();
+        equal(second.code, 0);
+        equal((await Deno.stat(path)).mode! & 0o7777, mode);
+      }
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  }));
+
+Deno.test("Codex installer creates hook configuration with mode 0644", () =>
+  inWorkspace(async (workspace) => {
+    const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-codex-" });
+    const repository = `${workspace}/new-config`;
+    const path = `${repository}/.codex/hooks.json`;
+    try {
+      await Deno.mkdir(`${repository}/.codex`, { recursive: true });
+      const result = await cli(workspace, home, ["codex", "install", repository])
+        .output();
+      equal(result.code, 0);
+      equal((await Deno.stat(path)).mode! & 0o777, 0o644);
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  }));
+
 Deno.test("Codex installer rejects malformed and linked hook configuration", () =>
   inWorkspace(async (workspace) => {
     const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-codex-" });
@@ -554,10 +596,12 @@ Deno.test("Codex installer rejects malformed and linked hook configuration", () 
     try {
       await Deno.mkdir(`${malformed}/.codex`, { recursive: true });
       await Deno.writeTextFile(`${malformed}/.codex/hooks.json`, "{");
+      await Deno.chmod(`${malformed}/.codex/hooks.json`, 0o600);
       const invalid = await cli(workspace, home, ["codex", "install", malformed])
         .output();
       equal(invalid.code, 1);
       equal(await Deno.readTextFile(`${malformed}/.codex/hooks.json`), "{");
+      equal((await Deno.stat(`${malformed}/.codex/hooks.json`)).mode! & 0o777, 0o600);
 
       await Deno.mkdir(`${linked}/.codex`, { recursive: true });
       const target = `${workspace}/outside.json`;

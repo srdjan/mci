@@ -3,10 +3,10 @@
 ## Scope and result
 
 This review identifies eight hardening items and three pruning items on local `main` at
-`c1215f2`, dated 2026-10-08. The user authorized H1, exact monitor shutdown. That unit is
-complete; seven hardening items and three pruning items remain open. The review covers
-Deno execution, daemon storage, hook installation, service control, packaging, and the
-native monitor.
+`c1215f2`, dated 2026-10-08. The user authorized the complete list. H1, exact monitor
+shutdown, and H2, existing file permissions, are complete. Six hardening items and three
+pruning items remain open. The review covers Deno execution, daemon storage, hook
+installation, service control, packaging, and the native monitor.
 
 The earlier list had no open items. Its six hardening units and two pruning units remain
 complete. The six plans in [README.md](README.md) also remain complete. The labels below
@@ -54,22 +54,19 @@ capacity remains unmeasured.
 
 ### H2: Preserve existing file permissions
 
-Evidence: [src/codex.ts:111](../src/codex.ts#L111) replaces configuration through a
-temporary file. The installer always supplies `0644` at
-[src/codex.ts:453](../src/codex.ts#L453). Replacing an existing `0600` file therefore
-widens its mode to `0644`. Other accounts can read that file when directory permissions
-permit access.
+The user authorized this unit with the full list.
+[Plan 008](008-preserve-configuration-permissions.md) records the scope. Public
+regressions reproduce permission widening in both installers.
 
-Evidence: [src/hooks.ts:956](../src/hooks.ts#L956) replaces `deno.json` without its
-previous mode. Rollback also omits the previous mode at
-[src/hooks.ts:972](../src/hooks.ts#L972). The replacement uses creation permissions
-instead of the owner's selected permissions. This finding comes from source inspection;
-this review ran no permission regression.
+The completed fix retains the `07777` mode mask through replacement and restoration. The
+baseline widened restrictive modes during Codex installation and Deno task setup. Both
+writers now write private temporary files and apply the saved mode before replacement.
+Public checks cover `0600`, `0400`, `01600`, repeated installation, rejection, and
+rollback. The focused installer suites passed 134 tests. New Codex configuration keeps
+`0644`.
 
-The proposed change retains the existing mode for replacement and restoration. New files
-retain an explicit creation policy. Checks must cover restrictive modes, successful
-replacement, failed installation, and unchanged configuration. The executor must record
-unsupported ownership or access-control metadata separately.
+Owners, ACLs, extended attributes, and hosts without POSIX modes remain outside this
+evidence.
 
 ### H3: Detect concurrent Codex configuration edits
 
@@ -271,10 +268,9 @@ boundary has lower priority than the listed application failures.
 
 ## Next action and ownership
 
-Completed: the main advisor reviewed current evidence and created this list. The user
-authorized Plan 007 for H1, exact monitor shutdown. Implementation and checks are
-complete. The repository maintainer owns selection of the next unit. H2, existing file
-permissions, is the next item in the ordered list.
+Completed: H1, exact monitor shutdown, and H2, existing file permissions, have separate
+units. The user authorized the full list in order. The main agent owns completion and
+validation of each unit. H3, concurrent Codex edits, is next.
 
 Each accepted unit needs its own local commit on `main`. The repository maintainer owns
 pushes and repository backups.

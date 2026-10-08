@@ -439,6 +439,21 @@ Deno.test("hook setup generates the canonical workflow and repeats without chang
   });
 });
 
+Deno.test("hook setup preserves deno.json permissions", async () => {
+  for (const mode of [0o600, 0o400, 0o1600]) {
+    await withRepository(async (repository, prefix) => {
+      const configPath = `${repository}/deno.json`;
+      await Deno.chmod(configPath, mode);
+
+      unwrap(await setupHookWith(repository, capabilities(prefix)));
+      equal((await Deno.stat(configPath)).mode! & 0o7777, mode);
+
+      unwrap(await setupHookWith(repository, capabilities(prefix)));
+      equal((await Deno.stat(configPath)).mode! & 0o7777, mode);
+    });
+  }
+});
+
 Deno.test("hook setup preserves an existing mci ignore rule", async () => {
   for (const rule of [".mci/", "/.mci/"]) {
     await withRepository(async (repository, prefix) => {
@@ -485,12 +500,14 @@ Deno.test("hook setup rejects a repository without standard tasks", async () => 
     await Deno.remove(`${repository}/.github`, { recursive: true });
     const configPath = `${repository}/deno.json`;
     await Deno.writeTextFile(configPath, '{"tasks":{"build":"deno task bundle"}}\n');
+    await Deno.chmod(configPath, 0o600);
     const beforeConfig = await Deno.readTextFile(configPath);
     const beforeGit = await Deno.readTextFile(`${repository}/.git/config`);
 
     const result = await setupHookWith(repository, capabilities(prefix));
     assert(!result.ok && result.error.includes("standard task"));
     equal(await Deno.readTextFile(configPath), beforeConfig);
+    equal((await Deno.stat(configPath)).mode! & 0o777, 0o600);
     equal(await Deno.readTextFile(`${repository}/.git/config`), beforeGit);
     assert(!await exists(`${repository}/ci`));
     assert(!await exists(`${repository}/.gitignore`));
@@ -1092,7 +1109,9 @@ Deno.test("hook setup rolls back a generated workflow after a late Git failure",
     await Deno.writeTextFile(prePush, "#!/bin/sh\nexit 0\n");
     await Deno.chmod(prePush, 0o755);
     await runGit(repository, ["config", "--local", "core.hooksPath", ".githooks"]);
+    await Deno.chmod(configPath, 0o400);
     const beforeConfig = await Deno.readTextFile(configPath);
+    const beforeMode = (await Deno.stat(configPath)).mode! & 0o7777;
     await Deno.writeTextFile(`${repository}/.gitignore`, "dist/\n");
     const beforeIgnore = await Deno.readTextFile(`${repository}/.gitignore`);
 
@@ -1110,6 +1129,7 @@ Deno.test("hook setup rolls back a generated workflow after a late Git failure",
       result.ok ? "setup succeeded" : result.error,
     );
     equal(await Deno.readTextFile(configPath), beforeConfig);
+    equal((await Deno.stat(configPath)).mode! & 0o7777, beforeMode);
     equal(await Deno.readTextFile(`${repository}/.gitignore`), beforeIgnore);
     assert(!await exists(`${repository}/ci/local-ci.yml`));
     equal(

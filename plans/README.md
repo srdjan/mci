@@ -14,21 +14,27 @@ The user selected option 1, exact monitor shutdown, for planning on 2026-10-08.
 `11e034b`. The user authorized execution on 2026-10-08. Implementation and local checks
 are complete.
 
+The user authorized the complete hardening and pruning list on 2026-10-08. Each unit
+requires separate validation and a local commit.
+[Plan 008](008-preserve-configuration-permissions.md) starts the remaining work with H2,
+existing file permissions.
+
 ## Execution order and status
 
 Plan numbers show the recommended execution order. Audit finding numbers preserve the six
 priorities shown to the user. Effort describes scope, rather than elapsed time. Status is
 `TODO` until execution starts, then `IN PROGRESS`, `DONE`, or `BLOCKED` with a reason.
 
-| Plan                                            | Audit finding              | Outcome                                             | Priority | Effort | Depends on                                        | Status |
-| ----------------------------------------------- | -------------------------- | --------------------------------------------------- | -------- | ------ | ------------------------------------------------- | ------ |
-| [001](001-preserve-recorded-results.md)         | 1                          | Preserve recorded results after projection failure. | High     | Medium | None                                              | DONE   |
-| [002](002-check-startup-rollback-ownership.md)  | 2                          | Check ownership before startup rollback signals.    | High     | Medium | None                                              | DONE   |
-| [003](003-resolve-receipt-path-components.md)   | 3                          | Match receipt identity to filesystem path order.    | High     | Medium | None                                              | DONE   |
-| [004](004-parse-deno-task-options.md)           | 6                          | Parse option values before Deno task names.         | Medium   | Medium | None                                              | DONE   |
-| [005](005-check-existing-workflow-recursion.md) | 4                          | Inspect defined dependencies in existing workflows. | High     | Medium | 004: task option parsing                          | DONE   |
-| [006](006-finish-hook-rollback-before-exit.md)  | 5                          | Finish hook rollback before cancellation completes. | Medium   | Large  | 004: task option parsing; 005: workflow recursion | DONE   |
-| [007](007-exact-monitor-shutdown.md)            | H1: exact monitor shutdown | Confirm monitor exit before bundle mutation.        | High     | Medium | None                                              | DONE   |
+| Plan                                             | Audit finding                 | Outcome                                             | Priority | Effort | Depends on                                        | Status |
+| ------------------------------------------------ | ----------------------------- | --------------------------------------------------- | -------- | ------ | ------------------------------------------------- | ------ |
+| [001](001-preserve-recorded-results.md)          | 1                             | Preserve recorded results after projection failure. | High     | Medium | None                                              | DONE   |
+| [002](002-check-startup-rollback-ownership.md)   | 2                             | Check ownership before startup rollback signals.    | High     | Medium | None                                              | DONE   |
+| [003](003-resolve-receipt-path-components.md)    | 3                             | Match receipt identity to filesystem path order.    | High     | Medium | None                                              | DONE   |
+| [004](004-parse-deno-task-options.md)            | 6                             | Parse option values before Deno task names.         | Medium   | Medium | None                                              | DONE   |
+| [005](005-check-existing-workflow-recursion.md)  | 4                             | Inspect defined dependencies in existing workflows. | High     | Medium | 004: task option parsing                          | DONE   |
+| [006](006-finish-hook-rollback-before-exit.md)   | 5                             | Finish hook rollback before cancellation completes. | Medium   | Large  | 004: task option parsing; 005: workflow recursion | DONE   |
+| [007](007-exact-monitor-shutdown.md)             | H1: exact monitor shutdown    | Confirm monitor exit before bundle mutation.        | High     | Medium | None                                              | DONE   |
+| [008](008-preserve-configuration-permissions.md) | H2: existing file permissions | Retain file modes through replacement and rollback. | High     | Small  | None                                              | DONE   |
 
 Plans 001, 002, and 003 have independent implementation boundaries. Plans 004, 005, and
 006 share `src/hooks.ts` and its tests. Execute the three hook plans sequentially.
@@ -43,12 +49,11 @@ The completed objective covers all six saved plans. The main agent owns integrat
 documentation, verification, and local commits. Workers own disjoint source and test
 files. Hook plans follow their dependency order.
 
-The current objective covers execution of Plan 007, exact monitor shutdown. The main agent
-owns integration, review, checks, documentation, and the local commit. The worker owns the
-scoped source and test files. The shared helper preserves existing capability interfaces
-and command budgets. Packaged rollback must confirm exit before destination removal.
-SIGTERM remains forced termination; normal application Quit retains its cleanup contract.
-Homebrew location changes and other backlog items remain unselected.
+The current objective covers the complete hardening and pruning list, one unit at a time.
+The main agent owns planning, integration, review, checks, documentation, and local
+commits. Workers own each unit's scoped source and tests. Plan 007, exact monitor
+shutdown, is complete. Its capability interfaces, command budgets, and forced SIGTERM
+remain accepted boundaries. Normal application Quit retains its cleanup contract.
 
 Task parsing precedes workflow recursion because both checks need one invocation scanner.
 Existing workflows continue to accept undefined optional tasks. Foreign configurations
@@ -92,6 +97,20 @@ direction options. The user selected the six defects, rather than those options.
 migration and forced installer termination are explicit deferred boundaries.
 
 ## Worklog and ownership
+
+The active objective covers all eight hardening items and all three pruning items. H1,
+exact monitor shutdown, is complete at `c5fb75d`. H2, existing file permissions, is
+complete. The main agent owns planning, review, validation, status, and local commits.
+Workers own only each unit's assigned source and test files.
+
+Remaining order: configuration concurrency, planner and worker contracts, submission
+cleanup diagnostics, snapshot diagnostics, Homebrew location, doctor status, recovery
+files, and unused declarations. Homebrew consolidation completes the remaining part of P3,
+shared native primitives. Existing process consolidation remains complete.
+
+The maintainer authorized all numbered items. Capacity measurement remains an unselected
+direction option. Existing platform, visual, and power-loss evidence limits remain
+explicit. The main agent will reconcile hook documentation after the numbered units.
 
 Plan 005, existing workflow validation, is committed locally as `a110a3b`.
 
@@ -153,4 +172,8 @@ The focused run passed 78 tests in 423 ms. Complete validation passed 410 Deno t
 Source capability signatures, command budgets, and forced SIGTERM remain accepted
 boundaries.
 
-Next: the maintainer owns selection of another backlog item and repository backups.
+Completed: Plan 008 preserves configuration permissions. The focused suites passed 134
+tests. Type, lint, layer, and suppression checks pass. The review found no defects.
+
+Next: the main agent owns H3, concurrent Codex edits. The maintainer owns repository
+backups.

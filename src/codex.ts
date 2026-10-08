@@ -119,8 +119,8 @@ const writeAtomic = async (
   );
   if (!temporary.ok) return temporary;
   const written = await attempt(async () => {
-    await Deno.chmod(temporary.value, mode);
     await Deno.writeTextFile(temporary.value, content);
+    await Deno.chmod(temporary.value, mode);
     await Deno.rename(temporary.value, path);
   });
   if (!written.ok) await attempt(() => Deno.remove(temporary.value));
@@ -317,10 +317,15 @@ const metadata = async (path: string): Promise<Result<Deno.FileInfo | null>> => 
   }
 };
 
-const readConfig = async (path: string): Promise<Result<JsonObject>> => {
+type ReadConfig = {
+  readonly config: JsonObject;
+  readonly mode: number | null;
+};
+
+const readConfig = async (path: string): Promise<Result<ReadConfig>> => {
   const found = await metadata(path);
   if (!found.ok) return found;
-  if (found.value === null) return ok({});
+  if (found.value === null) return ok({ config: {}, mode: null });
   if (!found.value.isFile || found.value.isSymlink) {
     return err(`${path} must be a real file`);
   }
@@ -328,7 +333,12 @@ const readConfig = async (path: string): Promise<Result<JsonObject>> => {
     JSON.parse(await Deno.readTextFile(path))
   );
   if (!parsed.ok) return err(`${path} is not valid JSON: ${parsed.error}`);
-  return object(parsed.value) ? ok(parsed.value) : err(`${path} must contain an object`);
+  return object(parsed.value)
+    ? ok({
+      config: parsed.value,
+      mode: found.value.mode === null ? null : found.value.mode & 0o7777,
+    })
+    : err(`${path} must contain an object`);
 };
 
 const decodeShellWords = (command: string): readonly string[] | null => {
@@ -427,12 +437,13 @@ const installCodexHooks = async (repository: string): Promise<Result<string>> =>
     return err(`${directory} must be a real directory`);
   }
   const path = `${directory}/hooks.json`;
-  const config = await readConfig(path);
-  if (!config.ok) return config;
-  if (config.value.hooks !== undefined && !object(config.value.hooks)) {
+  const read = await readConfig(path);
+  if (!read.ok) return read;
+  const config = read.value.config;
+  if (config.hooks !== undefined && !object(config.hooks)) {
     return err(`${path} has a malformed hooks object`);
   }
-  const hooks = object(config.value.hooks) ? config.value.hooks : {};
+  const hooks = object(config.hooks) ? config.hooks : {};
   for (const [name, groups] of Object.entries(hooks)) {
     if (
       !Array.isArray(groups) ||
@@ -452,8 +463,8 @@ const installCodexHooks = async (repository: string): Promise<Result<string>> =>
   }
   const written = await writeAtomic(
     path,
-    `${JSON.stringify({ ...config.value, hooks: merged }, null, 2)}\n`,
-    0o644,
+    `${JSON.stringify({ ...config, hooks: merged }, null, 2)}\n`,
+    read.value.mode ?? 0o644,
   );
   return written.ok ? ok(path) : written;
 };

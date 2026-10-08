@@ -411,6 +411,10 @@ previous `deno.json` contents. If the installer enabled `extensions.worktreeConf
 attempts to restore the previous value or absence of that setting. One failed rollback
 does not prevent the remaining restoration attempts.
 
+Task installation preserves the existing POSIX permission bits on `deno.json` replacement
+and restoration. Rejected or unchanged configuration retains its bytes and permissions.
+Atomic replacement does not preserve owners, ACLs, or extended attributes.
+
 The diagnostic retains the primary error and every failed restoration result. Each
 rollback failure names the affected target and gives the recovery action. Git recovery
 commands use the previous value or remove a previously absent setting. The rollback
@@ -474,6 +478,10 @@ installer preserves foreign handlers and replaces recognized mci handlers. Sourc
 call the source CLI. Packaged hooks call the stable Homebrew binary. Codex requires review
 and trust for each new hook definition. The installer does not bypass trust or change the
 daemon protocol. Session hooks read receipts and never start CI themselves.
+
+Codex hook installation preserves existing POSIX permission bits. A new `hooks.json` uses
+the explicit `0644` creation policy. Hosts without POSIX file modes do not establish
+permission preservation through these checks.
 
 The adapter stores notification state separately from receipt JSON files. Receipts contain
 result metadata, not inherited environment values or transcript content. Receipt storage

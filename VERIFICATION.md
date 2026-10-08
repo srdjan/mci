@@ -1,5 +1,20 @@
 # Verification
 
+## Configuration permissions (2026-10-08)
+
+Public baseline regressions reproduced permission widening in both installation routes.
+Codex installation changed `0600` to `0644` in 49 ms. Hook setup changed `deno.json` from
+`0600` to `0644` in 193 ms. Each probe uses a disposable repository.
+
+The corrected focused suites passed 134 tests. Public checks preserve `0600`, `0400`, and
+`01600` through replacement and repeated installation. Rejection retains bytes and modes.
+A late Git failure restores read-only configuration. New Codex configuration keeps `0644`.
+The new mode tests finished below one second individually.
+
+Type, lint, layer, and suppression checks pass. The focused review found no defects.
+Preservation covers the `07777` mode mask when Deno supplies a POSIX mode. Owners, ACLs,
+extended attributes, and concurrent changes remain outside this unit.
+
 ## Exact monitor shutdown (2026-10-08)
 
 The focused baseline passed 67 installer and service tests in 345 ms. A new public

@@ -647,7 +647,10 @@ const writeAtomic = async (
 ): Promise<Result<void>> => {
   const temporary = `${path}.mci-${crypto.randomUUID()}.tmp`;
   const written = await attempt(async () => {
-    await Deno.writeTextFile(temporary, content, { createNew: true, mode });
+    await Deno.writeTextFile(temporary, content, {
+      createNew: true,
+      mode: mode === undefined ? undefined : 0o600,
+    });
     if (mode !== undefined) await Deno.chmod(temporary, mode);
     await Deno.rename(temporary, path);
   });
@@ -788,8 +791,15 @@ const installHookWithPolicy = async (
   if (!configFile.ok || configFile.value !== "file") {
     return err(`The repository must have a regular deno.json file.`);
   }
-  const oldConfig = await attempt(() => Deno.readTextFile(configPath));
+  const [oldConfig, configInfo] = await Promise.all([
+    attempt(() => Deno.readTextFile(configPath)),
+    attempt(() => Deno.lstat(configPath)),
+  ]);
   if (!oldConfig.ok) return err(`Cannot read deno.json: ${oldConfig.error}`);
+  if (!configInfo.ok) return err(`Cannot inspect deno.json: ${configInfo.error}`);
+  const configMode = configInfo.value.mode === null
+    ? null
+    : configInfo.value.mode & 0o7777;
   const config = await readConfig(configPath);
   if (!config.ok) return config;
   const currentTasks = config.value.tasks;
@@ -953,14 +963,14 @@ const installHookWithPolicy = async (
       return err("The repository deno.json changed during hook setup.");
     }
     const after = `${JSON.stringify(nextConfig, null, 2)}\n`;
-    const wroteConfig = await writeAtomic(configPath, after);
+    const wroteConfig = await writeAtomic(configPath, after, configMode ?? undefined);
     if (!wroteConfig.ok) return wroteConfig;
     configChange = {
       kind: "updated",
       path: configPath,
       before: oldConfig.value,
       after,
-      mode: null,
+      mode: configMode,
     };
   }
   const restoreConfig = async (): Promise<Result<void>> => {
@@ -969,7 +979,11 @@ const installHookWithPolicy = async (
     if (!current.ok || current.value !== configChange.after) {
       return err("The repository deno.json changed before rollback.");
     }
-    return await writeAtomic(configPath, configChange.before);
+    return await writeAtomic(
+      configPath,
+      configChange.before,
+      configChange.mode ?? undefined,
+    );
   };
   const priorExtensionValue: string | null = rawWorktreeExtension.value.length === 1
     ? rawWorktreeExtension.value[0] ?? null
