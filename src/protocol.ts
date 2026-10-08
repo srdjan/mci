@@ -1,7 +1,6 @@
 import { err, ok, type Result } from "./result.ts";
 import type { Env } from "./workflow.ts";
 
-export const protocolVersion = 1;
 export type TerminalKind =
   | "success"
   | "failure"

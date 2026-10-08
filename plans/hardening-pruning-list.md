@@ -5,7 +5,7 @@
 This review identifies eight hardening items and three pruning items on local `main` at
 `c1215f2`, dated 2026-10-08. The user authorized the complete list. All eight hardening
 items are complete. P3, shared native primitives, is complete. P1, obsolete control files,
-passes focused validation. P2, unused declarations, remains open. The review covers Deno
+is complete. P2, unused declarations, passes focused validation. The review covers Deno
 execution, daemon storage, hook installation, service control, packaging, and the native
 monitor.
 
@@ -171,19 +171,14 @@ regular-file checks and repository blocking after cleanup failures.
 
 ### P2: Remove unreachable installation error and unused version export
 
-Evidence:
-[monitor/Sources/MonitorCore/HookInstaller.swift:15](../monitor/Sources/MonitorCore/HookInstaller.swift#L15)
-declares `HookInstallError.outputLimitExceeded`. The current installation function never
-returns that case at
-[monitor/Sources/MonitorCore/HookInstaller.swift:149](../monitor/Sources/MonitorCore/HookInstaller.swift#L149).
-The separate inspection error with the same case name remains reachable and must stay.
-Evidence: [src/protocol.ts:4](../src/protocol.ts#L4) exports `protocolVersion`, but
-repository searches found no caller.
+[Plan 016](016-remove-unused-declarations.md) records the bounded deletion. Source
+searches found no protocol export caller and no installation path returning the error
+case. Both declarations and the unused installation message branch are removed.
 
-The proposed change removes those two unused declarations and the unreachable installation
-message branch. The change preserves bounded inspection and cooperative installer cleanup.
-Existing native checks, type checks, and IPC checks provide the validation boundary.
-Removing additional unused export modifiers alone does not justify separate work.
+The separate inspection error remains reachable and unchanged. Bounded inspection and
+cooperative cleanup retain their existing code. Six public protocol and IPC tests pass.
+Type, lint, layer, and suppression checks pass. Existing native checks cover inspection
+output limits, installation output, cancellation, and restoration.
 
 ### P3: Consolidate monitor process control and Homebrew location code
 
@@ -247,9 +242,9 @@ boundary has lower priority than the listed application failures.
 
 ## Next action and ownership
 
-Completed: all eight hardening items and shared native primitives pass the complete gate.
-Obsolete control files pass focused validation. The main agent owns P2, unused
-declarations, next. Documentation reconciliation remains after that unit.
+Completed: all eight hardening items, shared native primitives, and obsolete control files
+pass the complete gate. Unused declarations pass focused validation. The main agent owns
+documentation reconciliation next.
 
 Each accepted unit needs its own local commit on `main`. The repository maintainer owns
 pushes and repository backups.

@@ -12,7 +12,6 @@ public enum HookInstallError: Error, Equatable, Sendable {
     case launch(String)
     case failed(exitCode: Int32, stderr: String)
     case timedOut
-    case outputLimitExceeded
     case cancelled
 
     public var message: String {
@@ -28,8 +27,6 @@ public enum HookInstallError: Error, Equatable, Sendable {
                 : "The hook installer exited with status \(exitCode): \(detail)"
         case .timedOut:
             return "The hook installer timed out."
-        case .outputLimitExceeded:
-            return "The hook installer produced too much output."
         case .cancelled:
             return "The hook installation was cancelled."
         }

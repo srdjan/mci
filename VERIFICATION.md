@@ -1,5 +1,19 @@
 # Verification
 
+## Unused declarations (2026-10-08)
+
+Repository searches found no caller of `protocolVersion`. Installation paths never return
+`HookInstallError.outputLimitExceeded`. The source change removes these declarations and
+the unused message branch. The reachable inspection error remains intact.
+
+Six public protocol and IPC tests passed in 57 ms. Type, lint, layer, and suppression
+checks passed. The main agent reviewed all changed source lines. Existing native checks
+cover inspection output limits, installation output, cancellation, and restoration.
+
+The independent review found no defects. The retained private inspection error is
+`CommandError.outputLimitExceeded`. The review confirmed no producer or caller of the
+removed installation error and no protocol export consumer.
+
 ## Recovered control files (2026-10-08)
 
 The baseline public recovery test failed in 111 ms because the latest control survived
@@ -14,6 +28,9 @@ The connected-reader regression passed in 339 ms and retains its existing log po
 
 Type, lint, layer, and suppression checks passed. The main agent reviewed every changed
 line. These filesystem checks establish the tested host only.
+
+The Plan 015 commit is `731c299`. Its gate passed 453 Deno tests and 339 native checks,
+with one opposite-platform test ignored.
 
 ### Doctor health status
 

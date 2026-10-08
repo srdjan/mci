@@ -57,6 +57,9 @@ after any failed check. | Medium | Small | None | DONE |
 | [015](015-prune-recovered-control-files.md) | P1: obsolete control files | Retain
 controls only for pending recovery. | Medium | Small | None | DONE |
 
+| [016](016-remove-unused-declarations.md) | P2: unused declarations | Remove unused
+installation error and protocol export. | Low | Small | None | DONE |
+
 Plans 001, 002, and 003 have independent implementation boundaries. Plans 004, 005, and
 006 share `src/hooks.ts` and its tests. Execute the three hook plans sequentially.
 
@@ -218,5 +221,10 @@ Completed: Plan 008 preserves configuration permissions. The focused suites pass
 tests. Type, lint, layer, and suppression checks pass. The review found no defects.
 
 Completed: Plan 015 separates pending controls from retained terminal records and logs.
-Five focused tests passed in 871 ms. The main agent reviewed source and public tests.
-Next: the main agent owns P2, unused declarations. The maintainer owns repository backups.
+Five focused tests passed in 871 ms. The main agent reviewed source and public tests. Its
+commit is `731c299`. The gate passed 453 Deno tests and 339 native checks, with one
+platform test ignored. Plan 016 removes only unused declarations and passes six focused
+tests. The read-only worker reviews the deletion before the complete gate.
+
+Next: the main agent owns documentation reconciliation. The maintainer owns repository
+backups.
