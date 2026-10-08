@@ -4,10 +4,10 @@
 
 This review identifies eight hardening items and three pruning items on local `main` at
 `c1215f2`, dated 2026-10-08. The user authorized the complete list. H1, exact monitor
-shutdown, H2, existing file permissions, and H3, concurrent Codex edits, are complete.
-Five hardening items and three pruning items remain open. The review covers Deno
-execution, daemon storage, hook installation, service control, packaging, and the native
-monitor.
+shutdown, H2, existing file permissions, H3, concurrent Codex edits, and H4, planner and
+worker input, and H5, submission rollback diagnostics, are complete. Three hardening items
+and three pruning items remain open. The review covers Deno execution, daemon storage,
+hook installation, service control, packaging, and the native monitor.
 
 The earlier list had no open items. Its six hardening units and two pruning units remain
 complete. The six plans in [README.md](README.md) also remain complete. The labels below
@@ -98,17 +98,19 @@ rejected. Every new test finished below one second.
 
 ### H5: Report submission rollback failures
 
-Evidence: [src/daemon.ts:707](../src/daemon.ts#L707) discards spool removal failure after
-journal acceptance fails. The shutdown path discards journal and spool cleanup results at
-[src/daemon.ts:713](../src/daemon.ts#L713). Snapshot acceptance failure also discards both
-cleanup results at [src/daemon.ts:721](../src/daemon.ts#L721). If cleanup fails, artifacts
-or journal entries remain without a cleanup diagnostic in the response.
+[Plan 011](011-report-submission-rollback.md) records the completed fix. Public baseline
+checks reproduce lost cleanup diagnostics and premature execution of rejected requests.
+The rollback helper retains the primary rejection and each attempted cleanup failure.
+Journal cleanup precedes request removal. Failed journal cleanup retains recovery files.
+Any cleanup failure blocks repository work and reaches daemon diagnostics.
 
-The proposed change retains the primary failure and each cleanup failure. The executor
-must define whether failed cleanup blocks further work for that repository. Checks must
-inject journal cleanup and spool removal failures through daemon capabilities. Checks must
-confirm that rejected work never starts and recovery evidence remains available. These
-secondary failures remain untested in this review.
+Candidates stay outside the executable queue until snapshot publication succeeds. Six
+final public regressions passed. Checks cover both rejection routes, cleanup ordering,
+retained files, later admission after successful cleanup, both shutdown boundaries, and
+active completion during candidate publication. Every new test finished below one second.
+
+Recovery uses the existing journal and retention rules. The fix adds no retry or new
+protocol field. Power-loss durability remains outside this evidence.
 
 ### H6: Surface final snapshot publication failures
 

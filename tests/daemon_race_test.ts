@@ -1,5 +1,9 @@
 import { rpc, submit } from "../src/client.ts";
-import { type DaemonStore, openDaemonStore } from "../src/daemon-store.ts";
+import {
+  type DaemonStore,
+  openDaemonStore,
+  type PendingRequest,
+} from "../src/daemon-store.ts";
 import { startDaemon } from "../src/daemon.ts";
 import { type ServicePaths, servicePaths } from "../src/paths.ts";
 import type { Terminal } from "../src/protocol.ts";
@@ -719,10 +723,16 @@ const withRaceDaemon = async (
   openStore: (paths: ServicePaths) => Promise<Result<DaemonStore>>,
   test: (directory: string) => Promise<void>,
   resolvePath?: (path: string) => Promise<Result<string>>,
+  reportDiagnostic?: (detail: string) => void,
 ): Promise<void> => {
   const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-race-" });
   try {
-    const started = await startDaemon({ directory, openStore, resolvePath });
+    const started = await startDaemon({
+      directory,
+      openStore,
+      resolvePath,
+      reportDiagnostic,
+    });
     assert(started.ok, started.ok ? "" : started.error);
     try {
       await test(directory);
@@ -734,6 +744,374 @@ const withRaceDaemon = async (
     await Deno.remove(directory, { recursive: true });
   }
 };
+
+Deno.test("submission rollback reports acceptance and file cleanup failures", () =>
+  inWorkspace(async (workspace) => {
+    const events: string[] = [];
+    const diagnostics: string[] = [];
+    let accepted: PendingRequest | null = null;
+    const openStore = async (paths: ServicePaths): Promise<Result<DaemonStore>> => {
+      const opened = await openDaemonStore(paths);
+      if (!opened.ok) return opened;
+      return ok({
+        ...opened.value,
+        accept: async (request) => {
+          events.push("accept");
+          accepted = request;
+          const stored = await opened.value.accept(request);
+          assert(stored.ok, stored.ok ? "" : stored.error);
+          return err("injected acceptance failure");
+        },
+        finish: async (id) => {
+          events.push("finish");
+          return await opened.value.finish(id);
+        },
+        removeRun: () => {
+          events.push("remove");
+          return Promise.resolve(err("injected file cleanup failure"));
+        },
+      });
+    };
+
+    await withRaceDaemon(
+      openStore,
+      async (directory) => {
+        assert(
+          (await rpc({ version: 1, op: "register", path: workspace }, directory)).ok,
+        );
+        const result = await submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "accept-failure.yml",
+            job: "check",
+            source: fixture("      - run: touch forbidden"),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+        assert(!result.ok);
+        assert(result.error.includes("injected acceptance failure"), result.error);
+        assert(result.error.includes("injected file cleanup failure"), result.error);
+        equal(events, ["accept", "finish", "remove"]);
+        const pending = accepted;
+        assert(pending !== null);
+        assert(await exists(pending.log));
+        assert(!await exists(`${workspace}/forbidden`));
+        const status = await rpc({ version: 1, op: "status" }, directory);
+        assert(status.ok, status.ok ? "" : status.error);
+        assert(status.value.repositories[0]?.blocked?.includes("file cleanup failure"));
+        equal(diagnostics.length, 1);
+        assert(diagnostics[0]?.includes(pending.id));
+        assert(diagnostics[0]?.includes("accept"));
+        assert(diagnostics[0]?.includes("injected acceptance failure"));
+        assert(diagnostics[0]?.includes("injected file cleanup failure"));
+      },
+      undefined,
+      (detail) => diagnostics.push(detail),
+    );
+  }));
+
+Deno.test("submission rollback retains files when journal cleanup fails", () =>
+  inWorkspace(async (workspace) => {
+    const diagnostics: string[] = [];
+    let accepted: PendingRequest | null = null;
+    let failedCandidate = false;
+    let removalCalls = 0;
+    const openStore = async (paths: ServicePaths): Promise<Result<DaemonStore>> => {
+      const opened = await openDaemonStore(paths);
+      if (!opened.ok) return opened;
+      return ok({
+        ...opened.value,
+        accept: async (request) => {
+          accepted = request;
+          return await opened.value.accept(request);
+        },
+        finish: () => Promise.resolve(err("injected journal cleanup failure")),
+        removeRun: async (path, id) => {
+          removalCalls += 1;
+          return await opened.value.removeRun(path, id);
+        },
+        writeSnapshot: async (current) => {
+          if (!failedCandidate && current.repositories[0]?.queued === 1) {
+            failedCandidate = true;
+            return err("injected candidate snapshot failure");
+          }
+          return await opened.value.writeSnapshot(current);
+        },
+      });
+    };
+
+    await withRaceDaemon(
+      openStore,
+      async (directory) => {
+        assert(
+          (await rpc({ version: 1, op: "register", path: workspace }, directory)).ok,
+        );
+        const result = await submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "journal-cleanup-failure.yml",
+            job: "check",
+            source: fixture("      - run: touch forbidden"),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+        assert(!result.ok);
+        assert(
+          result.error.includes("injected candidate snapshot failure"),
+          result.error,
+        );
+        assert(result.error.includes("injected journal cleanup failure"), result.error);
+        equal(removalCalls, 0);
+        const pending = accepted;
+        assert(pending !== null);
+        assert(await exists(pending.log));
+        const journal = JSON.parse(await Deno.readTextFile(`${directory}/requests.json`));
+        assert(
+          journal.requests.some((request: { readonly id: string }) =>
+            request.id === pending.id
+          ),
+        );
+        const status = await rpc({ version: 1, op: "status" }, directory);
+        assert(status.ok, status.ok ? "" : status.error);
+        assert(
+          status.value.repositories[0]?.blocked?.includes("journal cleanup failure"),
+        );
+        equal(diagnostics.length, 1);
+        assert(diagnostics[0]?.includes(pending.id));
+        assert(diagnostics[0]?.includes("snapshot"));
+        assert(!await exists(`${workspace}/forbidden`));
+      },
+      undefined,
+      (detail) => diagnostics.push(detail),
+    );
+  }));
+
+Deno.test("submission rollback cleanup permits the next request", () =>
+  inWorkspace(async (workspace) => {
+    let accepted: PendingRequest | null = null;
+    let failedCandidate = false;
+    const openStore = async (paths: ServicePaths): Promise<Result<DaemonStore>> => {
+      const opened = await openDaemonStore(paths);
+      if (!opened.ok) return opened;
+      return ok({
+        ...opened.value,
+        accept: async (request) => {
+          accepted ??= request;
+          return await opened.value.accept(request);
+        },
+        writeSnapshot: async (current) => {
+          if (!failedCandidate && current.repositories[0]?.queued === 1) {
+            failedCandidate = true;
+            return err("injected one-time snapshot failure");
+          }
+          return await opened.value.writeSnapshot(current);
+        },
+      });
+    };
+
+    await withRaceDaemon(openStore, async (directory) => {
+      assert((await rpc({ version: 1, op: "register", path: workspace }, directory)).ok);
+      const run = (workflow: string, command: string) =>
+        submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow,
+            job: "check",
+            source: fixture(`      - run: ${command}`),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+      const rejected = await run("rejected.yml", "touch forbidden");
+      assert(!rejected.ok);
+      const first = accepted;
+      assert(first !== null);
+      assert(!await exists(first.log));
+      const completed = await run("accepted.yml", "touch allowed");
+      assert(completed.ok, completed.ok ? "" : completed.error);
+      assert(await exists(`${workspace}/allowed`));
+      assert(!await exists(`${workspace}/forbidden`));
+      const status = await rpc({ version: 1, op: "status" }, directory);
+      assert(status.ok, status.ok ? "" : status.error);
+      equal(status.value.repositories[0]?.blocked, null);
+    });
+  }));
+
+for (const during of ["acceptance", "publication"] as const) {
+  Deno.test(`shutdown during ${during} reports rollback cleanup failure`, () =>
+    inWorkspace(async (workspace) => {
+      const acceptance = gate();
+      const diagnostics: string[] = [];
+      const accepted = Promise.withResolvers<PendingRequest>();
+      let removalCalls = 0;
+      let closeDaemon: (() => Promise<void>) | null = null;
+      const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-shutdown-" });
+      try {
+        const started = await startDaemon({
+          directory,
+          reportDiagnostic: (detail) => diagnostics.push(detail),
+          openStore: async (paths) => {
+            const opened = await openDaemonStore(paths);
+            if (!opened.ok) return opened;
+            return ok({
+              ...opened.value,
+              accept: async (request) => {
+                accepted.resolve(request);
+                const stored = await opened.value.accept(request);
+                if (during === "acceptance") {
+                  acceptance.arrive();
+                  await acceptance.wait();
+                }
+                return stored;
+              },
+              writeSnapshot: async (current) => {
+                if (during === "publication" && current.repositories[0]?.queued === 1) {
+                  acceptance.arrive();
+                  await acceptance.wait();
+                }
+                return await opened.value.writeSnapshot(current);
+              },
+              finish: () => Promise.resolve(err("injected shutdown journal failure")),
+              removeRun: async (path, id) => {
+                removalCalls += 1;
+                return await opened.value.removeRun(path, id);
+              },
+            });
+          },
+        });
+        assert(started.ok, started.ok ? "" : started.error);
+        closeDaemon = started.value.close;
+        assert(
+          (await rpc({ version: 1, op: "register", path: workspace }, directory)).ok,
+        );
+        const request = submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "shutdown-acceptance.yml",
+            job: "check",
+            source: fixture("      - run: touch forbidden"),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+        await acceptance.ready;
+        const closing = started.value.close();
+        acceptance.release();
+        await closing;
+        const result = await request;
+        assert(!result.ok);
+        equal(removalCalls, 0);
+        const pending = await accepted.promise;
+        assert(await exists(pending.log));
+        equal(diagnostics.length, 1);
+        assert(diagnostics[0]?.includes(pending.id));
+        assert(diagnostics[0]?.includes("shutdown"));
+        assert(diagnostics[0]?.includes("injected shutdown journal failure"));
+        assert(!await exists(`${workspace}/forbidden`));
+      } finally {
+        acceptance.release();
+        if (closeDaemon !== null) await closeDaemon();
+        await Deno.remove(directory, { recursive: true });
+      }
+    }));
+}
+
+Deno.test("candidate publication failure cannot start rejected work", () =>
+  inWorkspace(async (workspace) => {
+    const publication = gate();
+    const begun: string[] = [];
+    let heldCandidate = false;
+    let acceptedCount = 0;
+    let rejected: PendingRequest | null = null;
+    const openStore = async (paths: ServicePaths): Promise<Result<DaemonStore>> => {
+      const opened = await openDaemonStore(paths);
+      if (!opened.ok) return opened;
+      return ok({
+        ...opened.value,
+        accept: async (request) => {
+          acceptedCount += 1;
+          if (acceptedCount === 2) rejected = request;
+          return await opened.value.accept(request);
+        },
+        begin: async (id, started) => {
+          begun.push(id);
+          return await opened.value.begin(id, started);
+        },
+        writeSnapshot: async (current) => {
+          const state = current.repositories[0];
+          if (!heldCandidate && state?.active !== null && state?.queued === 1) {
+            heldCandidate = true;
+            publication.arrive();
+            await publication.wait();
+            return err("injected held candidate failure");
+          }
+          return await opened.value.writeSnapshot(current);
+        },
+      });
+    };
+
+    await withRaceDaemon(openStore, async (directory) => {
+      assert((await rpc({ version: 1, op: "register", path: workspace }, directory)).ok);
+      const run = (workflow: string, command: string) =>
+        submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow,
+            job: "check",
+            source: fixture(`      - run: ${command}`),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+      const active = run(
+        "active.yml",
+        "touch active-ready; while [ ! -f release-active ]; do sleep 0.01; done",
+      );
+      try {
+        await waitFor(() => exists(`${workspace}/active-ready`));
+        const candidate = run("candidate.yml", "touch rejected-started");
+        try {
+          await publication.ready;
+          await Deno.writeTextFile(`${workspace}/release-active`, "release");
+          const completed = await active;
+          assert(completed.ok, completed.ok ? "" : completed.error);
+          publication.release();
+          const failed = await candidate;
+          assert(!failed.ok);
+          assert(failed.error.includes("injected held candidate failure"), failed.error);
+          assert(!await exists(`${workspace}/rejected-started`));
+          const pending = rejected;
+          assert(pending !== null);
+          assert(!begun.includes(pending.id), "rejected request entered execution");
+          assert(!await exists(pending.log));
+        } finally {
+          publication.release();
+          await Deno.writeTextFile(`${workspace}/release-active`, "release");
+          await candidate;
+        }
+      } finally {
+        await Deno.writeTextFile(`${workspace}/release-active`, "release");
+        await active;
+      }
+    });
+  }));
 
 Deno.test("slow repository resolution preserves submission ingress order", () =>
   inWorkspace(async (workspace) => {

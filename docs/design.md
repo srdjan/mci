@@ -87,6 +87,15 @@ request does not resume automatically. These deadlines are policies, not measure
 limits. A terminal reply clears both deadlines before the client drains its log. Blocked
 terminal output writes remain outside these socket deadlines.
 
+Submission rejection finishes the journal before removing request files. Failed journal
+cleanup retains those files for recovery. Any cleanup failure blocks further repository
+work. The response preserves the primary rejection and cleanup failures. The daemon also
+writes cleanup diagnostics to stderr, including during shutdown.
+
+The daemon publishes a candidate queue count before admission. The candidate cannot enter
+the executable queue until publication succeeds. Shutdown after publication still rejects
+the candidate and completes rollback.
+
 The daemon journals every accepted request before it confirms acceptance. On restart, it
 records each unfinished request that began as INTERRUPTED and does not retry it. A durable
 terminal record preserves completed work if projection or journal cleanup fails.

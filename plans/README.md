@@ -40,6 +40,9 @@ priorities shown to the user. Effort describes scope, rather than elapsed time. 
 | [010](010-align-planner-worker-input.md) | H4: planner and worker input | Execute
 accepted plans with display metadata. | Medium | Small | None | DONE |
 
+| [011](011-report-submission-rollback.md) | H5: submission rollback | Preserve rejection
+and cleanup diagnostics. | High | Medium | None | DONE |
+
 Plans 001, 002, and 003 have independent implementation boundaries. Plans 004, 005, and
 006 share `src/hooks.ts` and its tests. Execute the three hook plans sequentially.
 
@@ -102,12 +105,16 @@ migration and forced installer termination are explicit deferred boundaries.
 
 ## Worklog and ownership
 
-Plan 008, existing file permissions, is committed locally as `2278de8`. Its complete gate
-passed 413 Deno tests and 339 native checks, with one platform test ignored. Plan 009,
-concurrent Codex edits, is committed as `a4a7763`. Its gate passed 420 Deno tests and 339
-native checks, with one platform test ignored. Plan 010, planner and worker input, is in
-progress. The accepted design compares captured bytes and identity before replacement.
-Separate inspection and rename retain a concurrency gap.
+Plan 008, existing file permissions, is committed as `2278de8`. Its gate passed 413 Deno
+tests and 339 native checks. Plan 009, concurrent Codex edits, is committed as `a4a7763`.
+Its gate passed 420 Deno tests and 339 native checks. Plan 010, planner and worker input,
+is committed as `72c96e4`. Its gate passed 425 Deno tests and 339 native checks. Each gate
+ignored one opposite-platform test. Plan 011, submission rollback diagnostics, is in
+progress.
+
+The concurrency guard compares captured bytes and identity before replacement. Separate
+inspection and rename retain a concurrency gap. Unselected job names remain display
+metadata.
 
 The active objective covers all eight hardening items and all three pruning items. H1,
 exact monitor shutdown, is complete at `c5fb75d`. H2, existing file permissions, is
@@ -118,10 +125,9 @@ The next submission cleanup unit will block further repository work after cleanu
 Failed journal cleanup will retain request files. Rejection will preserve the primary
 error and each attempted cleanup diagnostic.
 
-Remaining order: submission cleanup diagnostics, snapshot diagnostics, Homebrew location,
-doctor status, recovery files, and unused declarations. Homebrew consolidation completes
-the remaining part of P3, shared native primitives. Existing process consolidation remains
-complete.
+Remaining order: snapshot diagnostics, Homebrew location, doctor status, recovery files,
+and unused declarations. Homebrew consolidation completes the remaining part of P3, shared
+native primitives. Existing process consolidation remains complete.
 
 The maintainer authorized all numbered items. Capacity measurement remains an unselected
 direction option. Existing platform, visual, and power-loss evidence limits remain
@@ -190,5 +196,5 @@ boundaries.
 Completed: Plan 008 preserves configuration permissions. The focused suites passed 134
 tests. Type, lint, layer, and suppression checks pass. The review found no defects.
 
-Next: the main agent owns H5, submission cleanup diagnostics. The maintainer owns
-repository backups.
+Next: the main agent owns H6, final snapshot diagnostics. The maintainer owns repository
+backups.

@@ -1,5 +1,26 @@
 # Verification
 
+## Submission rollback (2026-10-08)
+
+The baseline acceptance path returned only the primary error after request removal failed.
+Its public regression failed in 48 ms. The baseline queue path admitted a rejected
+candidate during active completion. Its public regression failed in 290 ms.
+
+The main agent restored the fix after each baseline probe. The focused daemon suites
+passed 69 tests. The final six rollback regressions passed in 602 ms after adding shutdown
+coverage for publication. Each new test finished below one second. Type, lint, layer, and
+suppression checks passed. The main agent reviewed every changed line.
+
+Checks retain rejection and cleanup diagnostics, journal entries, and request files after
+journal cleanup failure. They block later repository work after cleanup failure and permit
+later admission after successful cleanup. Candidates cannot enter execution before their
+snapshot succeeds. Shutdown during acceptance and publication retains diagnostics.
+
+The sandbox denies disposable Unix sockets. The initial probe stopped at EPERM before its
+behavior assertion. Approved host runs reached the assertions. Review strengthened test
+teardown and added the shutdown check after publication. Power-loss durability remains
+unmeasured.
+
 ## Planner and worker input (2026-10-08)
 
 The public baseline regression returned code 1 with
@@ -16,6 +37,9 @@ test finished below one second. Type, lint, layer, and suppression checks passed
 The main agent reviewed every changed line and corrected a malformed test fixture. The
 direct CLI regression runs only on macOS, which matches the command's platform policy.
 Sandbox process inspection failed with EPERM. Host execution passed.
+
+The Plan 010 commit is `72c96e4`. Its local gate passed 425 Deno tests and 339 native
+checks, with one opposite-platform test ignored.
 
 ## Concurrent Codex edits (2026-10-08)
 

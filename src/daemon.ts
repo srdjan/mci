@@ -70,6 +70,7 @@ type DaemonRuntime = {
   readonly resolvePath: (path: string) => Promise<Result<string>>;
   readonly shutdown: AbortController;
   readonly requestDeadlineMs: number;
+  readonly reportDiagnostic: (detail: string) => void;
   closed: boolean;
 };
 
@@ -105,7 +106,7 @@ const signalWorker = (
   }
 };
 
-const snapshot = (runtime: DaemonRuntime): Snapshot => ({
+const snapshot = (runtime: DaemonRuntime, candidate?: MutableRepository): Snapshot => ({
   version: 1,
   instance: runtime.instance,
   pid: Deno.pid,
@@ -114,7 +115,7 @@ const snapshot = (runtime: DaemonRuntime): Snapshot => ({
     state,
   ): RepositoryState => ({
     ...state.repository,
-    queued: state.queue.length,
+    queued: state.queue.length + (state === candidate ? 1 : 0),
     active: state.active === null ? null : {
       id: state.active.id,
       workflow: state.active.workflow,
@@ -128,8 +129,11 @@ const snapshot = (runtime: DaemonRuntime): Snapshot => ({
   })),
 });
 
-const publish = async (runtime: DaemonRuntime): Promise<Result<void>> =>
-  await runtime.store.writeSnapshot(snapshot(runtime));
+const publish = async (
+  runtime: DaemonRuntime,
+  candidate?: MutableRepository,
+): Promise<Result<void>> =>
+  await runtime.store.writeSnapshot(snapshot(runtime, candidate));
 
 const hold = (runtime: DaemonRuntime, id: string): void => {
   runtime.holds.set(id, (runtime.holds.get(id) ?? 0) + 1);
@@ -649,6 +653,34 @@ const watchSubmission = async (
   closeConnection(job.owner.connection);
 };
 
+const rollbackSubmission = async (
+  runtime: DaemonRuntime,
+  repository: MutableRepository,
+  id: string,
+  primary: string,
+): Promise<string> => {
+  const failures: string[] = [];
+  const finished = await runtime.store.finish(id);
+  if (!finished.ok) {
+    failures.push(`request journal cleanup failed: ${finished.error}`);
+  } else {
+    const removed = await runtime.store.removeRun(repository.repository.path, id);
+    if (!removed.ok) failures.push(`request file cleanup failed: ${removed.error}`);
+  }
+  if (failures.length === 0) return primary;
+  const detail = `${primary}; ${failures.join("; ")}`;
+  repository.blocked ??= `submission rollback failed: ${detail}`;
+  const published = await publish(runtime);
+  const diagnostic = published.ok
+    ? detail
+    : `${detail}; rollback snapshot write failed: ${published.error}`;
+  runtime.reportDiagnostic(
+    `mci daemon: submission rollback failed for ${id}: ${diagnostic}`,
+  );
+  pump(runtime, repository);
+  return diagnostic;
+};
+
 const prepareSubmission = async (
   runtime: DaemonRuntime,
   connection: Deno.UnixConn,
@@ -705,27 +737,29 @@ const prepareSubmission = async (
   };
   const accepted = await runtime.store.accept(pending);
   if (!accepted.ok) {
-    await runtime.store.removeRun(repository.repository.path, id);
-    await sendJson(connection, responseError("storage", accepted.error));
+    const detail = await rollbackSubmission(runtime, repository, id, accepted.error);
+    await sendJson(connection, responseError("storage", detail));
     closeConnection(connection);
     return null;
   }
   if (runtime.closed) {
-    await runtime.store.finish(id);
-    await runtime.store.removeRun(repository.repository.path, id);
+    await rollbackSubmission(runtime, repository, id, "daemon is closed");
+    closeConnection(connection);
+    return null;
+  }
+  const published = await publish(runtime, repository);
+  if (!published.ok) {
+    const detail = await rollbackSubmission(runtime, repository, id, published.error);
+    await sendJson(connection, responseError("storage", detail));
+    closeConnection(connection);
+    return null;
+  }
+  if (runtime.closed) {
+    await rollbackSubmission(runtime, repository, id, "daemon is closed");
     closeConnection(connection);
     return null;
   }
   repository.queue.push(job);
-  const published = await publish(runtime);
-  if (!published.ok) {
-    repository.queue.splice(repository.queue.indexOf(job), 1);
-    await runtime.store.finish(id);
-    await runtime.store.removeRun(repository.repository.path, id);
-    await sendJson(connection, responseError("storage", published.error));
-    closeConnection(connection);
-    return null;
-  }
   hold(runtime, id);
   const sent = await sendJson(connection, {
     version: 1,
@@ -919,6 +953,7 @@ const prepareRuntime = async (
   store: DaemonStore,
   resolvePath: (path: string) => Promise<Result<string>>,
   requestDeadlineMs: number,
+  reportDiagnostic: (detail: string) => void,
 ): Promise<Result<DaemonRuntime>> => {
   const runtime: DaemonRuntime = {
     store,
@@ -931,6 +966,7 @@ const prepareRuntime = async (
     resolvePath,
     shutdown: new AbortController(),
     requestDeadlineMs,
+    reportDiagnostic,
     closed: false,
   };
   for (const repository of store.repositories()) {
@@ -1053,6 +1089,7 @@ export const startDaemon = async (options: {
   readonly signal?: AbortSignal;
   readonly openStore?: (paths: ServicePaths) => Promise<Result<DaemonStore>>;
   readonly resolvePath?: (path: string) => Promise<Result<string>>;
+  readonly reportDiagnostic?: (detail: string) => void;
 } = {}): Promise<
   Result<{
     readonly closed: Promise<Result<void>>;
@@ -1111,6 +1148,7 @@ export const startDaemon = async (options: {
     store.value,
     options.resolvePath ?? ((path) => attempt(() => Deno.realPath(path))),
     options.requestDeadlineMs ?? defaultRequestDeadlineMs,
+    options.reportDiagnostic ?? console.error,
   );
   if (!runtime.ok) {
     lock.close();
