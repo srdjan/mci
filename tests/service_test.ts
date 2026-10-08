@@ -4,6 +4,7 @@ import {
   main,
   start,
   stop,
+  stopHomebrewServiceWith,
 } from "../scripts/service.ts";
 import type { ProcessIdentity } from "../src/process.ts";
 import type { Snapshot } from "../src/protocol.ts";
@@ -30,6 +31,45 @@ const identity = (
   command = "deno run /repo/src/main.ts daemon",
 ): ProcessIdentity => ({ pid: 42, pgid: 42, started, command });
 const resolved = <T>(value: T): Promise<T> => Promise.resolve(value);
+
+Deno.test("Homebrew service stop uses the located absolute command", async () => {
+  for (const brew of ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]) {
+    const calls: { command: string; args: readonly string[] }[] = [];
+    const result = await stopHomebrewServiceWith({
+      findBrew: () => resolved(ok(brew)),
+      run: (command, args) => {
+        calls.push({ command, args });
+        return resolved(command === "brew" ? err("brew is outside PATH") : ok(""));
+      },
+    });
+
+    assert(result.ok, result.ok ? "" : result.error);
+    equal(calls, [{ command: brew, args: ["services", "stop", "mci"] }]);
+  }
+});
+
+Deno.test("Homebrew service stop preserves the command error", async () => {
+  const result = await stopHomebrewServiceWith({
+    findBrew: () => resolved(ok("/usr/local/bin/brew")),
+    run: () => resolved(err("service stop failed")),
+  });
+
+  equal(result, err("service stop failed"));
+});
+
+Deno.test("Homebrew service stop launches no command when Homebrew is absent", async () => {
+  const calls: string[] = [];
+  const result = await stopHomebrewServiceWith({
+    findBrew: () => resolved(err("Homebrew is absent")),
+    run: (command) => {
+      calls.push(command);
+      return resolved(ok(""));
+    },
+  });
+
+  equal(result, err("Homebrew is absent"));
+  equal(calls, []);
+});
 
 type SceneOptions = {
   readonly daemon?: boolean;

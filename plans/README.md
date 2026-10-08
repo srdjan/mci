@@ -23,7 +23,7 @@ existing file permissions.
 
 Plan numbers show the recommended execution order. Audit finding numbers preserve the six
 priorities shown to the user. Effort describes scope, rather than elapsed time. Status is
-`TODO` until execution starts, then `IN PROGRESS`, `DONE`, or `BLOCKED` with a reason.
+`TODO` until execution starts, then `DONE`, `DONE`, or `BLOCKED` with a reason.
 
 | Plan                                             | Audit finding                 | Outcome                                             | Priority | Effort | Depends on                                        | Status |
 | ------------------------------------------------ | ----------------------------- | --------------------------------------------------- | -------- | ------ | ------------------------------------------------- | ------ |
@@ -46,6 +46,10 @@ and cleanup diagnostics. | High | Medium | None | DONE |
 | [012](012-report-final-snapshot-failures.md) | H6: final snapshot diagnostics | Report
 fallback publication faults without changing results. | Medium | Small | 011: diagnostic
 capability | DONE |
+
+| [013](013-share-homebrew-location.md) | H7: absolute Homebrew location; P3: shared
+native primitives | Share supported location across installers and service control. |
+Medium | Small | None | DONE |
 
 Plans 001, 002, and 003 have independent implementation boundaries. Plans 004, 005, and
 006 share `src/hooks.ts` and its tests. Execute the three hook plans sequentially.
@@ -109,16 +113,16 @@ migration and forced installer termination are explicit deferred boundaries.
 
 ## Worklog and ownership
 
-Plan 008, existing file permissions, is committed as `2278de8`. Its gate passed 413 Deno
-tests and 339 native checks. Plan 009, concurrent Codex edits, is committed as `a4a7763`.
-Its gate passed 420 Deno tests and 339 native checks. Plan 010, planner and worker input,
-is committed as `72c96e4`. Its gate passed 425 Deno tests and 339 native checks. Each gate
-ignored one opposite-platform test. Plan 011, submission rollback diagnostics, is in
-progress.
+Plan 008, existing file permissions, is committed as `2278de8`. Plan 009, concurrent Codex
+edits, is committed as `a4a7763`. Plan 010, planner and worker input, is committed as
+`72c96e4`. Plan 011, submission rollback, is committed as `3d1f46c`. Plan 012, final
+snapshot diagnostics, is committed as `81b3368`. Its gate passed 433 Deno tests and 339
+native checks, with one opposite-platform test ignored. Plan 013, shared Homebrew
+location, is in progress.
 
-The concurrency guard compares captured bytes and identity before replacement. Separate
-inspection and rename retain a concurrency gap. Unselected job names remain display
-metadata.
+The concurrency guard retains a check-to-rename gap. Unselected names remain display
+metadata. Failed journal cleanup retains request files. Cleanup faults block repository
+work. Snapshot faults preserve results and do not add a repository block.
 
 The active objective covers all eight hardening items and all three pruning items. H1,
 exact monitor shutdown, is complete at `c5fb75d`. H2, existing file permissions, is
@@ -131,9 +135,9 @@ block further repository work. Failed journal cleanup retains request files. Pla
 final snapshot diagnostics, passes both public fault regressions. Snapshot faults retain
 workflow results and do not add a repository block.
 
-Remaining order: Homebrew location, doctor status, recovery files, and unused
-declarations. Homebrew consolidation completes the remaining part of P3, shared native
-primitives. Existing process consolidation remains complete.
+Remaining order: doctor status, recovery files, and unused declarations. Homebrew
+consolidation completes the remaining part of P3, shared native primitives. Existing
+process consolidation remains complete.
 
 The maintainer authorized all numbered items. Capacity measurement remains an unselected
 direction option. Existing platform, visual, and power-loss evidence limits remain
@@ -202,5 +206,4 @@ boundaries.
 Completed: Plan 008 preserves configuration permissions. The focused suites passed 134
 tests. Type, lint, layer, and suppression checks pass. The review found no defects.
 
-Next: the main agent owns H7, absolute Homebrew location. The maintainer owns repository
-backups.
+Next: the main agent owns H8, doctor exit status. The maintainer owns repository backups.

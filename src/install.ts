@@ -1,12 +1,12 @@
 // @light-fp adapter
 import { rpc } from "./client.ts";
 import { captureCommand } from "./command.ts";
+import { findBrew } from "./homebrew.ts";
 import { type MonitorProcessCapabilities, quitMonitorWith } from "./monitor-process.ts";
 import { attempt, err, ok, type Result } from "./result.ts";
 
 const bundleName = "mci Monitor.app";
 const ownerValue = "mci";
-const knownBrews = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"] as const;
 const commandPolicy = {
   timeoutMs: 120000,
   reapMs: 1000,
@@ -51,14 +51,6 @@ const output = async (
   return run.value.status.code === 0
     ? ok(stdout)
     : err(stderr || `${executable} exited with ${run.value.status.code}`);
-};
-
-const findBrew = async (): Promise<Result<string>> => {
-  for (const path of knownBrews) {
-    const info = await attempt(() => Deno.stat(path));
-    if (info.ok && info.value.isFile) return ok(path);
-  }
-  return err("Homebrew was not found at /opt/homebrew or /usr/local.");
 };
 
 const serviceWasPresent = (text: string): Result<boolean> => {

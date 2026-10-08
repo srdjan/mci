@@ -3,11 +3,11 @@
 ## Scope and result
 
 This review identifies eight hardening items and three pruning items on local `main` at
-`c1215f2`, dated 2026-10-08. The user authorized the complete list. H1 through H6 are
-complete. Those items cover monitor shutdown, permissions, concurrency, worker input,
-submission rollback, and snapshot diagnostics. Two hardening items and three pruning items
-remain open. The review covers Deno execution, daemon storage, hook installation, service
-control, packaging, and the native monitor.
+`c1215f2`, dated 2026-10-08. The user authorized the complete list. Seven hardening items
+are complete. H8, doctor exit status, remains open. P3, shared native primitives, is
+complete. P1, obsolete control files, and P2, unused declarations, remain open. The review
+covers Deno execution, daemon storage, hook installation, service control, packaging, and
+the native monitor.
 
 The earlier list had no open items. Its six hardening units and two pruning units remain
 complete. The six plans in [README.md](README.md) also remain complete. The labels below
@@ -126,17 +126,16 @@ remains unmeasured.
 
 ### H7: Resolve Homebrew through supported absolute paths
 
-Evidence: [scripts/service.ts:827](../scripts/service.ts#L827) finds loaded Homebrew
-services through absolute system commands. The subsequent stop invokes bare `brew` at
-[scripts/service.ts:848](../scripts/service.ts#L848). If `PATH` excludes the Homebrew
-directory, source start or stop cannot disable the loaded service. The failure prevents
-reliable shutdown or replacement of that service. The packaged installer already resolves
-supported absolute paths at [src/install.ts:55](../src/install.ts#L55).
+[Plan 013](013-share-homebrew-location.md) records the completed fix and Homebrew
+consolidation. Hook installation, packaged installation, and source service control share
+one supported absolute locator. Source stop uses the selected executable and keeps its
+existing command budget.
 
-The proposed change uses the same supported locator for source service control. Checks
-must cover restricted `PATH`, both supported installation locations, and an absent
-Homebrew executable. This review inspected command selection; it did not stop the user's
-service.
+The public baseline service regression failed because bare `brew` was outside `PATH`. The
+focused suites passed 38 tests. Checks cover both supported paths, precedence, nonregular
+files, inspection errors, absence, command failure, and no launch after absence. A native
+child probe confirms location with restricted `PATH`. It inspects files only. The checks
+stop no user service. Every new test finished below one second.
 
 ### H8: Return failure for failed doctor checks
 
@@ -194,21 +193,13 @@ Removing additional unused export modifiers alone does not justify separate work
 
 ### P3: Consolidate monitor process control and Homebrew location code
 
-Monitor process consolidation is complete with H1, exact monitor shutdown. Homebrew
-location consolidation remains open with H7, absolute Homebrew location.
+Consolidation is complete through Plans 007 and 013. Monitor control shares exact matching
+and confirmed shutdown. Homebrew location uses one supported locator across hook
+installation, packaged installation, and source service control.
 
-The review baseline contained different monitor quit implementations. Plan 007 replaced
-both implementations with the shared helper. Evidence:
-[src/install.ts:55](../src/install.ts#L55) and [src/hooks.ts:51](../src/hooks.ts#L51)
-repeat supported Homebrew location checks. Source service control bypasses those checks at
-[scripts/service.ts:848](../scripts/service.ts#L848). These copies require coordinated
-changes and already produce different behavior.
-
-The proposed change shares narrow native primitives with H1, exact monitor shutdown, and
-H7, absolute Homebrew location. The packaged and source installers keep their distinct
-installation and rollback transactions. The source installer remains supported and must
-stay. This pruning belongs with the related hardening work; it does not require a separate
-framework.
+The installers retain their command budgets, installation transactions, and rollback
+policies. Focused checks preserve both callers' behavior. The supported source installer
+remains available.
 
 ## Measurement and documentation follow-ups
 
@@ -262,9 +253,9 @@ boundary has lower priority than the listed application failures.
 
 ## Next action and ownership
 
-Completed: H1, exact monitor shutdown, and H2, existing file permissions, have separate
-units. The user authorized the full list in order. The main agent owns completion and
-validation of each unit. H3, concurrent Codex edits, is next.
+Completed: seven hardening items and shared native primitives have validated units. The
+main agent owns H8, doctor exit status, next. Obsolete control files, unused declarations,
+and documentation reconciliation remain after that unit.
 
 Each accepted unit needs its own local commit on `main`. The repository maintainer owns
 pushes and repository backups.

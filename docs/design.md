@@ -337,6 +337,11 @@ available. `VERIFICATION.md` records observed coverage and keeps evidence limits
 
 ## Homebrew package and managed hooks
 
+Hook installation, packaged installation, and source service control share supported
+Homebrew location checks. They inspect `/opt/homebrew/bin/brew` before
+`/usr/local/bin/brew`. Source service stop uses the selected absolute executable and
+retains its command budget. Location does not depend on `PATH`.
+
 `scripts/package.ts` compiles the CLI and builds the signed monitor bundle. It writes a
 local archive and `dist/tap/Formula/mci.rb`.
 

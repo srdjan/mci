@@ -1,6 +1,7 @@
 // @light-fp adapter
 import { rpc } from "../src/client.ts";
 import { captureCommand } from "../src/command.ts";
+import { findBrew } from "../src/homebrew.ts";
 import { servicePaths } from "../src/paths.ts";
 import { inspectProcessIdentity, type ProcessIdentity } from "../src/process.ts";
 import { attempt, err, message, ok, type Result } from "../src/result.ts";
@@ -648,6 +649,16 @@ const run = async (command: string, args: readonly string[]): Promise<Result<str
   return ok(new TextDecoder().decode(captured.value.stdout));
 };
 
+export const stopHomebrewServiceWith = async (capabilities: {
+  readonly findBrew: () => Promise<Result<string>>;
+  readonly run: (command: string, args: readonly string[]) => Promise<Result<string>>;
+}): Promise<Result<void>> => {
+  const brew = await capabilities.findBrew();
+  if (!brew.ok) return brew;
+  const stopped = await capabilities.run(brew.value, ["services", "stop", "mci"]);
+  return stopped.ok ? ok(undefined) : stopped;
+};
+
 const nativeHome = Deno.env.get("HOME") ?? "";
 const nativeStateHome = Deno.env.get("MCI_HOME");
 const nativeWorkspace = pathFrom("../");
@@ -845,10 +856,7 @@ export const nativeCapabilities: LifecycleCapabilities = {
     }
     return ok(false);
   },
-  stopHomebrewService: async () => {
-    const stopped = await run("brew", ["services", "stop", "mci"]);
-    return stopped.ok ? ok(undefined) : stopped;
-  },
+  stopHomebrewService: () => stopHomebrewServiceWith({ findBrew, run }),
   now: () => performance.now(),
   delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   stdout: console.log,

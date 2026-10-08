@@ -1,6 +1,7 @@
 // @light-fp adapter
 import { rpc } from "./client.ts";
 import { captureCommand } from "./command.ts";
+import { findBrew } from "./homebrew.ts";
 import { servicePaths } from "./paths.ts";
 import { attempt, err, ok, type Result } from "./result.ts";
 import { type Plan, planWorkflow } from "./workflow.ts";
@@ -8,7 +9,6 @@ import { type Plan, planWorkflow } from "./workflow.ts";
 const legacyHookDirectory = ".mci-hooks";
 const hookName = "pre-commit";
 const taskName = "mci:ci";
-const knownBrews = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"] as const;
 
 type JsonObject = Readonly<Record<string, unknown>>;
 
@@ -46,14 +46,6 @@ const nativeGit = async (args: readonly string[]): Promise<Result<string>> => {
   return result.value.code === 0
     ? ok(result.value.stdout)
     : err(result.value.stderr || `/usr/bin/git exited with ${result.value.code}`);
-};
-
-const findBrew = async (): Promise<Result<string>> => {
-  for (const path of knownBrews) {
-    const info = await attempt(() => Deno.stat(path));
-    if (info.ok && info.value.isFile) return ok(path);
-  }
-  return err("Homebrew was not found at /opt/homebrew or /usr/local.");
 };
 
 const nativeBrewPrefix = async (): Promise<Result<string>> => {

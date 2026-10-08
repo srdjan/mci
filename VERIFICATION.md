@@ -1,5 +1,22 @@
 # Verification
 
+## Shared Homebrew location (2026-10-08)
+
+The public baseline service regression failed in 2 ms because bare `brew` was outside
+`PATH`. Source service stop now resolves the same supported paths as both installers. The
+locator retains selection order, file inspection behavior, and absence diagnostics.
+Command budgets and installer transactions remain unchanged.
+
+The focused locator and service suites passed 38 tests in 222 ms. The native restricted
+`PATH` probe passed in 186 ms. Each new test finished below one second. The probe inspects
+files and starts no Homebrew service command. Capability checks cover both supported
+locations, precedence, missing files, inspection errors, command failures, and no launch
+after absence.
+
+Type, lint, layer, and suppression checks passed. The main agent reviewed every changed
+line. This unit completes the Homebrew part of shared native primitives. Earlier monitor
+process consolidation remains complete.
+
 ## Final snapshot diagnostics (2026-10-08)
 
 The baseline completion regression failed in 212 ms because no diagnostic reached the
@@ -16,6 +33,9 @@ native store wrappers. These checks do not establish snapshot durability after p
 
 The preceding Plan 011 commit is `3d1f46c`. Its complete gate passed 431 Deno tests and
 339 native checks, with one opposite-platform test ignored.
+
+The Plan 012 commit is `81b3368`. Its local gate passed 433 Deno tests and 339 native
+checks, with one opposite-platform test ignored.
 
 ## Submission rollback (2026-10-08)
 
