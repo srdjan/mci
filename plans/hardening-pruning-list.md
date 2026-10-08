@@ -4,9 +4,10 @@
 
 This review identifies eight hardening items and three pruning items on local `main` at
 `c1215f2`, dated 2026-10-08. The user authorized the complete list. H1, exact monitor
-shutdown, and H2, existing file permissions, are complete. Six hardening items and three
-pruning items remain open. The review covers Deno execution, daemon storage, hook
-installation, service control, packaging, and the native monitor.
+shutdown, H2, existing file permissions, and H3, concurrent Codex edits, are complete.
+Five hardening items and three pruning items remain open. The review covers Deno
+execution, daemon storage, hook installation, service control, packaging, and the native
+monitor.
 
 The earlier list had no open items. Its six hardening units and two pruning units remain
 complete. The six plans in [README.md](README.md) also remain complete. The labels below
@@ -70,18 +71,18 @@ evidence.
 
 ### H3: Detect concurrent Codex configuration edits
 
-Evidence: [src/codex.ts:320](../src/codex.ts#L320) reads `.codex/hooks.json` without
-retaining its original bytes or file identity. The installer replaces that configuration
-at [src/codex.ts:453](../src/codex.ts#L453) without checking for changes. If another
-process edits the file between those operations, replacement loses the concurrent edit.
-Foreign handler preservation covers only the configuration that the installer first reads.
+[Plan 009](009-detect-concurrent-codex-edits.md) records the completed fix. The public
+baseline regression overwrote an injected foreign handler edit. Installation now captures
+raw bytes and available identity metadata. The guarded writer refuses changed input before
+rename and removes its staged file.
 
-The proposed change detects changed input and returns a conflict before replacement. A
-recheck alone does not establish atomic exclusion against arbitrary editors. The executor
-must define that remaining concurrency boundary and preserve installation idempotence.
-Checks must exercise public installation with a controlled concurrent edit to a foreign
-handler. This review confirms the missing check through source inspection; it does not
-reproduce the concurrent edit.
+The focused suite passed 20 tests. Checks cover changed bytes, creation, removal,
+identity, mode, failed inspection, and symbolic links. Existing merging, permission, and
+repeated installation checks pass. The independent review found no defects.
+
+Inspection and rename remain separate operations. Another writer can change the file after
+the comparison. Unavailable host identity metadata and parent directory replacement retain
+their documented limits.
 
 ### H4: Align planner and worker input contracts
 

@@ -483,6 +483,12 @@ Codex hook installation preserves existing POSIX permission bits. A new `hooks.j
 the explicit `0644` creation policy. Hosts without POSIX file modes do not establish
 permission preservation through these checks.
 
+Before replacing Codex configuration, installation compares the captured input with the
+current file. Changed bytes, available identity metadata, or permissions cause a conflict.
+Concurrent creation or removal also causes a conflict. The installer retains the current
+file and removes its staged replacement. Separate inspection and rename do not exclude an
+arbitrary writer after the comparison.
+
 The adapter stores notification state separately from receipt JSON files. Receipts contain
 result metadata, not inherited environment values or transcript content. Receipt storage
 is separate from daemon projection and spool retention. The session owner removes receipt

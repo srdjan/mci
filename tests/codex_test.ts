@@ -1,10 +1,15 @@
-import { assert, equal, inWorkspace } from "./helpers.ts";
+import { assert, equal, exists, inWorkspace } from "./helpers.ts";
 import { cliSourceArgs } from "../src/runtime.ts";
 import {
   type CiReceipt,
   decodeCiReceipt,
   sessionReceiptDirectory,
 } from "../src/ci-receipt.ts";
+import {
+  type CodexConfigOperations,
+  installCodexHooksWith,
+  nativeCodexConfigOperations,
+} from "../src/codex.ts";
 import { unwrap } from "./helpers.ts";
 
 const text = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
@@ -458,6 +463,229 @@ Deno.test("Codex hook rejects a linked notification lock", () =>
   }));
 
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
+
+const assertNoCodexStages = async (directory: string): Promise<void> => {
+  const stages: string[] = [];
+  for await (const entry of Deno.readDir(directory)) {
+    if (entry.name.startsWith(".codex-state-")) stages.push(entry.name);
+  }
+  equal(stages, []);
+};
+
+Deno.test("Codex installer refuses a foreign handler edit before replacement", () =>
+  inWorkspace(async (workspace) => {
+    const repository = `${workspace}/concurrent-edit`;
+    const path = `${repository}/.codex/hooks.json`;
+    await Deno.mkdir(`${repository}/.codex`, { recursive: true });
+    const initial = {
+      hooks: {
+        ForeignEvent: [{ hooks: [{ type: "command", command: "printf first" }] }],
+      },
+    };
+    const concurrent = {
+      hooks: {
+        ForeignEvent: [{ hooks: [{ type: "command", command: "printf other" }] }],
+      },
+    };
+    const initialText = `${JSON.stringify(initial)}\n`;
+    const concurrentText = `${JSON.stringify(concurrent)}\n`;
+    equal(concurrentText.length, initialText.length);
+    await Deno.writeTextFile(path, initialText);
+    const original = await Deno.lstat(path);
+    const originalAtime = original.atime;
+    const originalMtime = original.mtime;
+    assert(originalAtime !== null);
+    assert(originalMtime !== null);
+    const configuration: CodexConfigOperations = {
+      read: nativeCodexConfigOperations.read,
+      replace: async (replacement) => {
+        await Deno.writeTextFile(path, concurrentText);
+        await Deno.utime(path, originalAtime, originalMtime);
+        return nativeCodexConfigOperations.replace(replacement);
+      },
+    };
+
+    const installed = await installCodexHooksWith(repository, configuration);
+
+    assert(!installed.ok);
+    assert(installed.error.includes("changed"));
+    assert(!installed.error.includes("printf other"));
+    equal(await Deno.readTextFile(path), concurrentText);
+    const current = await Deno.lstat(path);
+    equal(current.dev, original.dev);
+    equal(current.ino, original.ino);
+    equal(current.size, original.size);
+    equal(current.mtime?.getTime(), originalMtime.getTime());
+    equal(current.mode, original.mode);
+    await assertNoCodexStages(`${repository}/.codex`);
+  }));
+
+Deno.test("Codex installer refuses a configuration created before replacement", () =>
+  inWorkspace(async (workspace) => {
+    const repository = `${workspace}/concurrent-creation`;
+    const directory = `${repository}/.codex`;
+    const path = `${directory}/hooks.json`;
+    const concurrent = '{"foreign":"created"}\n';
+    await Deno.mkdir(directory, { recursive: true });
+    const configuration: CodexConfigOperations = {
+      read: nativeCodexConfigOperations.read,
+      replace: async (replacement) => {
+        await Deno.writeTextFile(path, concurrent);
+        return nativeCodexConfigOperations.replace(replacement);
+      },
+    };
+
+    const installed = await installCodexHooksWith(repository, configuration);
+
+    assert(!installed.ok);
+    assert(installed.error.includes("changed"));
+    equal(await Deno.readTextFile(path), concurrent);
+    await assertNoCodexStages(directory);
+  }));
+
+Deno.test("Codex installer refuses a configuration removed before replacement", () =>
+  inWorkspace(async (workspace) => {
+    const repository = `${workspace}/concurrent-removal`;
+    const directory = `${repository}/.codex`;
+    const path = `${directory}/hooks.json`;
+    await Deno.mkdir(directory, { recursive: true });
+    await Deno.writeTextFile(path, '{"foreign":"removed"}\n');
+    const configuration: CodexConfigOperations = {
+      read: nativeCodexConfigOperations.read,
+      replace: async (replacement) => {
+        await Deno.remove(path);
+        return nativeCodexConfigOperations.replace(replacement);
+      },
+    };
+
+    const installed = await installCodexHooksWith(repository, configuration);
+
+    assert(!installed.ok);
+    assert(installed.error.includes("changed"));
+    equal(await exists(path), false);
+    await assertNoCodexStages(directory);
+  }));
+
+Deno.test("Codex installer refuses identical bytes from a different file", () =>
+  inWorkspace(async (workspace) => {
+    const repository = `${workspace}/concurrent-identity`;
+    const directory = `${repository}/.codex`;
+    const path = `${directory}/hooks.json`;
+    const content = '{"foreign":"same bytes"}\n';
+    await Deno.mkdir(directory, { recursive: true });
+    await Deno.writeTextFile(path, content);
+    const original = await Deno.lstat(path);
+    const originalAtime = original.atime;
+    const originalMtime = original.mtime;
+    const originalMode = original.mode;
+    assert(originalAtime !== null);
+    assert(originalMtime !== null);
+    assert(originalMode !== null);
+    const configuration: CodexConfigOperations = {
+      read: nativeCodexConfigOperations.read,
+      replace: async (replacement) => {
+        const substitute = await Deno.makeTempFile({ dir: directory });
+        await Deno.writeTextFile(substitute, content);
+        await Deno.chmod(substitute, originalMode & 0o7777);
+        await Deno.utime(substitute, originalAtime, originalMtime);
+        await Deno.rename(substitute, path);
+        return nativeCodexConfigOperations.replace(replacement);
+      },
+    };
+
+    const installed = await installCodexHooksWith(repository, configuration);
+
+    assert(!installed.ok);
+    assert(installed.error.includes("changed"));
+    equal(await Deno.readTextFile(path), content);
+    const replacement = await Deno.lstat(path);
+    assert(replacement.mode !== null);
+    equal(replacement.dev, original.dev);
+    equal(replacement.size, original.size);
+    equal(replacement.mtime?.getTime(), originalMtime.getTime());
+    equal(replacement.mode & 0o7777, originalMode & 0o7777);
+    assert(replacement.ino !== original.ino);
+    await assertNoCodexStages(directory);
+  }));
+
+Deno.test("Codex installer refuses a permission change before replacement", () =>
+  inWorkspace(async (workspace) => {
+    const repository = `${workspace}/concurrent-mode`;
+    const directory = `${repository}/.codex`;
+    const path = `${directory}/hooks.json`;
+    const content = '{"foreign":"mode"}\n';
+    await Deno.mkdir(directory, { recursive: true });
+    await Deno.writeTextFile(path, content);
+    await Deno.chmod(path, 0o600);
+    const configuration: CodexConfigOperations = {
+      read: nativeCodexConfigOperations.read,
+      replace: async (replacement) => {
+        await Deno.chmod(path, 0o640);
+        return nativeCodexConfigOperations.replace(replacement);
+      },
+    };
+
+    const installed = await installCodexHooksWith(repository, configuration);
+
+    assert(!installed.ok);
+    assert(installed.error.includes("changed"));
+    equal(await Deno.readTextFile(path), content);
+    equal((await Deno.lstat(path)).mode! & 0o7777, 0o640);
+    await assertNoCodexStages(directory);
+  }));
+
+Deno.test("Codex installer keeps the configuration after a replacement inspection failure", () =>
+  inWorkspace(async (workspace) => {
+    const repository = `${workspace}/inspection-failure`;
+    const directory = `${repository}/.codex`;
+    const path = `${directory}/hooks.json`;
+    const content = '{"foreign":"private"}\n';
+    await Deno.mkdir(directory, { recursive: true });
+    await Deno.writeTextFile(path, content);
+    const configuration: CodexConfigOperations = {
+      read: nativeCodexConfigOperations.read,
+      replace: async (replacement) => {
+        await Deno.chmod(path, 0o000);
+        return nativeCodexConfigOperations.replace(replacement);
+      },
+    };
+
+    const installed = await installCodexHooksWith(repository, configuration);
+    await Deno.chmod(path, 0o600);
+
+    assert(!installed.ok);
+    assert(installed.error.includes("Could not inspect"));
+    assert(!installed.error.includes("foreign"));
+    equal(await Deno.readTextFile(path), content);
+    await assertNoCodexStages(directory);
+  }));
+
+Deno.test("Codex installer refuses a linked configuration before replacement", () =>
+  inWorkspace(async (workspace) => {
+    const repository = `${workspace}/concurrent-link`;
+    const directory = `${repository}/.codex`;
+    const path = `${directory}/hooks.json`;
+    const target = `${workspace}/foreign-target.json`;
+    await Deno.mkdir(directory, { recursive: true });
+    await Deno.writeTextFile(path, "{}\n");
+    await Deno.writeTextFile(target, '{"foreign":"target"}\n');
+    const configuration: CodexConfigOperations = {
+      read: nativeCodexConfigOperations.read,
+      replace: async (replacement) => {
+        await Deno.remove(path);
+        await Deno.symlink(target, path);
+        return nativeCodexConfigOperations.replace(replacement);
+      },
+    };
+
+    const installed = await installCodexHooksWith(repository, configuration);
+
+    assert(!installed.ok);
+    assert(installed.error.includes("changed"));
+    equal(await Deno.readTextFile(target), '{"foreign":"target"}\n');
+    assert((await Deno.lstat(path)).isSymlink);
+    await assertNoCodexStages(directory);
+  }));
 
 Deno.test("Codex installer merges hooks, migrates the legacy hook, and is idempotent", () =>
   inWorkspace(async (workspace) => {

@@ -112,19 +112,31 @@ const writeAtomic = async (
   path: string,
   content: string,
   mode: number,
+  beforeRename?: () => Promise<Result<void>>,
 ): Promise<Result<void>> => {
   const directory = path.slice(0, path.lastIndexOf("/"));
   const temporary = await attempt(() =>
     Deno.makeTempFile({ dir: directory, prefix: ".codex-state-" })
   );
   if (!temporary.ok) return temporary;
-  const written = await attempt(async () => {
+  const written = await attempt(async (): Promise<void> => {
     await Deno.writeTextFile(temporary.value, content);
     await Deno.chmod(temporary.value, mode);
-    await Deno.rename(temporary.value, path);
   });
-  if (!written.ok) await attempt(() => Deno.remove(temporary.value));
-  return written;
+  if (!written.ok) {
+    await attempt(() => Deno.remove(temporary.value));
+    return written;
+  }
+  if (beforeRename !== undefined) {
+    const checked = await beforeRename();
+    if (!checked.ok) {
+      await attempt(() => Deno.remove(temporary.value));
+      return checked;
+    }
+  }
+  const renamed = await attempt(() => Deno.rename(temporary.value, path));
+  if (!renamed.ok) await attempt(() => Deno.remove(temporary.value));
+  return renamed;
 };
 
 const openNotificationLock = async (path: string): Promise<Result<Deno.FsFile>> => {
@@ -317,28 +329,145 @@ const metadata = async (path: string): Promise<Result<Deno.FileInfo | null>> => 
   }
 };
 
-type ReadConfig = {
-  readonly config: JsonObject;
+export type CodexConfigFileIdentity = {
+  readonly device: number | null;
+  readonly inode: number | null;
+  readonly size: number;
+  readonly modified: number | null;
   readonly mode: number | null;
 };
 
-const readConfig = async (path: string): Promise<Result<ReadConfig>> => {
+export type CodexConfigSnapshot =
+  | { readonly kind: "absent" }
+  | {
+    readonly kind: "file";
+    readonly bytes: Uint8Array;
+    readonly identity: CodexConfigFileIdentity;
+  };
+
+export type CodexConfigRead = {
+  readonly config: JsonObject;
+  readonly mode: number | null;
+  readonly snapshot: CodexConfigSnapshot;
+};
+
+export type CodexConfigReplacement = {
+  readonly path: string;
+  readonly content: string;
+  readonly mode: number;
+  readonly snapshot: CodexConfigSnapshot;
+};
+
+export type CodexConfigOperations = {
+  readonly read: (path: string) => Promise<Result<CodexConfigRead>>;
+  readonly replace: (replacement: CodexConfigReplacement) => Promise<Result<void>>;
+};
+
+const fileIdentity = (info: Deno.FileInfo): CodexConfigFileIdentity => ({
+  device: info.dev,
+  inode: info.ino,
+  size: info.size,
+  modified: info.mtime?.getTime() ?? null,
+  mode: info.mode === null ? null : info.mode & 0o7777,
+});
+
+const sameFileIdentity = (
+  left: CodexConfigFileIdentity,
+  right: CodexConfigFileIdentity,
+): boolean =>
+  left.device === right.device && left.inode === right.inode &&
+  left.size === right.size && left.modified === right.modified &&
+  left.mode === right.mode;
+
+const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
+  left.byteLength === right.byteLength &&
+  left.every((value, index) => value === right[index]);
+
+const changedConfig = (path: string): Result<void> =>
+  err(`${path} changed before Codex hook installation could replace it`);
+
+const inspectionFailed = (path: string, detail: string): Result<void> =>
+  err(`Could not inspect ${path} before replacement: ${detail}`);
+
+const configUnchanged = async (
+  path: string,
+  expected: CodexConfigSnapshot,
+): Promise<Result<void>> => {
+  const found = await metadata(path);
+  if (!found.ok) return inspectionFailed(path, found.error);
+  if (expected.kind === "absent") {
+    return found.value === null ? ok(undefined) : changedConfig(path);
+  }
+  if (
+    found.value === null || !found.value.isFile || found.value.isSymlink
+  ) return changedConfig(path);
+  const before = fileIdentity(found.value);
+  const bytes = await attempt(() => Deno.readFile(path));
+  if (!bytes.ok) return inspectionFailed(path, bytes.error);
+  const after = await metadata(path);
+  if (!after.ok) return inspectionFailed(path, after.error);
+  if (after.value === null || !after.value.isFile || after.value.isSymlink) {
+    return changedConfig(path);
+  }
+  const current = fileIdentity(after.value);
+  if (
+    !sameFileIdentity(before, current) ||
+    !sameFileIdentity(expected.identity, current) ||
+    !sameBytes(expected.bytes, bytes.value)
+  ) return changedConfig(path);
+  return ok(undefined);
+};
+
+const readConfig = async (path: string): Promise<Result<CodexConfigRead>> => {
   const found = await metadata(path);
   if (!found.ok) return found;
-  if (found.value === null) return ok({ config: {}, mode: null });
+  if (found.value === null) {
+    return ok({ config: {}, mode: null, snapshot: { kind: "absent" } });
+  }
   if (!found.value.isFile || found.value.isSymlink) {
     return err(`${path} must be a real file`);
   }
-  const parsed = await attempt(async (): Promise<unknown> =>
-    JSON.parse(await Deno.readTextFile(path))
+  const bytes = await attempt(() => Deno.readFile(path));
+  if (!bytes.ok) return bytes;
+  const after = await metadata(path);
+  if (!after.ok) return after;
+  if (after.value === null || !after.value.isFile || after.value.isSymlink) {
+    return err(`${path} changed while its configuration was read`);
+  }
+  const identity = fileIdentity(found.value);
+  if (!sameFileIdentity(identity, fileIdentity(after.value))) {
+    return err(`${path} changed while its configuration was read`);
+  }
+  const parsed = await attempt((): unknown =>
+    JSON.parse(new TextDecoder().decode(bytes.value))
   );
   if (!parsed.ok) return err(`${path} is not valid JSON: ${parsed.error}`);
   return object(parsed.value)
     ? ok({
       config: parsed.value,
-      mode: found.value.mode === null ? null : found.value.mode & 0o7777,
+      mode: identity.mode,
+      snapshot: {
+        kind: "file",
+        bytes: bytes.value,
+        identity,
+      },
     })
     : err(`${path} must contain an object`);
+};
+
+const replaceConfig = (
+  replacement: CodexConfigReplacement,
+): Promise<Result<void>> =>
+  writeAtomic(
+    replacement.path,
+    replacement.content,
+    replacement.mode,
+    () => configUnchanged(replacement.path, replacement.snapshot),
+  );
+
+export const nativeCodexConfigOperations: CodexConfigOperations = {
+  read: readConfig,
+  replace: replaceConfig,
 };
 
 const decodeShellWords = (command: string): readonly string[] | null => {
@@ -417,7 +546,10 @@ const mergeEvent = (
   return ok(groups);
 };
 
-const installCodexHooks = async (repository: string): Promise<Result<string>> => {
+export const installCodexHooksWith = async (
+  repository: string,
+  configuration: CodexConfigOperations,
+): Promise<Result<string>> => {
   const supplied = await metadata(repository);
   if (!supplied.ok) return supplied;
   if (
@@ -437,7 +569,7 @@ const installCodexHooks = async (repository: string): Promise<Result<string>> =>
     return err(`${directory} must be a real directory`);
   }
   const path = `${directory}/hooks.json`;
-  const read = await readConfig(path);
+  const read = await configuration.read(path);
   if (!read.ok) return read;
   const config = read.value.config;
   if (config.hooks !== undefined && !object(config.hooks)) {
@@ -461,11 +593,12 @@ const installCodexHooks = async (repository: string): Promise<Result<string>> =>
     if (!event.ok) return event;
     merged[name] = event.value;
   }
-  const written = await writeAtomic(
+  const written = await configuration.replace({
     path,
-    `${JSON.stringify({ ...config, hooks: merged }, null, 2)}\n`,
-    read.value.mode ?? 0o644,
-  );
+    content: `${JSON.stringify({ ...config, hooks: merged }, null, 2)}\n`,
+    mode: read.value.mode ?? 0o644,
+    snapshot: read.value.snapshot,
+  });
   return written.ok ? ok(path) : written;
 };
 
@@ -490,7 +623,10 @@ export const codexCommand = async (
     return 0;
   }
   if (args.length === 3 && args[1] === "install" && args[2]) {
-    const installed = await installCodexHooks(args[2]);
+    const installed = await installCodexHooksWith(
+      args[2],
+      nativeCodexConfigOperations,
+    );
     if (!installed.ok) {
       console.error(installed.error);
       return 1;

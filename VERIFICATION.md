@@ -1,5 +1,21 @@
 # Verification
 
+## Concurrent Codex edits (2026-10-08)
+
+The public regression injected a foreign handler edit before replacement. The baseline
+returned success and overwrote that edit. The regression failed in 11 ms before the guard.
+The command completed in 0.58 seconds. The capability wraps the native replacement
+operation.
+
+The corrected suite passed 20 tests. The main agent ran type, lint, layer, and suppression
+checks. The independent review found no defects. Seven new public checks preserve
+concurrent edits, creation, removal, identity changes, mode changes, inspection failure,
+and symbolic links. Each new test finished below one second.
+
+The writer removes staged replacements after refusal. Inspection and rename remain
+separate operations. These checks do not establish atomic exclusion against arbitrary
+writers or replacement of a parent directory.
+
 ## Configuration permissions (2026-10-08)
 
 Public baseline regressions reproduced permission widening in both installation routes.
@@ -14,6 +30,9 @@ The new mode tests finished below one second individually.
 Type, lint, layer, and suppression checks pass. The focused review found no defects.
 Preservation covers the `07777` mode mask when Deno supplies a POSIX mode. Owners, ACLs,
 extended attributes, and concurrent changes remain outside this unit.
+
+The Plan 008 commit is `2278de8`. Its configured local gate passed 413 Deno tests and 339
+native checks, with one platform test ignored.
 
 ## Exact monitor shutdown (2026-10-08)
 

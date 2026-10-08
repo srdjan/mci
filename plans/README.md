@@ -35,6 +35,7 @@ priorities shown to the user. Effort describes scope, rather than elapsed time. 
 | [006](006-finish-hook-rollback-before-exit.md)   | 5                             | Finish hook rollback before cancellation completes. | Medium   | Large  | 004: task option parsing; 005: workflow recursion | DONE   |
 | [007](007-exact-monitor-shutdown.md)             | H1: exact monitor shutdown    | Confirm monitor exit before bundle mutation.        | High     | Medium | None                                              | DONE   |
 | [008](008-preserve-configuration-permissions.md) | H2: existing file permissions | Retain file modes through replacement and rollback. | High     | Small  | None                                              | DONE   |
+| [009](009-detect-concurrent-codex-edits.md)      | H3: concurrent Codex edits    | Refuse changed input before replacement.            | High     | Medium | 008: file permissions                             | DONE   |
 
 Plans 001, 002, and 003 have independent implementation boundaries. Plans 004, 005, and
 006 share `src/hooks.ts` and its tests. Execute the three hook plans sequentially.
@@ -98,15 +99,21 @@ migration and forced installer termination are explicit deferred boundaries.
 
 ## Worklog and ownership
 
+Plan 008, existing file permissions, is committed locally as `2278de8`. Its complete gate
+passed 413 Deno tests and 339 native checks, with one platform test ignored. Plan 009,
+concurrent Codex edits, passes 20 focused tests. The accepted design compares captured
+bytes and identity before replacement. Separate inspection and rename retain a concurrency
+gap.
+
 The active objective covers all eight hardening items and all three pruning items. H1,
 exact monitor shutdown, is complete at `c5fb75d`. H2, existing file permissions, is
 complete. The main agent owns planning, review, validation, status, and local commits.
 Workers own only each unit's assigned source and test files.
 
-Remaining order: configuration concurrency, planner and worker contracts, submission
-cleanup diagnostics, snapshot diagnostics, Homebrew location, doctor status, recovery
-files, and unused declarations. Homebrew consolidation completes the remaining part of P3,
-shared native primitives. Existing process consolidation remains complete.
+Remaining order: planner and worker contracts, submission cleanup diagnostics, snapshot
+diagnostics, Homebrew location, doctor status, recovery files, and unused declarations.
+Homebrew consolidation completes the remaining part of P3, shared native primitives.
+Existing process consolidation remains complete.
 
 The maintainer authorized all numbered items. Capacity measurement remains an unselected
 direction option. Existing platform, visual, and power-loss evidence limits remain
@@ -175,5 +182,5 @@ boundaries.
 Completed: Plan 008 preserves configuration permissions. The focused suites passed 134
 tests. Type, lint, layer, and suppression checks pass. The review found no defects.
 
-Next: the main agent owns H3, concurrent Codex edits. The maintainer owns repository
+Next: the main agent owns H4, planner and worker contracts. The maintainer owns repository
 backups.
