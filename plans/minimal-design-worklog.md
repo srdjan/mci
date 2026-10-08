@@ -17,7 +17,7 @@ work on local `main` and commit each complete unit. The user owns pushes.
 | ------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------- |
 | 1       | Replace reader counts and the `Owner` wrapper with single-owner state. | Connected logs, disconnect, cancellation, failed acceptance, retention failure.    | Done    |
 | 2       | Share repository state loading.                                        | Startup and registration, busy locks, latest results, first-error precedence.      | Done    |
-| 3       | Recover workspaces without fresh run allocation.                       | Recovery, exclusion, journal retention, no fresh run state, lock release.          | Pending |
+| 3       | Recover workspaces without fresh run allocation.                       | Recovery, exclusion, journal retention, no fresh run state, lock release.          | Done    |
 | 4       | Share CLI workflow preparation.                                        | Exit codes, diagnostics, receipts, validation order, parent and signal behavior.   | Pending |
 | 5       | Share complete-write handling.                                         | Short writes, zero writes, exceptions, exact diagnostics, file and socket callers. | Pending |
 | 6       | Share hook preflight rules without stale snapshots.                    | Concurrent edits, permissions, recursion, worktrees, cancellation, rollback.       | Pending |
@@ -64,6 +64,16 @@ Finding 1 committed as `84952f9` after 453 Deno tests and 339 native checks pass
 Finding 2 passed 34 focused loading tests. Its diff adds 25 production lines and removes
 31. `daemon.ts` decreased from 1301 to 1295 lines. No tests changed.
 
-Current: commit finding 2, then separate recovery from run allocation. The main agent owns
-review, verification, integration, and commits. Read-only delegates can prepare later
-findings without changing their source files before the preceding unit passes.
+Finding 2 committed as `532d79c` after 453 Deno tests and 339 native checks passed.
+Finding 3's public characterization failed before the code change: idle recovery attempted
+temporary allocation in a directory without write permission. The test also checks
+repeated recovery and the permanent lock inode.
+
+Finding 3 passed 27 workspace, runner, and worker tests. Its diff adds 40 production lines
+and removes 17. `workspace.ts` increased from 257 to 280 lines. The explicit lock boundary
+removes recovery allocation and preserves cleanup ownership. Two public tests were added;
+the invalid-journal test now also checks the recovery API.
+
+Current: commit finding 3, then share CLI preparation. The main agent owns review,
+verification, integration, and commits. Read-only delegates can prepare later findings
+without changing their source files before the preceding unit passes.

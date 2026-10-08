@@ -18,6 +18,12 @@ export type RunLease = {
   readonly close: () => Promise<Result<void>>;
 };
 
+type LockedWorkspace = {
+  readonly root: string;
+  readonly state: string;
+  readonly lock: Deno.FsFile;
+};
+
 const metadata = async (path: string): Promise<Result<Deno.FileInfo | null>> => {
   try {
     return ok(await Deno.lstat(path));
@@ -141,7 +147,19 @@ const recoverState = async (state: string): Promise<Result<void>> => {
   return ok(undefined);
 };
 
-const openWorkspace = async (workspace: string): Promise<Result<RunLease | "busy">> => {
+const closeLock = async (lock: Deno.FsFile): Promise<Result<void>> => {
+  const closed = await attempt(() => lock.close());
+  return closed.ok ? ok(undefined) : err(`lock cleanup failed: ${closed.error}`);
+};
+
+const failLock = async (lock: Deno.FsFile, detail: string): Promise<Result<never>> => {
+  const closed = await closeLock(lock);
+  return err(`${detail}${closed.ok ? "" : `; ${closed.error}`}`);
+};
+
+const lockWorkspace = async (
+  workspace: string,
+): Promise<Result<LockedWorkspace | "busy">> => {
   const resolved = await attempt(async () => {
     const root = await Deno.realPath(workspace);
     if (!(await Deno.stat(root)).isDirectory) return err("workspace is not a directory");
@@ -166,25 +184,30 @@ const openWorkspace = async (workspace: string): Promise<Result<RunLease | "busy
   );
   if (!opened.ok) return opened;
   const lock = opened.value;
-  const fail = async (detail: string): Promise<Result<RunLease | "busy">> => {
-    const closed = await attempt(() => lock.close());
-    return err(`${detail}${closed.ok ? "" : `; lock cleanup failed: ${closed.error}`}`);
-  };
   const locked = await attempt(() => lock.tryLock(true));
-  if (!locked.ok) return await fail(locked.error);
+  if (!locked.ok) return await failLock(lock, locked.error);
   if (!locked.value) {
-    const released = await attempt(() => lock.close());
-    return released.ok ? ok("busy") : err(`lock cleanup failed: ${released.error}`);
+    const released = await closeLock(lock);
+    return released.ok ? ok("busy") : released;
   }
   const recovered = await recoverState(state);
-  if (!recovered.ok) return await fail(recovered.error);
+  if (!recovered.ok) return await failLock(lock, recovered.error);
+  return ok({ root, state, lock });
+};
+
+const openWorkspace = async (workspace: string): Promise<Result<RunLease | "busy">> => {
+  const locked = await lockWorkspace(workspace);
+  if (!locked.ok) return locked;
+  if (locked.value === "busy") return ok("busy");
+  const { root, state, lock } = locked.value;
   const created = await attempt(() => Deno.makeTempDir({ dir: state, prefix: "run-" }));
-  if (!created.ok) return await fail(created.error);
+  if (!created.ok) return await failLock(lock, created.error);
   let journal: Journal = { version: 1, runDir: created.value, process: null };
   const persisted = await writeJournal(state, journal);
   if (!persisted.ok) {
     const removed = await removePrivateDirectory(state, journal.runDir);
-    return await fail(
+    return await failLock(
+      lock,
       `${persisted.error}${
         removed.ok ? "" : `; private script cleanup failed: ${removed.error}`
       }`,
@@ -231,8 +254,8 @@ const openWorkspace = async (workspace: string): Promise<Result<RunLease | "busy
       const removed = await removeRun(state, journal.runDir);
       if (!removed.ok) diagnostics.push(removed.error);
     }
-    const released = await attempt(() => lock.close());
-    if (!released.ok) diagnostics.push(`lock cleanup failed: ${released.error}`);
+    const released = await closeLock(lock);
+    if (!released.ok) diagnostics.push(released.error);
     return diagnostics.length ? err(diagnostics.join("\n")) : ok(undefined);
   };
   return ok({ directory: journal.runDir, prepare, record, close });
@@ -249,9 +272,9 @@ export const acquireWorkspace = async (workspace: string): Promise<Result<RunLea
 export const recoverWorkspace = async (
   workspace: string,
 ): Promise<Result<"recovered" | "busy">> => {
-  const opened = await openWorkspace(workspace);
-  if (!opened.ok) return opened;
-  if (opened.value === "busy") return ok("busy");
-  const closed = await opened.value.close();
+  const locked = await lockWorkspace(workspace);
+  if (!locked.ok) return locked;
+  if (locked.value === "busy") return ok("busy");
+  const closed = await closeLock(locked.value.lock);
   return closed.ok ? ok("recovered") : closed;
 };

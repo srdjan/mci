@@ -1,5 +1,37 @@
-import { acquireWorkspace } from "../src/workspace.ts";
+import { acquireWorkspace, recoverWorkspace } from "../src/workspace.ts";
 import { assert, equal, exists, inWorkspace, unwrap } from "./helpers.ts";
+
+Deno.test("idle workspace recovery does not require fresh run allocation", () =>
+  inWorkspace(async (workspace) => {
+    const state = `${workspace}/.mci`;
+    const lease = unwrap(await acquireWorkspace(workspace));
+    unwrap(await lease.close());
+    const lock = await Deno.stat(`${state}/lock`);
+    await Deno.chmod(state, 0o500);
+    try {
+      equal(unwrap(await recoverWorkspace(workspace)), "recovered");
+      equal(unwrap(await recoverWorkspace(workspace)), "recovered");
+      equal((await Deno.stat(`${state}/lock`)).ino, lock.ino);
+      equal((await Array.fromAsync(Deno.readDir(state))).map((entry) => entry.name), [
+        "lock",
+      ]);
+    } finally {
+      await Deno.chmod(state, 0o700);
+    }
+  }));
+
+Deno.test("workspace recovery preserves an active lease", () =>
+  inWorkspace(async (workspace) => {
+    const lease = unwrap(await acquireWorkspace(workspace));
+    try {
+      equal(unwrap(await recoverWorkspace(workspace)), "busy");
+      assert(await exists(lease.directory));
+      assert(await exists(`${workspace}/.mci/run.json`));
+    } finally {
+      unwrap(await lease.close());
+    }
+    equal(unwrap(await recoverWorkspace(workspace)), "recovered");
+  }));
 
 Deno.test("workspace lease excludes competitors and releases its permanent lock", () =>
   inWorkspace(async (workspace) => {
@@ -90,6 +122,9 @@ Deno.test("invalid recovery journals preserve files and release the workspace lo
       invalid.ok ? "" : invalid.error,
     );
     equal(await Deno.readTextFile(`${workspace}/keep/file`), "project");
+    assert(await exists(`${workspace}/.mci/run.json`));
+    const recovery = await recoverWorkspace(workspace);
+    assert(!recovery.ok && recovery.error.includes("journal"));
     assert(await exists(`${workspace}/.mci/run.json`));
     await Deno.remove(`${workspace}/.mci/run.json`);
     const lease = unwrap(await acquireWorkspace(workspace));
