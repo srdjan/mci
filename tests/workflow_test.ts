@@ -44,6 +44,16 @@ jobs:
   ]);
 });
 
+Deno.test("planner keeps unselected job names as display metadata", () => {
+  const source = fixture("      - run: echo selected").replace(
+    "  check:",
+    '  "": null\n  "\\0job": null\n  check:',
+  );
+  const plan = unwrap(planWorkflow(source, "check"));
+  equal(plan.otherJobs, ["", "\0job"]);
+  equal(plan.steps.map((step) => step.script), ["echo selected"]);
+});
+
 Deno.test("unknown features and malformed values fail before execution", () => {
   const basic = fixture("      - run: echo first");
   const cases = [

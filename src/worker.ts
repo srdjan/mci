@@ -51,7 +51,7 @@ const plan = (value: unknown): value is Plan =>
   text(value.job) && value.job.length > 0 && text(value.name) && value.name.length > 0 &&
   positive(value.timeoutMs) && Array.isArray(value.steps) && value.steps.length > 0 &&
   value.steps.every(step) && Array.isArray(value.otherJobs) &&
-  value.otherJobs.every((job) => text(job) && job.length > 0);
+  value.otherJobs.every((job) => typeof job === "string");
 
 const decodeInput = (value: unknown): Result<WorkerInput> => {
   if (

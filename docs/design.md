@@ -46,6 +46,10 @@ entire document before selected-job validation. An invalid unselected job can th
 prevent execution when its YAML syntax is invalid. Unsupported semantics in an unselected
 job do not prevent selected-job execution.
 
+The planner retains unselected job names as display metadata. Worker input requires those
+names to be strings. Empty names and NUL characters do not prevent selected-job execution.
+Selected jobs and executable fields retain their stricter validation.
+
 ## Shared daemon lifecycle
 
 One daemon serves one user through a private Unix socket. The daemon holds one FIFO queue

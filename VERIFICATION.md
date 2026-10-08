@@ -1,5 +1,22 @@
 # Verification
 
+## Planner and worker input (2026-10-08)
+
+The public baseline regression returned code 1 with
+`worker input failed: invalid worker
+input` in 72 ms. The planner accepted the same
+workflow. The corrected validator accepts unselected names as string metadata and retains
+checks on executable fields.
+
+The focused run passed 78 tests, with one platform test ignored. New public tests cover
+empty and NUL-containing names across planning, direct execution, worker execution, and
+daemon execution. They preserve CLI display and reject malformed worker input. Each new
+test finished below one second. Type, lint, layer, and suppression checks passed.
+
+The main agent reviewed every changed line and corrected a malformed test fixture. The
+direct CLI regression runs only on macOS, which matches the command's platform policy.
+Sandbox process inspection failed with EPERM. Host execution passed.
+
 ## Concurrent Codex edits (2026-10-08)
 
 The public regression injected a foreign handler edit before replacement. The baseline
@@ -15,6 +32,9 @@ and symbolic links. Each new test finished below one second.
 The writer removes staged replacements after refusal. Inspection and rename remain
 separate operations. These checks do not establish atomic exclusion against arbitrary
 writers or replacement of a parent directory.
+
+The Plan 009 commit is `a4a7763`. Its gate passed 420 Deno tests and 339 native checks,
+with one platform test ignored.
 
 ## Configuration permissions (2026-10-08)
 

@@ -86,19 +86,15 @@ their documented limits.
 
 ### H4: Align planner and worker input contracts
 
-Evidence: [src/workflow.ts:210](../src/workflow.ts#L210) copies unselected job names into
-`otherJobs` without validating those names. The worker rejects empty or NUL-containing
-names at [src/worker.ts:48](../src/worker.ts#L48). A public probe supplied an empty
-unselected job name beside a valid selected job. The planner returned success, but the
-worker exited with code 1 and `worker input failed: invalid worker input`. The selected
-command did not start.
+[Plan 010](010-align-planner-worker-input.md) records the completed fix. The public
+baseline worker regression returned `invalid worker input` for an accepted plan. The
+worker now accepts string names as display metadata, including empty and NUL-containing
+names. Executable fields retain their existing validation.
 
-The proposed change establishes one contract for accepted plans and worker input. The
-executor must preserve the documented exclusion of unselected job semantics. Removing
-display-only `otherJobs` from worker transport is an alternative to rejecting unrelated
-metadata. Checks must compare validation, direct execution, and daemon execution for the
-same workflow. The CLI must retain its unselected-job display at
-[src/cli.ts:454](../src/cli.ts#L454).
+The focused suites passed 78 tests, with one platform test ignored. Public checks compare
+planning, standalone execution, worker execution, and daemon execution. The CLI retains
+its unselected job display. Non-string metadata and invalid executable fields remain
+rejected. Every new test finished below one second.
 
 ### H5: Report submission rollback failures
 

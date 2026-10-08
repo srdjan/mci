@@ -22,6 +22,32 @@ const capturedEnv = (extra: Readonly<Record<string, string>> = {}) => ({
   ...extra,
 });
 
+Deno.test("daemon executes a selected job with unselected display metadata", () =>
+  inWorkspace((workspace) =>
+    withDaemon(workspace, async (directory) => {
+      const source = fixture("      - run: touch artifact").replace(
+        "  check:",
+        '  "": null\n  "\\0job": null\n  check:',
+      );
+      const result = await submit(
+        {
+          version: 1,
+          op: "submit",
+          path: workspace,
+          workflow: "metadata.yml",
+          job: "check",
+          source,
+          env: capturedEnv(),
+        },
+        new AbortController().signal,
+        directory,
+      );
+      assert(result.ok, result.ok ? "" : result.error);
+      equal(result.value.kind, "success");
+      assert(await exists(`${workspace}/artifact`));
+    })
+  ));
+
 Deno.test("socket disconnection cancels only its active owner and releases queued work", () =>
   inWorkspace((workspace) =>
     withDaemon(workspace, async (directory) => {

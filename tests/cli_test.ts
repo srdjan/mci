@@ -34,6 +34,33 @@ const isolatedEnv = (env?: Readonly<Record<string, string>>) => ({
   ...env,
 });
 
+Deno.test({
+  name: "macOS CLI displays unselected metadata and runs the selected job",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      const source = fixture("      - run: touch artifact").replace(
+        "  check:",
+        '  "": null\n  "\\0job": null\n  check:',
+      );
+      await Deno.writeTextFile(`${workspace}/metadata.yml`, source);
+      const checked = await command(workspace, [
+        "check",
+        "metadata.yml",
+        "--job",
+        "check",
+      ])
+        .output();
+      equal(checked.code, 0);
+      assert(text(checked.stdout).includes("Unselected jobs: , \0job"));
+      assert(!await exists(`${workspace}/artifact`));
+      const executed = await command(workspace, ["run", "metadata.yml", "--job", "check"])
+        .output();
+      assert(executed.code === 0, text(executed.stderr));
+      assert(await exists(`${workspace}/artifact`));
+    }),
+});
+
 const killIfPresent = (send: () => void): void => {
   try {
     send();
