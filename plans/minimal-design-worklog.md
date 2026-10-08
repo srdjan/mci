@@ -18,7 +18,7 @@ work on local `main` and commit each complete unit. The user owns pushes.
 | 1       | Replace reader counts and the `Owner` wrapper with single-owner state. | Connected logs, disconnect, cancellation, failed acceptance, retention failure.    | Done    |
 | 2       | Share repository state loading.                                        | Startup and registration, busy locks, latest results, first-error precedence.      | Done    |
 | 3       | Recover workspaces without fresh run allocation.                       | Recovery, exclusion, journal retention, no fresh run state, lock release.          | Done    |
-| 4       | Share CLI workflow preparation.                                        | Exit codes, diagnostics, receipts, validation order, parent and signal behavior.   | Pending |
+| 4       | Share CLI workflow preparation.                                        | Exit codes, diagnostics, receipts, validation order, parent and signal behavior.   | Done    |
 | 5       | Share complete-write handling.                                         | Short writes, zero writes, exceptions, exact diagnostics, file and socket callers. | Pending |
 | 6       | Share hook preflight rules without stale snapshots.                    | Concurrent edits, permissions, recursion, worktrees, cancellation, rollback.       | Pending |
 
@@ -74,6 +74,11 @@ and removes 17. `workspace.ts` increased from 257 to 280 lines. The explicit loc
 removes recovery allocation and preserves cleanup ownership. Two public tests were added;
 the invalid-journal test now also checks the recovery API.
 
-Current: commit finding 3, then share CLI preparation. The main agent owns review,
+Finding 3 committed as `fff2d10` after 455 Deno tests and 339 native checks passed.
+Finding 4 passed 29 CLI tests, with one opposite-platform test ignored. Its diff adds 61
+production lines and removes 63. `cli.ts` decreased from 527 to 525 lines. Two public
+tests characterize command-specific read precedence and Bash failure receipts.
+
+Current: commit finding 4, then share complete-write handling. The main agent owns review,
 verification, integration, and commits. Read-only delegates can prepare later findings
 without changing their source files before the preceding unit passes.

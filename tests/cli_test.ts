@@ -421,6 +421,85 @@ Deno.test("CLI reports missing workflow and Bash preflight failures", () =>
     assert(!text(noBash.stderr).includes("mci run"));
   }));
 
+Deno.test({
+  name: "macOS CLI preserves command-specific preflight read precedence",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      const outside = await Deno.makeTempDir({ prefix: "mci-cli-preflight-" });
+      const missing = `${outside}/missing.yml`;
+      const restricted = (operation: "check" | "run" | "ci") => {
+        const args = cliSourceArgs([operation, missing, "--job", "check"]);
+        const config = args.indexOf("--config");
+        args.splice(config, 0, "--no-prompt", `--deny-read=${workspace}`);
+        return new Deno.Command(Deno.execPath(), {
+          args,
+          cwd: workspace,
+          env: isolatedEnv(),
+          stdout: "piped",
+          stderr: "piped",
+        });
+      };
+      try {
+        for (const operation of ["check", "run"] as const) {
+          const result = await restricted(operation).output();
+          equal(result.code, 2);
+          const diagnostic = text(result.stderr);
+          assert(diagnostic.includes("No such file or directory"), diagnostic);
+          assert(!diagnostic.includes("Requires read access"), diagnostic);
+        }
+
+        const result = await restricted("ci").output();
+        equal(result.code, 2);
+        const diagnostic = text(result.stderr);
+        assert(diagnostic.includes("Requires read access"), diagnostic);
+        assert(!diagnostic.includes("No such file or directory"), diagnostic);
+      } finally {
+        await Deno.remove(outside, { recursive: true });
+      }
+    }),
+});
+
+Deno.test({
+  name: "macOS CLI run and ci retain Bash preflight receipts",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      const home = await Deno.makeTempDir({ prefix: "mci-cli-bash-" });
+      await Deno.writeTextFile(
+        `${workspace}/ci.yml`,
+        fixture("      - run: touch must-not-run"),
+      );
+      try {
+        for (const operation of ["run", "ci"] as const) {
+          const session = `missing-bash-${operation}`;
+          const result = await command(
+            workspace,
+            [operation, "ci.yml", "--job", "check"],
+            {
+              MCI_HOME: home,
+              MCI_SESSION_ID: session,
+              PATH: `${workspace}/without-bash`,
+            },
+          ).output();
+          equal(result.code, 2);
+          const diagnostic = text(result.stderr);
+          assert(diagnostic.includes("CI did not pass: bash was not found"), diagnostic);
+          assert(diagnostic.includes("Fix the CI failure before continuing"), diagnostic);
+          assert(!diagnostic.includes("Daemon unavailable"), diagnostic);
+          const receipts = unwrap(await readSessionReceipts(session, home));
+          equal(receipts.length, 1);
+          equal(receipts[0]?.outcome.kind, "error");
+          equal(receipts[0]?.outcome.code, 2);
+          assert(typeof receipts[0]?.finished === "string");
+        }
+        assert(!await exists(`${workspace}/must-not-run`));
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    }),
+});
+
 Deno.test("CLI check prints plan but never executes it", () =>
   inWorkspace(async (workspace) => {
     await Deno.writeTextFile(

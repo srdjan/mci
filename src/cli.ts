@@ -20,7 +20,7 @@ import { managementCommand } from "./management.ts";
 import { attempt, err, ok, type Result } from "./result.ts";
 import { resolveBash, runPlan } from "./runner.ts";
 import { cliVersion } from "./runtime.ts";
-import { planWorkflow } from "./workflow.ts";
+import { type Env, type Plan, planWorkflow } from "./workflow.ts";
 import { runWorker } from "./worker.ts";
 
 const usage = `mci ${cliVersion}: local macOS CI
@@ -51,6 +51,17 @@ type HookInstallCommand = {
   readonly workflow: string;
   readonly job: string;
   readonly timeoutMs: number;
+};
+
+type WorkflowInputs = {
+  readonly source: string;
+  readonly workspace: string;
+};
+
+type WorkflowPreparation = WorkflowInputs & {
+  readonly environment: Env;
+  readonly plan: Plan;
+  readonly shell: string;
 };
 
 const parseHookTimeout = (value: string): Result<number> => {
@@ -215,28 +226,32 @@ const failCommand = async (
   return await recordCompletion(receipt, outcome, code, command, file, job);
 };
 
+const prepareWorkflow = async (
+  file: string,
+  job: string,
+  loadInputs: () => Promise<WorkflowInputs>,
+): Promise<Result<WorkflowPreparation>> => {
+  const loaded = await attempt(async () => ({
+    ...await loadInputs(),
+    environment: Deno.env.toObject(),
+  }));
+  if (!loaded.ok) return err(`${file}: ${loaded.error}`);
+  const plan = planWorkflow(loaded.value.source, job);
+  if (!plan.ok) return err(`${file}: ${plan.error}`);
+  const shell = await resolveBash(
+    loaded.value.workspace,
+    loaded.value.environment.PATH ?? "",
+  );
+  return shell.ok ? ok({ ...loaded.value, plan: plan.value, shell: shell.value }) : shell;
+};
+
 const runCi = async (
   file: string,
   job: string,
   parent: number,
   receipt: CiReceipt | null,
+  prepared: WorkflowPreparation,
 ): Promise<number> => {
-  const loaded = await attempt(async () => ({
-    workspace: await Deno.realPath(Deno.cwd()),
-    source: await Deno.readTextFile(file),
-    env: Deno.env.toObject(),
-  }));
-  if (!loaded.ok) {
-    return await failCommand(receipt, "ci", file, job, 2, `${file}: ${loaded.error}`);
-  }
-  const plan = planWorkflow(loaded.value.source, job);
-  if (!plan.ok) {
-    return await failCommand(receipt, "ci", file, job, 2, `${file}: ${plan.error}`);
-  }
-  const shell = await resolveBash(loaded.value.workspace, loaded.value.env.PATH ?? "");
-  if (!shell.ok) {
-    return await failCommand(receipt, "ci", file, job, 2, shell.error);
-  }
   const controller = new AbortController();
   const interrupt = () => controller.abort("SIGINT");
   const terminate = () => controller.abort("SIGTERM");
@@ -247,11 +262,11 @@ const runCi = async (
     const result = await submit({
       version: 1,
       op: "submit",
-      path: loaded.value.workspace,
+      path: prepared.workspace,
       workflow: file,
       job,
-      source: loaded.value.source,
-      env: loaded.value.env,
+      source: prepared.source,
+      env: prepared.environment,
     }, controller.signal);
     if (!result.ok) {
       const known =
@@ -417,57 +432,40 @@ export const main = async (args: readonly string[]): Promise<number> => {
       `mci ${executionCommand} supports macOS only. check is portable.`,
     );
   }
-  if (command === "ci") return await runCi(file, job, parent, receipt.value);
-  const loaded = await attempt(async () => ({
-    source: await Deno.readTextFile(file),
-    workspace: await Deno.realPath(Deno.cwd()),
-    inherited: Deno.env.toObject(),
-  }));
-  if (!loaded.ok) {
-    if (command === "check") {
-      console.error(`${file}: ${loaded.error}`);
+  const loadInputs = command === "ci"
+    ? async (): Promise<WorkflowInputs> => {
+      const workspace = await Deno.realPath(Deno.cwd());
+      const source = await Deno.readTextFile(file);
+      return { source, workspace };
+    }
+    : async (): Promise<WorkflowInputs> => {
+      const source = await Deno.readTextFile(file);
+      const workspace = await Deno.realPath(Deno.cwd());
+      return { source, workspace };
+    };
+  const prepared = await prepareWorkflow(file, job, loadInputs);
+  if (!prepared.ok) {
+    if (executionCommand === null) {
+      console.error(prepared.error);
       return 2;
     }
     return await failCommand(
       receipt.value,
-      "run",
+      executionCommand,
       file,
       job,
       2,
-      `${file}: ${loaded.error}`,
+      prepared.error,
     );
   }
-  const planned = planWorkflow(loaded.value.source, job);
-  if (!planned.ok) {
-    if (command === "check") {
-      console.error(`${file}: ${planned.error}`);
-      return 2;
-    }
-    return await failCommand(
-      receipt.value,
-      "run",
-      file,
-      job,
-      2,
-      `${file}: ${planned.error}`,
-    );
+  if (command === "ci") {
+    return await runCi(file, job, parent, receipt.value, prepared.value);
   }
-  const plan = planned.value;
-  const shell = await resolveBash(
-    loaded.value.workspace,
-    loaded.value.inherited.PATH ?? "",
-  );
-  if (!shell.ok) {
-    if (command === "check") {
-      console.error(shell.error);
-      return 2;
-    }
-    return await failCommand(receipt.value, "run", file, job, 2, shell.error);
-  }
+  const { environment, plan, shell, workspace } = prepared.value;
   console.log(`${file} :: ${job} (${plan.name})`);
-  console.log(`Workspace: ${loaded.value.workspace}`);
+  console.log(`Workspace: ${workspace}`);
   console.log(
-    `Host: ${Deno.build.os}/${Deno.build.arch}; Deno ${Deno.version.deno}; bash: ${shell.value}`,
+    `Host: ${Deno.build.os}/${Deno.build.arch}; Deno ${Deno.version.deno}; bash: ${shell}`,
   );
   console.log("Result covers the selected job only; on is not evaluated.");
   if (plan.otherJobs.length) console.log(`Unselected jobs: ${plan.otherJobs.join(", ")}`);
@@ -486,13 +484,13 @@ export const main = async (args: readonly string[]): Promise<number> => {
   const terminate = () => controller.abort("SIGTERM");
   Deno.addSignalListener("SIGINT", interrupt);
   Deno.addSignalListener("SIGTERM", terminate);
-  const supervised = loaded.value.inherited.MCI_TASK_PARENT === "true";
+  const supervised = environment.MCI_TASK_PARENT === "true";
   const stopWatching = supervised ? watchParent(controller, parent) : () => {};
   try {
     const outcome = await runPlan(plan, {
-      workspace: loaded.value.workspace,
-      shell: shell.value,
-      inherited: loaded.value.inherited,
+      workspace,
+      shell,
+      inherited: environment,
       signal: controller.signal,
     });
     console.log(
