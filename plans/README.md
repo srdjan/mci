@@ -11,7 +11,8 @@ plans.
 
 The user selected option 1, exact monitor shutdown, for planning on 2026-10-08.
 [Plan 007](007-exact-monitor-shutdown.md) records that selected work at baseline
-`11e034b`. Implementation remains pending.
+`11e034b`. The user authorized execution on 2026-10-08. Implementation and local checks
+are complete.
 
 ## Execution order and status
 
@@ -27,7 +28,7 @@ priorities shown to the user. Effort describes scope, rather than elapsed time. 
 | [004](004-parse-deno-task-options.md)           | 6                          | Parse option values before Deno task names.         | Medium   | Medium | None                                              | DONE   |
 | [005](005-check-existing-workflow-recursion.md) | 4                          | Inspect defined dependencies in existing workflows. | High     | Medium | 004: task option parsing                          | DONE   |
 | [006](006-finish-hook-rollback-before-exit.md)  | 5                          | Finish hook rollback before cancellation completes. | Medium   | Large  | 004: task option parsing; 005: workflow recursion | DONE   |
-| [007](007-exact-monitor-shutdown.md)            | H1: exact monitor shutdown | Confirm monitor exit before bundle mutation.        | High     | Medium | None                                              | TODO   |
+| [007](007-exact-monitor-shutdown.md)            | H1: exact monitor shutdown | Confirm monitor exit before bundle mutation.        | High     | Medium | None                                              | DONE   |
 
 Plans 001, 002, and 003 have independent implementation boundaries. Plans 004, 005, and
 006 share `src/hooks.ts` and its tests. Execute the three hook plans sequentially.
@@ -42,8 +43,9 @@ The completed objective covers all six saved plans. The main agent owns integrat
 documentation, verification, and local commits. Workers own disjoint source and test
 files. Hook plans follow their dependency order.
 
-The current objective covers planning for exact monitor shutdown only. The main advisor
-owns Plan 007 and its review. The shared helper preserves existing capability interfaces
+The current objective covers execution of Plan 007, exact monitor shutdown. The main agent
+owns integration, review, checks, documentation, and the local commit. The worker owns the
+scoped source and test files. The shared helper preserves existing capability interfaces
 and command budgets. Packaged rollback must confirm exit before destination removal.
 SIGTERM remains forced termination; normal application Quit retains its cleanup contract.
 Homebrew location changes and other backlog items remain unselected.
@@ -140,6 +142,15 @@ findings. The final gate passed 395 Deno tests and 339 native checks, with one p
 test ignored. Public model probes and an AppKit process checked normal termination.
 
 Completed: Plan 007 records exact monitor shutdown and guarded packaged rollback. The
-focused baseline passed 67 tests in 324 ms. Implementation remains pending.
+focused baseline passed 67 tests in 324 ms. The source drift check passed at `aee089f`.
 
-Next: the maintainer owns the decision to execute Plan 007 and any repository backup.
+Completed: Plan 007 shares exact monitor matching and confirmed shutdown. Packaged
+rollback retains recovery bundles after uncertain shutdown. The main agent reviewed each
+changed line and corrected the disposable fixture signature and cleanup sequence.
+
+The focused run passed 78 tests in 423 ms. Complete validation passed 410 Deno tests and
+339 native checks, with one platform test ignored. The native fixture passed in 60 ms.
+Source capability signatures, command budgets, and forced SIGTERM remain accepted
+boundaries.
+
+Next: the maintainer owns selection of another backlog item and repository backups.

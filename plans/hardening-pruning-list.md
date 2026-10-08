@@ -3,9 +3,10 @@
 ## Scope and result
 
 This review identifies eight hardening items and three pruning items on local `main` at
-`c1215f2`, dated 2026-10-08. The list proposes work; application changes have not started.
-The review covers Deno execution, daemon storage, hook installation, service control,
-packaging, and the native monitor.
+`c1215f2`, dated 2026-10-08. The user authorized H1, exact monitor shutdown. That unit is
+complete; seven hardening items and three pruning items remain open. The review covers
+Deno execution, daemon storage, hook installation, service control, packaging, and the
+native monitor.
 
 The earlier list had no open items. Its six hardening units and two pruning units remain
 complete. The six plans in [README.md](README.md) also remain complete. The labels below
@@ -31,29 +32,25 @@ Runtime checks remain required where the evidence says source inspection only.
 
 ### H1: Match the exact monitor executable and wait for exit
 
-The user selected this item for planning on 2026-10-08.
-[Plan 007](007-exact-monitor-shutdown.md) records the execution scope; implementation
-remains pending.
+The user selected this item and authorized execution on 2026-10-08.
+[Plan 007](007-exact-monitor-shutdown.md) records the execution scope. Implementation and
+local checks are complete.
 
-Evidence: [src/install.ts:126](../src/install.ts#L126) and
-[scripts/install-monitor.ts:328](../scripts/install-monitor.ts#L328) construct a
-prefix-only process pattern. A pure pattern probe confirmed that the pattern matches both
-`MonitorApp` and a sibling `MonitorAppHelper` executable. Setup, reinstall, rollback, and
-source stop can therefore signal an unrelated matching executable. The review signaled no
-process.
+The baseline used prefix-only matching and treated signal delivery as packaged shutdown.
+Packaged rollback removed the replacement without confirming exit. A public regression
+failed on that baseline.
 
-Evidence: [src/install.ts:138](../src/install.ts#L138) treats successful signal delivery
-as successful shutdown. Setup then renames the existing app at
-[src/install.ts:286](../src/install.ts#L286). If the old monitor exits slowly, setup
-replaces and opens the app while the old process still runs. The source installer already
-polls for exit at [scripts/install-monitor.ts:403](../scripts/install-monitor.ts#L403).
-Actual delayed monitor exit remains untested here.
+[src/monitor-process.ts](../src/monitor-process.ts) now shares exact path matching and
+confirmed shutdown. Both installers retain their command budgets. Packaged rollback
+retains the replacement and any backup when shutdown fails. Public checks cover delayed
+exit, timeout, command errors, initial replacement, and rollback. The native macOS fixture
+confirms SIGTERM exit and sibling survival. The focused run passed 78 tests; complete
+validation passed 410 Deno tests and 339 native checks, with one platform test ignored.
 
-The proposed change uses one exact executable matcher and an explicit quit-and-wait
-result. The change must preserve cooperative hook restoration and refuse replacement when
-shutdown remains uncertain. Checks must cover a sibling executable, arguments, delayed
-exit, and failed shutdown before bundle mutation. Native checks must use disposable
-processes.
+SIGTERM remains forced termination and can interrupt hook restoration. Normal Quit retains
+its cleanup contract. Argument matching does not authenticate executable identity or make
+inspection and signaling atomic. Delayed exit uses a controlled clock; production shutdown
+capacity remains unmeasured.
 
 ### H2: Preserve existing file permissions
 
@@ -206,11 +203,13 @@ Removing additional unused export modifiers alone does not justify separate work
 
 ### P3: Consolidate monitor process control and Homebrew location code
 
-Evidence: [src/install.ts:126](../src/install.ts#L126) and
-[scripts/install-monitor.ts:392](../scripts/install-monitor.ts#L392) implement different
-monitor quit behavior. Evidence: [src/install.ts:55](../src/install.ts#L55) and
-[src/hooks.ts:51](../src/hooks.ts#L51) repeat supported Homebrew location checks. Source
-service control bypasses those checks at
+Monitor process consolidation is complete with H1, exact monitor shutdown. Homebrew
+location consolidation remains open with H7, absolute Homebrew location.
+
+The review baseline contained different monitor quit implementations. Plan 007 replaced
+both implementations with the shared helper. Evidence:
+[src/install.ts:55](../src/install.ts#L55) and [src/hooks.ts:51](../src/hooks.ts#L51)
+repeat supported Homebrew location checks. Source service control bypasses those checks at
 [scripts/service.ts:848](../scripts/service.ts#L848). These copies require coordinated
 changes and already produce different behavior.
 
@@ -272,10 +271,10 @@ boundary has lower priority than the listed application failures.
 
 ## Next action and ownership
 
-Completed: the main advisor reviewed current evidence and created this list. Application
-changes remain proposed and have not started. The repository maintainer owns selection of
-the next unit. H1, exact monitor shutdown, is the recommended first unit. After selection,
-I will write a focused execution plan with public regression checks.
+Completed: the main advisor reviewed current evidence and created this list. The user
+authorized Plan 007 for H1, exact monitor shutdown. Implementation and checks are
+complete. The repository maintainer owns selection of the next unit. H2, existing file
+permissions, is the next item in the ordered list.
 
 Each accepted unit needs its own local commit on `main`. The repository maintainer owns
 pushes and repository backups.

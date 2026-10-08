@@ -1,6 +1,11 @@
 // @light-fp adapter
 import { captureCommand, type CommandCapturePolicy } from "../src/command.ts";
 import { rpc } from "../src/client.ts";
+import {
+  type MonitorProcessCapabilities,
+  monitorRunningWith,
+  quitMonitorWith,
+} from "../src/monitor-process.ts";
 import { attempt, err, message, ok, type Result } from "../src/result.ts";
 import { cliVersion } from "../src/runtime.ts";
 import { canonicalDirectory } from "./registry.ts";
@@ -325,25 +330,14 @@ const runChecked = async (
   return ok(captured.value.stdout);
 };
 
-const escapeRegex = (value: string): string =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const processPattern = (executablePath: string): string =>
-  `^${escapeRegex(executablePath)}`;
-
-const pgrep = async (executablePath: string): Promise<Result<boolean>> => {
-  const captured = await captureCommand(
-    "/usr/bin/pgrep",
-    { args: ["-f", processPattern(executablePath)] },
-    deadline,
-  );
-  if (!captured.ok) return captured;
-  const code = captured.value.status.code;
-  if (code === 0) return ok(true);
-  if (code === 1) return ok(false);
-  return err(`/usr/bin/pgrep exited with ${code}`);
+const monitorProcessCapabilities: MonitorProcessCapabilities = {
+  run: async (command, args) => {
+    const captured = await captureCommand(command, { args: [...args] }, deadline);
+    return captured.ok ? ok(captured.value.status.code) : captured;
+  },
+  now: () => performance.now(),
+  delay: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
 };
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export const nativeCapabilities: MonitorCapabilities = {
   swiftAvailable: async () => {
@@ -389,31 +383,13 @@ export const nativeCapabilities: MonitorCapabilities = {
     ]);
     return read.ok ? ok(new TextDecoder().decode(read.value).trim()) : read;
   },
-  quit: async (executablePath) => {
-    const killed = await captureCommand(
-      "/usr/bin/pkill",
-      { args: ["-f", processPattern(executablePath)] },
-      deadline,
-    );
-    if (!killed.ok) return killed;
-    // pkill exits 1 when no process matched.
-    if (killed.value.status.code > 1) {
-      return err(`/usr/bin/pkill exited with ${killed.value.status.code}`);
-    }
-    const end = performance.now() + 2000;
-    while (true) {
-      const running = await pgrep(executablePath);
-      if (!running.ok) return running;
-      if (!running.value) return ok(undefined);
-      if (performance.now() >= end) return err("The app did not quit within 2000 ms.");
-      await sleep(100);
-    }
-  },
+  quit: (executablePath) => quitMonitorWith(executablePath, monitorProcessCapabilities),
   open: async (bundle) => {
     const opened = await runChecked("/usr/bin/open", [bundle]);
     return opened.ok ? ok(undefined) : opened;
   },
-  isRunning: pgrep,
+  isRunning: (executablePath) =>
+    monitorRunningWith(executablePath, monitorProcessCapabilities),
   rename: (from, to) => attempt(() => Deno.rename(from, to)),
   register: async (workspace) => {
     const response = await rpc({ version: 1, op: "register", path: workspace });

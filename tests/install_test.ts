@@ -1,5 +1,5 @@
 import { type SetupCapabilities, type SetupOptions, setupWith } from "../src/install.ts";
-import { err, ok } from "../src/result.ts";
+import { err, ok, type Result } from "../src/result.ts";
 import { assert, equal, exists, unwrap } from "./helpers.ts";
 
 type Scene = {
@@ -252,6 +252,118 @@ Deno.test("setup restores the old app when the new app does not open", async () 
   });
 });
 
+Deno.test("setup keeps the old app until initial shutdown is confirmed", async () => {
+  await withScene(async (scene) => {
+    await Deno.mkdir(scene.destination, { recursive: true });
+    await Deno.writeTextFile(`${scene.destination}/marker`, "old");
+    const started = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<Result<void>>();
+    const events: string[] = [];
+    const fake = fakeCapabilities({
+      quit: () => {
+        events.push("quit");
+        started.resolve();
+        return released.promise;
+      },
+      rename: async (source, destination) => {
+        events.push("rename");
+        await Deno.rename(source, destination);
+        return ok(undefined);
+      },
+    });
+    const setup = setupWith(scene.options, fake.capabilities);
+    await started.promise;
+    equal(events, ["quit"]);
+    equal(await Deno.readTextFile(`${scene.destination}/marker`), "old");
+    released.resolve(ok(undefined));
+    unwrap(await setup);
+    equal(await Deno.readTextFile(`${scene.destination}/marker`), "new");
+  });
+});
+
+Deno.test("setup preserves the old app and removes staging after initial quit failure", async () => {
+  await withScene(async (scene) => {
+    await Deno.mkdir(scene.destination, { recursive: true });
+    await Deno.writeTextFile(`${scene.destination}/marker`, "old");
+    const fake = fakeCapabilities({
+      quit: () => Promise.resolve(err("shutdown uncertain")),
+    });
+    const result = await setupWith(scene.options, fake.capabilities);
+    assert(!result.ok && result.error.includes("shutdown uncertain"));
+    equal(await Deno.readTextFile(`${scene.destination}/marker`), "old");
+    equal(
+      await Array.fromAsync(Deno.readDir(scene.applications)).then((items) =>
+        items.map((item) => item.name)
+      ),
+      ["mci Monitor.app"],
+    );
+    assert(!fake.calls.includes("rename"));
+    assert(!fake.calls.includes("open"));
+    assert(!fake.calls.includes("service"));
+  });
+});
+
+Deno.test("setup keeps the new app and backup when rollback cannot confirm exit", async () => {
+  await withScene(async (scene) => {
+    await Deno.mkdir(scene.destination, { recursive: true });
+    await Deno.writeTextFile(`${scene.destination}/marker`, "old");
+    let quits = 0;
+    const events: string[] = [];
+    const fake = fakeCapabilities({
+      open: () => {
+        events.push("open");
+        return Promise.resolve(err("open failed"));
+      },
+      quit: () => {
+        events.push("quit");
+        quits += 1;
+        return Promise.resolve(quits === 1 ? ok(undefined) : err("exit uncertain"));
+      },
+    });
+    const result = await setupWith(scene.options, fake.capabilities);
+    assert(!result.ok);
+    assert(result.error.indexOf("open failed") < result.error.indexOf("exit uncertain"));
+    assert(result.error.includes("new app"), result.error);
+    assert(result.error.includes("old backup"), result.error);
+    equal(await Deno.readTextFile(`${scene.destination}/marker`), "new");
+    const names = await Array.fromAsync(Deno.readDir(scene.applications)).then((items) =>
+      items.map((item) => item.name)
+    );
+    assert(names.some((name) => name.startsWith(".mci-monitor-backup-")));
+    equal(events, ["quit", "open", "quit"]);
+  });
+});
+
+Deno.test("fresh setup retains only the new app when rollback cannot confirm exit", async () => {
+  await withScene(async (scene) => {
+    const events: string[] = [];
+    const fake = fakeCapabilities({
+      open: () => {
+        events.push("open");
+        return Promise.resolve(err("open failed"));
+      },
+      quit: () => {
+        events.push("quit");
+        return Promise.resolve(err("exit uncertain"));
+      },
+    });
+    const result = await setupWith(scene.options, fake.capabilities);
+    assert(!result.ok);
+    assert(result.error.indexOf("open failed") < result.error.indexOf("exit uncertain"));
+    assert(result.error.includes("new app remains"), result.error);
+    assert(!result.error.includes("old app"), result.error);
+    assert(!result.error.includes(".mci-monitor-backup-"), result.error);
+    equal(await Deno.readTextFile(`${scene.destination}/marker`), "new");
+    equal(
+      await Array.fromAsync(Deno.readDir(scene.applications)).then((items) =>
+        items.map((item) => item.name)
+      ),
+      ["mci Monitor.app"],
+    );
+    equal(events, ["open", "quit"]);
+  });
+});
+
 Deno.test("setup stops its service before rollback when readiness fails", async () => {
   await withScene(async (scene) => {
     await Deno.mkdir(scene.destination, { recursive: true });
@@ -289,6 +401,10 @@ Deno.test("setup stops its service before rollback when the new app does not ope
         events.push("stop");
         return Promise.resolve(ok(undefined));
       },
+      quit: () => {
+        events.push("quit");
+        return Promise.resolve(ok(undefined));
+      },
       open: () => {
         opens += 1;
         events.push("open");
@@ -303,7 +419,7 @@ Deno.test("setup stops its service before rollback when the new app does not ope
     const result = await setupWith(scene.options, fake.capabilities);
     assert(!result.ok && result.error.includes("new app did not open"));
     equal(await Deno.readTextFile(`${scene.destination}/marker`), "old");
-    equal(events, ["service", "open", "stop", "remove", "open"]);
+    equal(events, ["quit", "service", "open", "stop", "quit", "remove", "open"]);
   });
 });
 

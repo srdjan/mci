@@ -1,5 +1,37 @@
 # Verification
 
+## Exact monitor shutdown (2026-10-08)
+
+The focused baseline passed 67 installer and service tests in 345 ms. A new public
+packaged rollback regression failed on that baseline in 128 ms. Rollback removed and
+restored bundles without a second quit call. The regression requires retained bundles when
+replacement shutdown fails.
+
+The corrected focused run passed 78 tests in 423 ms. Public setup checks cover pending
+initial shutdown, failed initial shutdown, rollback ordering, and retained recovery
+bundles. Existing source installer and service checks pass without changes to their
+capability interfaces.
+
+The native fixture passed on macOS in 60 ms, including cleanup. It uses copied executables
+with spaces and regular-expression characters in their paths. The helper terminates the
+exact process with SIGTERM and leaves the sibling executable active. POSIX probes also
+cover command end, arguments, another directory, and a path inside an argument.
+
+An unsigned copy of `/bin/sleep` returned SIGKILL on this host. The control process
+returned SIGTERM. Ad hoc signing made the copied fixture return SIGTERM. The fixture signs
+both disposable executables before launch. Cleanup uses only the owned child handles. The
+sandbox denies native process inspection; the native checks require host process access.
+
+Complete validation passed formatting, lint, type checks, 410 Deno tests, and 339 native
+checks. One opposite-platform test remained ignored. Layer and suppression checks also
+passed. Three review passes found no production defects. Fixture review required signing
+the copied executables and removing cleanup checks before signaling owned child handles.
+
+The shared helper preserves caller command budgets and the existing 2000 ms observation
+policy. The observation policy is not measured shutdown capacity. SIGTERM remains forced
+termination and can interrupt hook restoration. Command matching does not authenticate an
+executable or make inspection and signaling atomic.
+
 ## Legacy import while the legacy adapter runs
 
 On 2026-10-04, the legacy `status.json` import gained a check for a running legacy

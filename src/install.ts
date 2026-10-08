@@ -1,6 +1,7 @@
 // @light-fp adapter
 import { rpc } from "./client.ts";
 import { captureCommand } from "./command.ts";
+import { type MonitorProcessCapabilities, quitMonitorWith } from "./monitor-process.ts";
 import { attempt, err, ok, type Result } from "./result.ts";
 
 const bundleName = "mci Monitor.app";
@@ -95,6 +96,20 @@ const serviceWasPresent = (text: string): Result<boolean> => {
   return ok(service.loaded || service.running || service.registered);
 };
 
+const monitorProcessCapabilities: MonitorProcessCapabilities = {
+  run: async (command, args) => {
+    const captured = await captureCommand(command, { args: [...args] }, {
+      timeoutMs: 5000,
+      reapMs: 1000,
+      maxStdoutBytes: 1024 * 1024,
+      maxStderrBytes: 1024 * 1024,
+    });
+    return captured.ok ? ok(captured.value.status.code) : captured;
+  },
+  now: () => performance.now(),
+  delay: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+};
+
 const nativeSetupCapabilities: SetupCapabilities = {
   readOwner: async (bundle) =>
     await output("/usr/bin/plutil", [
@@ -123,23 +138,7 @@ const nativeSetupCapabilities: SetupCapabilities = {
     const removed = await attempt(() => Deno.remove(path, { recursive: true }));
     return removed.ok || removed.error.includes("No such file") ? ok(undefined) : removed;
   },
-  quit: async (executable) => {
-    const pattern = `^${executable.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`;
-    const stopped = await captureCommand(
-      "/usr/bin/pkill",
-      { args: ["-f", pattern] },
-      {
-        timeoutMs: 5000,
-        reapMs: 1000,
-        maxStdoutBytes: 1024 * 1024,
-        maxStderrBytes: 1024 * 1024,
-      },
-    );
-    if (!stopped.ok) return stopped;
-    return stopped.value.status.code <= 1
-      ? ok(undefined)
-      : err(`/usr/bin/pkill exited with ${stopped.value.status.code}`);
-  },
+  quit: (executable) => quitMonitorWith(executable, monitorProcessCapabilities),
   startService: async () => {
     const brew = await findBrew();
     if (!brew.ok) return brew;
@@ -225,6 +224,13 @@ const rollback = async (
   hadDestination: boolean,
   capabilities: SetupCapabilities,
 ): Promise<string> => {
+  const quit = await capabilities.quit(`${destination}/Contents/MacOS/MonitorApp`);
+  if (!quit.ok) {
+    return `Rollback could not quit the new app at ${destination}: ${quit.error}. ` +
+      (hadDestination
+        ? `The new app and old backup at ${backup} remain unchanged.`
+        : "The new app remains unchanged.");
+  }
   const removed = await capabilities.remove(destination);
   if (!removed.ok) return `Rollback could not remove ${destination}: ${removed.error}`;
   if (!hadDestination) return "The new app was removed.";

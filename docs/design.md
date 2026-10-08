@@ -346,8 +346,9 @@ as a Homebrew service.
 
 `mci setup` installs the packaged monitor and starts the service when the daemon does not
 answer. Setup runs its helper commands with bounded waits and byte budgets. After a
-service, readiness, or launch failure, setup restores the previous app. Setup stops only a
-service that setup started.
+service, readiness, or launch failure, setup confirms monitor exit before restoring the
+previous app. Uncertain shutdown retains the app and backup. Setup stops only a service
+that setup started.
 
 The daemon imports the earlier registry only when its own registry does not exist. For a
 repository without `latest.json`, the daemon imports a version 1 `status.json` from the
@@ -559,13 +560,35 @@ Both installers stage the bundle next to the destination. They replace
 moves the new bundle into place. If that move fails, the installer restores the old
 bundle.
 
+Both installers share monitor process inspection and shutdown. The matcher requires the
+complete executable path at the command start, followed by whitespace or the command end.
+The matcher treats regular-expression characters in the path literally and rejects sibling
+executable prefixes. Native commands inspect full argument lists; this does not
+authenticate the executable or make inspection and signaling atomic.
+
+Shutdown sends SIGTERM once, then confirms absence through process inspection. The
+observation policy is 2000 ms, with 100 ms between inspections. Command capture can extend
+elapsed time beyond that policy. Packaged capture retains a 5000 ms deadline and 1000 ms
+reaping policy. Source capture retains a 10000 ms deadline and 2000 ms reaping policy.
+Both capture policies allow one MiB per output stream.
+
+An inspection failure or observation timeout blocks bundle removal and replacement.
+Packaged rollback also confirms shutdown before removing the new bundle. Failed rollback
+shutdown retains the new bundle and any previous backup. A fresh packaged installation
+retains only its new bundle when shutdown fails. The diagnostic retains the primary
+failure and names the recovery location.
+
+SIGTERM forces termination and can interrupt hook restoration. Normal application Quit
+retains its cleanup contract. Custom argument lists, ambiguous whitespace, process
+replacement, and launches after inspection remain process matching limits.
+
 `deno task monitor:install` builds the app, signs it ad hoc, verifies the signature, and
 registers the repository through the daemon. It requires a running daemon. On a reinstall,
 the source installer keeps the old bundle until the new app runs. After a registration,
-open, or startup failure, it quits the new app, restores the previous bundle, and opens
-it. If restoration fails, the error names the retained backup. The command `mci setup`
-copies the packaged bundle and verifies its signature. Setup also requires a valid
-signature on an existing owned bundle.
+open, or startup failure, it confirms new app shutdown, restores the previous bundle, and
+opens it. Failed shutdown retains both bundles. If restoration fails, the error names the
+retained backup. The command `mci setup` copies the packaged bundle and verifies its
+signature. Setup also requires a valid signature on an existing owned bundle.
 
 The source start command reuses a responding daemon or launches a detached daemon. The
 command saves daemon output and a process identity in the private service directory. The
