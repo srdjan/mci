@@ -3,8 +3,8 @@
 ## Status and authority
 
 This plan covers audit finding 3: receipt identity can name the wrong workflow after a
-symlink and `..`. The user selected this plan on 2026-10-06. Implementation remains
-pending.
+symlink and `..`. The user selected this plan on 2026-10-06. Implementation is complete in
+local commit `4deb5b2`. The [plan index](README.md) owns current status.
 
 Priority is high. Effort and change risk are medium. Confidence is high. No other plan is
 a prerequisite. The source baseline is local `main` at `7b74afa`.

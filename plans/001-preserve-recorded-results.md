@@ -3,7 +3,8 @@
 ## Status and authority
 
 This plan covers audit finding 1: projection failure can replace a recorded success with
-failure. The user selected this plan on 2026-10-06. Implementation remains pending.
+failure. The user selected this plan on 2026-10-06. Implementation is complete in local
+commit `ff618a8`. The [plan index](README.md) owns current status.
 
 Priority is high. Effort and change risk are medium. Confidence is high. No other plan is
 a prerequisite. The source baseline is local `main` at `7b74afa`.

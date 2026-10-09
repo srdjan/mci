@@ -3,8 +3,9 @@
 ## Status and authority
 
 The user selected option 1, exact monitor shutdown, on 2026-10-08. This plan covers H1,
-exact monitor shutdown, from the current hardening list. The selection authorizes
-planning; implementation has not started.
+exact monitor shutdown, from the current hardening list. The selection authorized
+planning. Implementation is complete in local commit `c5fb75d`. The
+[plan index](README.md) owns current status.
 
 Priority is high. Effort and change risk are medium. Confidence is high. No other open
 plan is a prerequisite. The source baseline is local `main` at `11e034b`.

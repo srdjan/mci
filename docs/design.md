@@ -6,29 +6,31 @@ the authority of the invoking user.
 
 ## Module responsibilities
 
-| Module            | Responsibility                                                                 |
-| ----------------- | ------------------------------------------------------------------------------ |
-| `workflow.ts`     | YAML validation, environment precedence, and plan construction                 |
-| `process.ts`      | Process groups, cancellation, bounded termination, and identity checks         |
-| `workspace.ts`    | Workspace exclusion, private scripts, and run recovery journals                |
-| `runner.ts`       | Step order, environment filtering, deadlines, and final results                |
-| `protocol.ts`     | Exact daemon request, response, snapshot, and terminal record shapes           |
-| `ipc.ts`          | Bounded newline-delimited JSON transport and complete byte writes              |
-| `client.ts`       | Daemon requests, request-log streaming, and caller cancellation                |
-| `daemon.ts`       | Registration, queues, worker ownership, snapshots, and shutdown                |
-| `daemon-store.ts` | Registry, request journal, result projection, and spool retention              |
-| `worker.ts`       | Isolated execution of one accepted plan                                        |
-| `install.ts`      | Homebrew service startup and packaged monitor installation                     |
-| `hooks.ts`        | Managed pre-commit hooks, stable tasks, and installation diagnosis             |
-| `ci-receipt.ts`   | Session identity, invocation receipts, and atomic receipt storage              |
-| `codex.ts`        | Session warnings, repair continuation, and Codex hook installation             |
-| `cli.ts`          | Command routing, direct runs, daemon submission, and signal handling           |
-| `runtime.ts`      | Version, source arguments, and self-invocation                                 |
-| `result.ts`       | Expected failures and exception conversion at library and operating boundaries |
-| `command.ts`      | Helper command capture with deadlines, byte budgets, and bounded cleanup       |
-| `management.ts`   | Register, unregister, status, and log commands over the daemon socket          |
-| `paths.ts`        | Service directory and socket paths, including the `MCI_HOME` override          |
-| `main.ts`         | Process entry point: runs the CLI, reports a fatal error, and exits            |
+| Module               | Responsibility                                                                 |
+| -------------------- | ------------------------------------------------------------------------------ |
+| `workflow.ts`        | YAML validation, environment precedence, and plan construction                 |
+| `process.ts`         | Process groups, cancellation, bounded termination, and identity checks         |
+| `workspace.ts`       | Workspace exclusion, private scripts, and run recovery journals                |
+| `runner.ts`          | Step order, environment filtering, deadlines, and final results                |
+| `protocol.ts`        | Exact daemon request, response, snapshot, and terminal record shapes           |
+| `ipc.ts`             | Bounded newline-delimited JSON transport and complete byte writes              |
+| `client.ts`          | Daemon requests, request-log streaming, and caller cancellation                |
+| `daemon.ts`          | Registration, queues, worker ownership, snapshots, and shutdown                |
+| `daemon-store.ts`    | Registry, request journal, result projection, and spool retention              |
+| `worker.ts`          | Isolated execution of one accepted plan                                        |
+| `install.ts`         | Homebrew service startup and packaged monitor installation                     |
+| `hooks.ts`           | Managed pre-commit hooks, stable tasks, and installation diagnosis             |
+| `ci-receipt.ts`      | Session identity, invocation receipts, and atomic receipt storage              |
+| `codex.ts`           | Session warnings, repair continuation, and Codex hook installation             |
+| `cli.ts`             | Command routing, direct runs, daemon submission, and signal handling           |
+| `runtime.ts`         | Version, source arguments, and self-invocation                                 |
+| `result.ts`          | Expected failures and exception conversion at library and operating boundaries |
+| `command.ts`         | Helper command capture with deadlines, byte budgets, and bounded cleanup       |
+| `management.ts`      | Register, unregister, status, and log commands over the daemon socket          |
+| `paths.ts`           | Service directory and socket paths, including the `MCI_HOME` override          |
+| `homebrew.ts`        | Absolute Homebrew executable location shared by installers and service control |
+| `monitor-process.ts` | Monitor process inspection and confirmed shutdown for both installers          |
+| `main.ts`            | Process entry point: runs the CLI, reports a fatal error, and exits            |
 
 `scripts/service.ts` owns the source commands `deno task start` and `deno task stop`.
 Start returns after the daemon and monitor run. Stop waits for both components to stop.
@@ -64,8 +66,9 @@ ms. A successful accept resets the wait. Shutdown ends the wait at once.
 
 If `accept()` fails without a success for 60000 ms, the daemon stops. It writes
 `mci daemon: accept failed for <n> ms; stopping` to stderr and shuts down. The shutdown
-interrupts running jobs, as any shutdown does. The process exits with code 1, and launchd
-restarts the daemon. The value 60000 ms is a policy, not a measured capacity.
+interrupts running jobs, as any shutdown does. The process exits with code 1. launchd
+restarts the Homebrew service. A daemon from `deno task start` stays stopped. The value
+60000 ms is a policy, not a measured capacity.
 
 A connection must send its first request within 5000 ms. The daemon closes a connection
 that sends no first frame in that time. This value is a policy, not a measured capacity.
@@ -349,9 +352,12 @@ for the worktree. The tracked source hook resolves the repository root and calls
 
 `deno task hooks:install` sets the repository-local hook path to `.githooks`. A worktree
 setting takes precedence. Managed hook installation sets the packaged Homebrew path for
-the worktree. This checkout currently selects the packaged hook through
+the worktree. The maintainer's checkout selects the packaged hook through
 `.git/config.worktree`. Each clone needs its own configuration because Git does not copy
-local settings. The checks cover the working tree, including unstaged changes.
+local settings. The two hooks are alternatives for this repository. Managed setup refuses
+an active `.githooks` hook because its text differs from the packaged hook. Run managed
+setup before `deno task hooks:install`, or use only one of them. The checks cover the
+working tree, including unstaged changes.
 
 Manual verification and compilation remain available. `VERIFICATION.md` records observed
 coverage and keeps evidence limits explicit.
@@ -467,8 +473,8 @@ diagnostic does not print the previous `deno.json` contents.
 A future worktree can inherit this hook path. Without the required task, the inherited
 hook blocks commits. Hook installation rejects unsafe shared Git settings.
 
-The managed hook is the only automatic trigger. Manual CLI commands remain available for
-diagnosis and release evidence.
+Git's effective pre-commit hook is the only automatic trigger. Manual CLI commands remain
+available for diagnosis and release evidence.
 
 ## CI failure communication in Codex
 
@@ -507,9 +513,10 @@ because hook processes can retain identifiers from a parent session. An override
 exist before Codex starts so tools and hooks receive the same value. The adapter does not
 correlate results through command text, modification times, or `latest.json`. A later
 success clears only matching workspace, workflow, and job failures. The success must start
-after the failed invocation finishes. For a pending invocation, the adapter compares start
-times. A backward clock change can delay resolution until a passing run starts at or after
-the recorded failure finish time. A result from another session cannot clear the failure.
+at or after the finish time of the failed invocation. For a pending invocation, the
+adapter compares start times. A backward clock change can delay resolution until a passing
+run starts at or after the recorded failure finish time. A result from another session
+cannot clear the failure.
 
 The adapter sends a warning for the user and repair context for the agent. Session start
 and prompt submission restore unresolved failure context. A `Stop` event requests repair
@@ -546,8 +553,8 @@ MiB response limit. The app reads `snapshot.json` only when the daemon is unavai
 treats active data in that snapshot as stale.
 
 The app watches the daemon state directory and refreshes on changes. It coalesces
-filesystem events for 100 ms. A five-second timer repairs the watch and refreshes relative
-times.
+filesystem events for 100 ms. A five-second timer repairs the watch and refreshes status.
+The panel refreshes relative times every second.
 
 The app can register or unregister a repository through daemon requests. Unregistration
 fails while that repository has accepted requests.
@@ -608,9 +615,12 @@ login preference.
 Each row shows the active request, queued count, and latest completed result. A separate
 button opens the last completed log during an active request.
 
-The combined icon uses the most urgent repository state. The states include unavailable,
-error, missing, interrupted, failure, running, queued, cancelled, pass, and no runs. The
-attention count covers unavailable, error, missing, interrupted, and failed repositories.
+The combined icon uses the most urgent repository state. A hook that needs installation or
+a failed hook check raises the icon to error when no more urgent state exists. The states
+include unavailable, error, missing, interrupted, failure, running, queued, cancelled,
+pass, and no runs. The attention count covers unavailable, error, missing, interrupted,
+and failed repositories. It also counts each repository whose hook needs installation or
+whose hook check failed.
 
 Both installers stage the bundle next to the destination. They replace
 `~/Applications/mci Monitor.app` only when the destination is a real folder whose
@@ -648,10 +658,12 @@ opens it. Failed shutdown retains both bundles. If restoration fails, the error 
 retained backup. The command `mci setup` copies the packaged bundle and verifies its
 signature. Setup also requires a valid signature on an existing owned bundle.
 
-The source start command reuses a responding daemon or launches a detached daemon. The
-command saves daemon output and a process identity in the private service directory. The
-command registers the checkout and opens the monitor for that service directory. If the
-monitor is absent, the command builds and installs it.
+The source start command reuses a responding daemon or launches a detached daemon. For the
+default service directory, start first disables a loaded mci Homebrew service that does
+not answer. `brew services start mci` restores that service. The command saves daemon
+output and a process identity in the private service directory. The command registers the
+checkout and opens the monitor for that service directory. If the monitor is absent, the
+command builds and installs it.
 
 Source launch observes child exit status before detaching the child. Startup captures PID,
 process group, and start time before readiness. Those fields must remain stable through

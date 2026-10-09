@@ -110,11 +110,14 @@ Install the session adapter in each repository:
 mci codex install "$PWD"
 ```
 
-For a source checkout, use this command:
+For a source checkout, run this command in the target repository. Replace the placeholder
+with the path of the mci checkout:
 
 ```sh
-deno task mci codex install "$PWD"
+deno task --config /path/to/mci/deno.json mci codex install "$PWD"
 ```
+
+Inside the mci checkout, `deno task mci codex install "$PWD"` is sufficient.
 
 The installer updates `.codex/hooks.json` and preserves other hooks. Codex must review and
 trust the new definitions before the hooks run. The Codex CLI provides `/hooks` for that
@@ -280,8 +283,12 @@ deno task hooks:install
 This command sets the repository-local hook path to `.githooks`. A worktree setting takes
 precedence. The tracked hook calls `deno task ci` from the repository root. Managed
 installation sets the worktree hook path to the packaged hook, which calls
-`deno task mci:ci`. This checkout currently selects the packaged hook through its worktree
-configuration. Git runs one effective pre-commit hook before each commit.
+`deno task mci:ci`. The maintainer's checkout selects the packaged hook through its
+worktree configuration. Git runs one effective pre-commit hook before each commit.
+
+The two hooks are alternatives. Managed setup and the monitor refuse an active tracked
+hook, because its text differs from the packaged hook. To use the packaged hook, run
+`mci hooks setup` before `deno task hooks:install`, or skip `hooks:install`.
 
 Both paths submit `ci/local-ci.yml`, job `check`, to the local daemon. The daemon saves
 output under `.mci/ci/`. Both hooks need a running daemon and a registered checkout.
@@ -295,7 +302,9 @@ Start the daemon and menu bar monitor from this checkout:
 deno task start
 ```
 
-The task reuses a running daemon or starts a daemon in the background. It registers this
+The task reuses a running daemon or starts a daemon in the background. For the default
+service directory, the task first disables a loaded mci Homebrew service that does not
+answer. Run `brew services start mci` to restore that service. The task registers this
 checkout and opens the monitor. If the monitor is absent, the task builds and installs it.
 The task returns after both components are ready. Repeated starts reuse the daemon and
 reopen the monitor. The monitor reads the same service directory as the daemon.
@@ -403,7 +412,8 @@ jobs:
 
 Every repository managed through the menu uses the packaged hook. A tracked source hook is
 a custom hook and receives the same conflict result as another unknown active hook. The
-mci checkout selects the packaged hook through its local worktree configuration.
+maintainer's mci checkout selects the packaged hook through its local worktree
+configuration.
 
 If setup fails, the folder stays registered and the app retains the installation error
 during refresh. Successful installation or inspection clears that error. For another

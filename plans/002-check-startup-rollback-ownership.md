@@ -3,8 +3,8 @@
 ## Status and authority
 
 This plan covers audit finding 2: startup rollback can signal a PID without checking
-process identity. The user selected this plan on 2026-10-06. Implementation remains
-pending.
+process identity. The user selected this plan on 2026-10-06. Implementation is complete in
+local commit `96b7758`. The [plan index](README.md) owns current status.
 
 Priority is high. Effort and change risk are medium. Confidence is high. No other plan is
 a prerequisite. The source baseline is local `main` at `7b74afa`.

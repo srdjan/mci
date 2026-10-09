@@ -18,25 +18,25 @@ This index owns current status and the compact worklog.
 All listed plans are complete. Commit references identify code changes on local `main`.
 The documentation unit uses its own local commit after the configured gate passes.
 
-| Plan                                             | Scope                                                         | Status | Local commit             |
-| ------------------------------------------------ | ------------------------------------------------------------- | ------ | ------------------------ |
-| [001](001-preserve-recorded-results.md)          | Preserve recorded results after projection failure.           | DONE   | `ff618a8`                |
-| [002](002-check-startup-rollback-ownership.md)   | Check ownership before startup rollback signals.              | DONE   | `96b7758`                |
-| [003](003-resolve-receipt-path-components.md)    | Resolve receipt paths in filesystem order.                    | DONE   | `4deb5b2`                |
-| [004](004-parse-deno-task-options.md)            | Parse Deno task options before task names.                    | DONE   | `0640c15`                |
-| [005](005-check-existing-workflow-recursion.md)  | Reject defined recursion in existing workflows.               | DONE   | `a110a3b`                |
-| [006](006-finish-hook-rollback-before-exit.md)   | Finish cancellation cleanup and drain monitor installations.  | DONE   | `2d932dd`                |
-| [007](007-exact-monitor-shutdown.md)             | H1: confirm exact monitor shutdown.                           | DONE   | `c5fb75d`                |
-| [008](008-preserve-configuration-permissions.md) | H2: preserve existing configuration permissions.              | DONE   | `2278de8`                |
-| [009](009-detect-concurrent-codex-edits.md)      | H3: detect concurrent Codex edits.                            | DONE   | `a4a7763`                |
-| [010](010-align-planner-worker-input.md)         | H4: align planner and worker input.                           | DONE   | `72c96e4`                |
-| [011](011-report-submission-rollback.md)         | H5: report submission rollback failures.                      | DONE   | `3d1f46c`                |
-| [012](012-report-final-snapshot-failures.md)     | H6: report final snapshot failures.                           | DONE   | `81b3368`                |
-| [013](013-share-homebrew-location.md)            | H7: absolute Homebrew location; P3: shared native primitives. | DONE   | `0005b90`                |
-| [014](014-return-doctor-health-status.md)        | H8: return doctor health status.                              | DONE   | `75d673e`                |
-| [015](015-prune-recovered-control-files.md)      | P1: remove obsolete controls after recovery.                  | DONE   | `731c299`                |
-| [016](016-remove-unused-declarations.md)         | P2: remove unused installation error and protocol export.     | DONE   | `8d60d14`                |
-| [017](017-reconcile-hook-documentation.md)       | Reconcile source and packaged hook documentation.             | DONE   | This documentation unit. |
+| Plan                                             | Scope                                                         | Status | Local commit |
+| ------------------------------------------------ | ------------------------------------------------------------- | ------ | ------------ |
+| [001](001-preserve-recorded-results.md)          | Preserve recorded results after projection failure.           | DONE   | `ff618a8`    |
+| [002](002-check-startup-rollback-ownership.md)   | Check ownership before startup rollback signals.              | DONE   | `96b7758`    |
+| [003](003-resolve-receipt-path-components.md)    | Resolve receipt paths in filesystem order.                    | DONE   | `4deb5b2`    |
+| [004](004-parse-deno-task-options.md)            | Parse Deno task options before task names.                    | DONE   | `0640c15`    |
+| [005](005-check-existing-workflow-recursion.md)  | Reject defined recursion in existing workflows.               | DONE   | `a110a3b`    |
+| [006](006-finish-hook-rollback-before-exit.md)   | Finish cancellation cleanup and drain monitor installations.  | DONE   | `2d932dd`    |
+| [007](007-exact-monitor-shutdown.md)             | H1: confirm exact monitor shutdown.                           | DONE   | `c5fb75d`    |
+| [008](008-preserve-configuration-permissions.md) | H2: preserve existing configuration permissions.              | DONE   | `2278de8`    |
+| [009](009-detect-concurrent-codex-edits.md)      | H3: detect concurrent Codex edits.                            | DONE   | `a4a7763`    |
+| [010](010-align-planner-worker-input.md)         | H4: align planner and worker input.                           | DONE   | `72c96e4`    |
+| [011](011-report-submission-rollback.md)         | H5: report submission rollback failures.                      | DONE   | `3d1f46c`    |
+| [012](012-report-final-snapshot-failures.md)     | H6: report final snapshot failures.                           | DONE   | `81b3368`    |
+| [013](013-share-homebrew-location.md)            | H7: absolute Homebrew location; P3: shared native primitives. | DONE   | `0005b90`    |
+| [014](014-return-doctor-health-status.md)        | H8: return doctor health status.                              | DONE   | `75d673e`    |
+| [015](015-prune-recovered-control-files.md)      | P1: remove obsolete controls after recovery.                  | DONE   | `731c299`    |
+| [016](016-remove-unused-declarations.md)         | P2: remove unused installation error and protocol export.     | DONE   | `8d60d14`    |
+| [017](017-reconcile-hook-documentation.md)       | Reconcile source and packaged hook documentation.             | DONE   | `10b7f10`    |
 
 P3, shared native primitives, covers monitor control in Plan 007 and Homebrew location in
 Plan 013. Plans 004, 005, and 006 shared hook code and ran sequentially.

@@ -3,7 +3,8 @@
 ## Status and authority
 
 This plan covers audit finding 5: the monitor can terminate hook setup during mutation or
-rollback. The user selected this plan on 2026-10-06. Implementation remains pending.
+rollback. The user selected this plan on 2026-10-06. Implementation is complete in local
+commit `2d932dd`. The [plan index](README.md) owns current status.
 
 Priority is medium. Effort is large after inspection of application termination. Change
 risk is medium. Confidence is high for the source defect. Cancellation during mutation

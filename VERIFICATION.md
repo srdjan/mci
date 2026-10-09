@@ -1,5 +1,26 @@
 # Verification
 
+## Disagreement audit corrections (2026-10-09)
+
+Six read-only reviews compared the code with README, design, plans, and this file. Each
+code correction has its own local commit, a regression check, and a passing local gate.
+
+Commit `6f8a01b` runs `ps` with the UTF-8 character locale for identity checks. Under
+`LC_ALL=C`, macOS `ps` printed `Café` as `CafM-CM-)`. Recovery then refused its own
+recorded process in a non-ASCII workspace. The new test failed before the correction.
+
+Commit `735f0c2` reports a failed `begun` journal write as `request journal write failed`.
+Commit `eeb49e7` passes `--installed` to `brew --prefix`. Without that flag, Homebrew
+7.0.9 printed an opt path and exited 0 for an uninstalled formula. Commit `41a16b8` lets
+`mci codex install` accept a linked repository path, like `register` and `hooks setup`.
+Commit `d2ff418` matches a new monitor row by `realpath`. Foundation path resolution
+strips `/private`, so automatic hook setup did not start under `/tmp` or `/var`.
+
+Earlier sections cite "layer and suppression checks". These checks come from the
+`typescript-expert` skill, outside this repository. The commands are
+`deno run --allow-read "$TYPESCRIPT_SKILL_ROOT/scripts/check-layers.ts" .` and the
+`scripts/check-suppressions.ts` script beside it. The configured gate does not run them.
+
 ## Minimal design simplifications (2026-10-08)
 
 All six selected simplifications have separate local commits. The final code commit is

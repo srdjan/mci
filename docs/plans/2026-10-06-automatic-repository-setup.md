@@ -1,5 +1,10 @@
 # Automatic repository setup
 
+Status: superseded in part. The
+[general repository tasks plan](2026-10-06-generic-repository-tasks.md) replaces the
+`verify` task source for a generated workflow. Setup now selects the defined standard
+tasks `fmt:check`, `lint`, `check`, and `test`.
+
 The user approved migration of nextreg-demo to mci pre-commit CI. The user also requested
 automatic migration when a repository enters the menu bar.
 

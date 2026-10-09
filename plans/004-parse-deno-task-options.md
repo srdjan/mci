@@ -3,7 +3,8 @@
 ## Status and authority
 
 This plan covers audit finding 6: setup rejects a valid task command with an option value.
-The user selected this plan on 2026-10-06. Implementation remains pending.
+The user selected this plan on 2026-10-06. Implementation is complete in local commit
+`0640c15`. The [plan index](README.md) owns current status.
 
 Priority is medium. Effort and change risk are medium after inspection of configuration
 options. Confidence is high. No other plan is a prerequisite. Plan 005 requires this

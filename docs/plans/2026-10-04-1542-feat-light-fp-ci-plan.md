@@ -10,6 +10,11 @@ source_baseline: 44044f93a657d5cef644e020a427eb663f971ab7
 
 # Light-FP in Local CI - Plan
 
+Status: not executed. `deno.json` has no `lint.plugins` entry. The CI path that this plan
+describes changed later: `ci/local-ci.yml` now calls each task directly, and the
+maintainer's checkout selects the packaged hook. The maintainer decides whether to execute
+or retire this plan.
+
 ## Goal Capsule
 
 **Objective:** Local CI blocks commits when domain code violates Light-FP rules.
