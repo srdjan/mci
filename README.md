@@ -13,8 +13,9 @@ limits.
 
 ## Install with a local Homebrew tap
 
-Install Homebrew and Deno 2.9.7 or newer. Make Bash available on `PATH`. The package build
-also requires the Xcode Command Line Tools.
+Install Homebrew and Deno. The verified host uses Deno 2.9.7; other Deno versions are
+unverified. Make Bash available on `PATH`. The package build also requires the Xcode
+Command Line Tools.
 
 Build the package from this checkout. Create the local tap, then copy the generated
 formula into the tap.
@@ -66,6 +67,8 @@ mci doctor "$PWD"
 
 `mci doctor` prints every check. It returns zero when all checks pass and one when any
 check fails. Existing scripts must treat a nonzero status as an unhealthy installation.
+The `repository hook` check accepts only the packaged Homebrew hook. A checkout that uses
+the tracked `.githooks` hook therefore fails that check.
 
 `mci ci` requires a registered repository and a running daemon. It waits for the submitted
 request and streams that request's log.
@@ -291,6 +294,11 @@ worktree configuration. Git runs one effective pre-commit hook before each commi
 The two hooks are alternatives. Managed setup and the monitor refuse an active tracked
 hook, because its text differs from the packaged hook. To use the packaged hook, run
 `mci hooks setup` before `deno task hooks:install`, or skip `hooks:install`.
+
+The tracked `mci:ci` task in this repository names the Apple Silicon prefix
+`/opt/homebrew`. On a host with the Intel prefix `/usr/local`, setup refuses that task as
+foreign. Before managed setup on such a host, change the task path to
+`/usr/local/opt/mci/bin/mci`.
 
 Both paths submit `ci/local-ci.yml`, job `check`, to the local daemon. The daemon saves
 output under `.mci/ci/`. Both hooks need a running daemon and a registered checkout.

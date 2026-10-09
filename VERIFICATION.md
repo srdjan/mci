@@ -16,6 +16,13 @@ Commit `eeb49e7` passes `--installed` to `brew --prefix`. Without that flag, Hom
 Commit `d2ff418` matches a new monitor row by `realpath`. Foundation path resolution
 strips `/private`, so automatic hook setup did not start under `/tmp` or `/var`.
 
+The maintainer then accepted seven recommended decisions. Commit `e2afb06` makes start and
+step snapshot writes best effort, like the final write. Commit `411d231` stores receipts
+without the daemon socket path limit. Commit `1c2731c` lets a later workspace success
+clear a validation error receipt. Documentation now scopes the doctor hook check to the
+packaged hook, names the Apple Silicon prefix in the tracked task, and limits the Deno
+claim to 2.9.7. The Light-FP plan is retired. Each new test failed before its correction.
+
 Earlier sections cite "layer and suppression checks". These checks come from the
 `typescript-expert` skill, outside this repository. The commands are
 `deno run --allow-read "$TYPESCRIPT_SKILL_ROOT/scripts/check-layers.ts" .` and the

@@ -143,7 +143,8 @@ reports such a repository as ready.
 
 Doctor reports contain each check's name, passed state, and detail. Aggregate health
 requires every check to pass. The CLI prints all reports and returns one after any failed
-check.
+check. The `repository hook` check accepts only the packaged Homebrew hook path. A
+checkout that uses the tracked `.githooks` hook fails that check by design.
 
 A request that leaves the queue before it starts is not a result. Its own client receives
 the terminal, and the daemon removes its journal entry and spool. It never replaces the
@@ -357,8 +358,10 @@ the worktree. The maintainer's checkout selects the packaged hook through
 `.git/config.worktree`. Each clone needs its own configuration because Git does not copy
 local settings. The two hooks are alternatives for this repository. Managed setup refuses
 an active `.githooks` hook because its text differs from the packaged hook. Run managed
-setup before `deno task hooks:install`, or use only one of them. The checks cover the
-working tree, including unstaged changes.
+setup before `deno task hooks:install`, or use only one of them. The tracked `mci:ci` task
+names the Apple Silicon prefix `/opt/homebrew`. On an Intel-prefix host, setup refuses it
+as foreign until the task names `/usr/local/opt/mci/bin/mci`. The checks cover the working
+tree, including unstaged changes.
 
 Manual verification and compilation remain available. `VERIFICATION.md` records observed
 coverage and keeps evidence limits explicit.
