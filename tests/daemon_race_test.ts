@@ -1432,6 +1432,42 @@ for (const during of ["acceptance", "publication"] as const) {
     }));
 }
 
+Deno.test("request journal begin failure names the journal and runs nothing", () =>
+  inWorkspace(async (workspace) => {
+    const openStore = async (paths: ServicePaths): Promise<Result<DaemonStore>> => {
+      const opened = await openDaemonStore(paths);
+      if (!opened.ok) return opened;
+      return ok({
+        ...opened.value,
+        begin: () => Promise.resolve(err("injected journal begin failure")),
+      });
+    };
+
+    await withRaceDaemon(openStore, async (directory) => {
+      assert((await rpc({ version: 1, op: "register", path: workspace }, directory)).ok);
+      const result = await submit(
+        {
+          version: 1,
+          op: "submit",
+          path: workspace,
+          workflow: "begin.yml",
+          job: "check",
+          source: fixture("      - run: touch begin-started"),
+          env: capturedEnv(),
+        },
+        new AbortController().signal,
+        directory,
+      );
+      assert(result.ok, result.ok ? "" : result.error);
+      equal(result.value.kind, "failure");
+      equal(
+        result.value.detail,
+        "request journal write failed: injected journal begin failure",
+      );
+      assert(!await exists(`${workspace}/begin-started`));
+    });
+  }));
+
 Deno.test("candidate publication failure cannot start rejected work", () =>
   inWorkspace(async (workspace) => {
     const publication = gate();

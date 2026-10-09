@@ -523,13 +523,15 @@ const pump = (runtime: DaemonRuntime, repository: MutableRepository): void => {
   if (job === undefined) return;
   job.started = new Date().toISOString();
   repository.active = job;
-  void runtime.store.begin(job.id, job.started).then((begun) =>
-    begun.ok ? publish(runtime) : begun
-  ).then((published) =>
-    published.ok
-      ? runWorkerProcess(runtime, job)
-      : failedTerminal(job, `snapshot write failed: ${published.error}`)
-  ).then((terminal) => complete(runtime, repository, job, terminal)).catch(
+  void runtime.store.begin(job.id, job.started).then(async (begun) => {
+    if (!begun.ok) {
+      return failedTerminal(job, `request journal write failed: ${begun.error}`);
+    }
+    const published = await publish(runtime);
+    return published.ok
+      ? await runWorkerProcess(runtime, job)
+      : failedTerminal(job, `snapshot write failed: ${published.error}`);
+  }).then((terminal) => complete(runtime, repository, job, terminal)).catch(
     async (error) => {
       await complete(runtime, repository, job, failedTerminal(job, message(error)));
     },
