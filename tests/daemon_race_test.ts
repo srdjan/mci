@@ -1019,6 +1019,61 @@ Deno.test("completed final snapshot failure is reported and later repaired", () 
     );
   }));
 
+Deno.test("start and step snapshot failures are reported without failing the job", () =>
+  inWorkspace(async (workspace) => {
+    const diagnostics: string[] = [];
+    const openStore = async (paths: ServicePaths): Promise<Result<DaemonStore>> => {
+      const opened = await openDaemonStore(paths);
+      if (!opened.ok) return opened;
+      return ok({
+        ...opened.value,
+        writeSnapshot: async (current) =>
+          (current.repositories[0]?.active ?? null) === null
+            ? await opened.value.writeSnapshot(current)
+            : err("injected active snapshot failure"),
+      });
+    };
+
+    await withRaceDaemon(
+      openStore,
+      async (directory) => {
+        assert(
+          (await rpc({ version: 1, op: "register", path: workspace }, directory)).ok,
+        );
+        const result = await submit(
+          {
+            version: 1,
+            op: "submit",
+            path: workspace,
+            workflow: "progress.yml",
+            job: "check",
+            source: fixture("      - run: touch step-one\n      - run: touch step-two"),
+            env: capturedEnv(),
+          },
+          new AbortController().signal,
+          directory,
+        );
+        assert(result.ok, result.ok ? "" : result.error);
+        equal(result.value.kind, "success");
+        assert(await exists(`${workspace}/step-two`));
+        const status = await rpc({ version: 1, op: "status" }, directory);
+        assert(status.ok, status.ok ? "" : status.error);
+        equal(status.value.repositories[0]?.latest, result.value);
+        equal(status.value.repositories[0]?.blocked, null);
+        assert(
+          diagnostics.some((detail) => detail.includes("start snapshot write failed")),
+          diagnostics.join("\n"),
+        );
+        assert(
+          diagnostics.some((detail) => detail.includes("step snapshot write failed")),
+          diagnostics.join("\n"),
+        );
+      },
+      undefined,
+      (detail) => diagnostics.push(detail),
+    );
+  }));
+
 Deno.test("queued cancellation final snapshot failure preserves state and repairs", () =>
   inWorkspace(async (workspace) => {
     const diagnostics: string[] = [];

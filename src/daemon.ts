@@ -131,11 +131,16 @@ const publish = async (
 ): Promise<Result<void>> =>
   await runtime.store.writeSnapshot(snapshot(runtime, candidate));
 
-const publishFinal = async (runtime: DaemonRuntime, id: string): Promise<void> => {
+// Job snapshots are best effort: a failed write is reported and never changes the result.
+const publishJob = async (
+  runtime: DaemonRuntime,
+  id: string,
+  stage: "start" | "step" | "final",
+): Promise<void> => {
   const published = await publish(runtime);
   if (!published.ok) {
     runtime.reportDiagnostic(
-      `mci daemon: final snapshot write failed for ${id}: ${published.error}`,
+      `mci daemon: ${stage} snapshot write failed for ${id}: ${published.error}`,
     );
   }
 };
@@ -393,14 +398,7 @@ const runWorkerProcess = async (runtime: DaemonRuntime, job: Job): Promise<Termi
     const changed = control.value.consumed !== consumed;
     consumed = control.value.consumed;
     final ??= control.value.result;
-    if (changed) {
-      const published = await publish(runtime);
-      if (!published.ok) {
-        job.storageError = `snapshot write failed: ${published.error}`;
-        signalWorker(job, "SIGTERM", false);
-        break;
-      }
-    }
+    if (changed) await publishJob(runtime, job.id, "step");
     await delay(25);
   }
   await statusPromise;
@@ -471,7 +469,7 @@ const complete = async (
   }
   if (repository.active === job) repository.active = null;
   job.child = null;
-  await publishFinal(runtime, job.id);
+  await publishJob(runtime, job.id, "final");
   job.resolve(result);
   pump(runtime, repository);
 };
@@ -491,7 +489,7 @@ const settleUnstarted = async (
   }
   await retire(runtime, repository.repository.path, result);
   job.child = null;
-  await publishFinal(runtime, job.id);
+  await publishJob(runtime, job.id, "final");
   job.resolve(result);
 };
 
@@ -527,10 +525,8 @@ const pump = (runtime: DaemonRuntime, repository: MutableRepository): void => {
     if (!begun.ok) {
       return failedTerminal(job, `request journal write failed: ${begun.error}`);
     }
-    const published = await publish(runtime);
-    return published.ok
-      ? await runWorkerProcess(runtime, job)
-      : failedTerminal(job, `snapshot write failed: ${published.error}`);
+    await publishJob(runtime, job.id, "start");
+    return await runWorkerProcess(runtime, job);
   }).then((terminal) => complete(runtime, repository, job, terminal)).catch(
     async (error) => {
       await complete(runtime, repository, job, failedTerminal(job, message(error)));
