@@ -349,6 +349,30 @@ Deno.test("CI receipt completion survives a clock before its recorded start", ()
     }
   }));
 
+Deno.test("CI receipts do not require a service path short enough for the socket", () =>
+  inWorkspace(async (workspace) => {
+    const base = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-long-" });
+    const home = `${base}/${"service-directory-".repeat(6)}`;
+    try {
+      assert(new TextEncoder().encode(`${home}/daemon.sock`).length >= 104);
+      await withSessionEnvironment({ MCI_SESSION_ID: "long-home" }, async () => {
+        const pending = unwrap(
+          await beginReceipt({
+            workspace,
+            workflow: "ci.yml",
+            job: "check",
+            command: "run",
+            home,
+          }),
+        );
+        assert(pending !== null);
+        equal(unwrap(await readSessionReceipts("long-home", home)), [pending]);
+      });
+    } finally {
+      await Deno.remove(base, { recursive: true });
+    }
+  }));
+
 Deno.test("CI receipt session selection uses the documented precedence", async () => {
   await withSessionEnvironment({
     MCI_SESSION_ID: "mci",

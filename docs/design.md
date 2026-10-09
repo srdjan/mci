@@ -484,10 +484,12 @@ CLI selects `MCI_SESSION_ID`, then `CODEX_SESSION_ID`, then `CODEX_THREAD_ID`. C
 outside a session do not create receipts.
 
 Receipts live under the service directory in `sessions/<session-hash>/<invocation>.json`.
-The session hash uses SHA-256. Each invocation uses a UUID. Each receipt identifies the
-session, workspace, workflow, job, command, and start time. Workspace and workflow paths
-use canonical identities when those paths exist. A missing workflow keeps the canonical
-identity of its deepest existing parent, followed by the missing path parts.
+Receipt storage does not apply the daemon socket path limit, so a direct `mci run` works
+with a long `MCI_HOME`. The session hash uses SHA-256. Each invocation uses a UUID. Each
+receipt identifies the session, workspace, workflow, job, command, and start time.
+Workspace and workflow paths use canonical identities when those paths exist. A missing
+workflow keeps the canonical identity of its deepest existing parent, followed by the
+missing path parts.
 
 The CLI publishes a pending receipt before it validates the workflow or submits CI. The
 final receipt records validation errors, daemon errors, unknown completion, or the

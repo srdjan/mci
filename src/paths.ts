@@ -8,7 +8,8 @@ export type ServicePaths = {
   readonly snapshot: string;
   readonly journal: string;
 };
-export const servicePaths = (home?: string): Result<ServicePaths> => {
+/** Return the service directory without the daemon socket length check. */
+export const serviceDirectory = (home?: string): Result<string> => {
   const directory = home ?? Deno.env.get("MCI_HOME") ??
     `${Deno.env.get("HOME") ?? ""}/Library/Application Support/mci`;
   if (
@@ -17,7 +18,13 @@ export const servicePaths = (home?: string): Result<ServicePaths> => {
   ) {
     return err("HOME or MCI_HOME must identify an absolute directory");
   }
-  const trimmed = directory.replace(/\/+$/, "");
+  return ok(directory.replace(/\/+$/, ""));
+};
+
+export const servicePaths = (home?: string): Result<ServicePaths> => {
+  const directory = serviceDirectory(home);
+  if (!directory.ok) return directory;
+  const trimmed = directory.value;
   const socket = `${trimmed}/daemon.sock`;
   // Darwin reserves one byte for the terminating NUL in sockaddr_un.sun_path.
   if (new TextEncoder().encode(socket).length >= 104) {

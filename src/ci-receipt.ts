@@ -1,5 +1,5 @@
 // @light-fp adapter
-import { servicePaths } from "./paths.ts";
+import { serviceDirectory } from "./paths.ts";
 import type { TerminalKind } from "./protocol.ts";
 import { attempt, err, message, ok, type Result } from "./result.ts";
 
@@ -203,10 +203,10 @@ export const sessionReceiptDirectory = async (
   sessionId: string,
   home?: string,
 ): Promise<Result<string>> => {
-  const paths = servicePaths(home);
-  if (!paths.ok) return paths;
+  const service = serviceDirectory(home);
+  if (!service.ok) return service;
   const hash = await sessionHash(sessionId);
-  return hash.ok ? ok(`${paths.value.directory}/sessions/${hash.value}`) : hash;
+  return hash.ok ? ok(`${service.value}/sessions/${hash.value}`) : hash;
 };
 
 export const receiptPath = async (
@@ -248,11 +248,11 @@ const prepareReceiptDirectory = async (
   sessionId: string,
   home?: string,
 ): Promise<Result<string>> => {
-  const paths = servicePaths(home);
-  if (!paths.ok) return paths;
-  const root = await privateDirectory(paths.value.directory, true);
+  const service = serviceDirectory(home);
+  if (!service.ok) return service;
+  const root = await privateDirectory(service.value, true);
   if (!root.ok) return root;
-  const sessions = `${paths.value.directory}/sessions`;
+  const sessions = `${service.value}/sessions`;
   const madeSessions = await privateDirectory(sessions, false);
   if (!madeSessions.ok) return madeSessions;
   const directory = await sessionReceiptDirectory(sessionId, home);
@@ -503,14 +503,14 @@ export const readSessionReceipts = async (
   sessionId: string,
   home?: string,
 ): Promise<Result<readonly CiReceipt[]>> => {
-  const paths = servicePaths(home);
-  if (!paths.ok) return paths;
+  const service = serviceDirectory(home);
+  if (!service.ok) return service;
   const directory = await sessionReceiptDirectory(sessionId, home);
   if (!directory.ok) return directory;
   for (
     const path of [
-      paths.value.directory,
-      `${paths.value.directory}/sessions`,
+      service.value,
+      `${service.value}/sessions`,
       directory.value,
     ]
   ) {
