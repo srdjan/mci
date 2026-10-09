@@ -52,7 +52,7 @@ const nativeGit = async (args: readonly string[]): Promise<Result<string>> => {
 const nativeBrewPrefix = async (): Promise<Result<string>> => {
   const brew = await findBrew();
   if (!brew.ok) return brew;
-  const result = await command(brew.value, ["--prefix", "mci"]);
+  const result = await command(brew.value, ["--prefix", "--installed", "mci"]);
   if (!result.ok) return result;
   if (result.value.code !== 0 || !result.value.stdout.startsWith("/")) {
     return err(
