@@ -111,7 +111,8 @@ export const inspectProcessIdentity = async (
     {
       args: ["-ww", "-o", "pid=,pgid=,lstart=,command=", "-p", String(pid)],
       clearEnv: true,
-      env: { LC_ALL: "C", TZ: "UTC" },
+      // LC_ALL=C would print non-ASCII path bytes in vis form, so only time stays C.
+      env: { LC_CTYPE: "UTF-8", LC_TIME: "C", TZ: "UTC" },
     },
     {
       timeoutMs: nativePolicy.graceMs,

@@ -293,8 +293,10 @@ overrides.
 
 The next run reads the journal while it holds the workspace lock. Recovery compares the
 recorded PID, process group, start text, and unique script path. The process module uses
-wide `ps` output with a fixed locale and the UTC time zone. A change of the host time zone
-then cannot change the recorded start text. A journal that an earlier version wrote in the
+wide `ps` output with the C time locale and the UTC time zone. A change of the host time
+zone then cannot change the recorded start text. The UTF-8 character locale prints
+non-ASCII workspace paths verbatim. The C character locale would escape those bytes, and
+the script path comparison would then fail. A journal that an earlier version wrote in the
 host time zone fails recovery once with a different start time. Recovery checks identity
 immediately before SIGTERM and at each grace poll.
 

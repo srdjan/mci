@@ -394,6 +394,30 @@ Deno.test("runProcess normalizes an abnormal cancellation reason", async () => {
   equal(await running, ok({ kind: "stopped", reason: "SIGTERM" }));
 });
 
+Deno.test({
+  name: "inspectProcessIdentity keeps a non-ASCII script path verbatim",
+  ignore: Deno.build.os !== "darwin",
+  fn: async () => {
+    const directory = await Deno.makeTempDir({ prefix: "mci Café Zürich " });
+    const script = `${await Deno.realPath(directory)}/step-1.sh`;
+    await Deno.writeTextFile(script, "sleep 10\n");
+    const child = new Deno.Command("/bin/bash", {
+      args: [script],
+      stdout: "null",
+      stderr: "null",
+    }).spawn();
+    try {
+      const inspected = await inspectProcessIdentity(child.pid);
+      assert(inspected.ok && inspected.value !== null);
+      assert(inspected.value.command.includes(script), inspected.value.command);
+    } finally {
+      child.kill("SIGKILL");
+      await child.status;
+      await Deno.remove(directory, { recursive: true });
+    }
+  },
+});
+
 Deno.test("recoverProcess rejects the wrong identity without killing it", async () => {
   const child = new Deno.Command("/bin/sleep", {
     args: ["10"],
