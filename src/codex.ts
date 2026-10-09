@@ -62,10 +62,15 @@ const decodeEvent = (value: unknown): Result<HookEvent> => {
 const receiptKey = (receipt: CiReceipt): string =>
   `${receipt.workspace}\0${receipt.workflow}\0${receipt.job}`;
 
+// A validation error can name a mistyped job or workflow that no later run can repeat.
+const validationError = (receipt: CiReceipt): boolean =>
+  receipt.outcome.kind === "error" && receipt.outcome.code === 2;
+
 const clears = (failure: CiReceipt, success: CiReceipt): boolean => {
   if (success.outcome.kind !== "success" || success.id === failure.id) return false;
-  const threshold = failure.finished ?? failure.started;
-  return receiptKey(success) === receiptKey(failure) && success.started >= threshold;
+  if (success.started < (failure.finished ?? failure.started)) return false;
+  return receiptKey(success) === receiptKey(failure) ||
+    (validationError(failure) && success.workspace === failure.workspace);
 };
 
 const unresolvedReceipts = (receipts: readonly CiReceipt[]): readonly CiReceipt[] =>

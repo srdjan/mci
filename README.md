@@ -131,7 +131,9 @@ completion requests repair continuation when a failure remains unresolved.
 
 A later passing run clears only failures for the same workspace, workflow, and job. A
 passing run that began before a failure finished cannot clear that failure. Failures in
-other jobs or sessions remain separate. The adapter does not use a result age limit or
+other jobs or sessions remain separate. A validation error with exit code 2 is the one
+exception. Any later passing run in the same workspace clears it, because a mistyped job
+or workflow path cannot pass on a rerun. The adapter does not use a result age limit or
 infer CI results from Git command text.
 
 The CLI saves a receipt before validation or execution. Validation errors, daemon

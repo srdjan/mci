@@ -519,7 +519,9 @@ success clears only matching workspace, workflow, and job failures. The success 
 at or after the finish time of the failed invocation. For a pending invocation, the
 adapter compares start times. A backward clock change can delay resolution until a passing
 run starts at or after the recorded failure finish time. A result from another session
-cannot clear the failure.
+cannot clear the failure. A validation error receipt, with kind `error` and code 2, is the
+one exception. A later success in the same workspace and session clears it for any
+workflow and job, because a mistyped job or workflow path cannot pass on a rerun.
 
 The adapter sends a warning for the user and repair context for the agent. Session start
 and prompt submission restore unresolved failure context. A `Stop` event requests repair

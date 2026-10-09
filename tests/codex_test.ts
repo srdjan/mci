@@ -381,6 +381,54 @@ Deno.test("Codex hook clears failures only after matching workflow, job, and tim
     }
   }));
 
+Deno.test("Codex hook clears a validation error after a later workspace success", () =>
+  inWorkspace(async (workspace) => {
+    const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-codex-" });
+    const passed = (values: Readonly<Partial<CiReceipt>>) =>
+      receipt("validation", workspace, {
+        started: "2026-10-04T12:02:00.000Z",
+        finished: "2026-10-04T12:03:00.000Z",
+        outcome: {
+          kind: "success",
+          code: 0,
+          detail: "passed",
+          requestId: null,
+          log: null,
+        },
+        ...values,
+      });
+    try {
+      await saveReceipt(
+        home,
+        receipt("validation", workspace, {
+          job: "chekc",
+          outcome: {
+            kind: "error",
+            code: 2,
+            detail: "jobs.chekc: job not found",
+            requestId: null,
+            log: null,
+          },
+        }),
+      );
+      await saveReceipt(home, passed({ workspace: `${workspace}/elsewhere` }));
+      await saveReceipt(home, passed({ started: "2026-10-04T12:00:30.000Z" }));
+      const unresolved = json(
+        await runHook(workspace, home, event("validation", workspace, "SessionStart")),
+      );
+      assert(message(unresolved).includes("job not found"));
+
+      await saveReceipt(home, passed({}));
+      equal(
+        (await runHook(workspace, home, event("validation", workspace, "SessionStart")))
+          .stdout.trim(),
+        "{}",
+      );
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  }));
+
 Deno.test("Codex turn hooks retain unresolved failures and bound Stop continuation", () =>
   inWorkspace(async (workspace) => {
     const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-codex-" });
