@@ -233,7 +233,7 @@ private func inspectHook(
     timeoutMilliseconds: Int
 ) -> HookReadiness {
     let canonicalRepository: String
-    guard let path = resolve(repository) else {
+    guard let path = canonicalPath(repository) else {
         return .checkFailed("The repository is not available.")
     }
     canonicalRepository = path
@@ -250,7 +250,7 @@ private func inspectHook(
         return .checkFailed("The Git worktree root could not be read: \(error.inspectionMessage)")
     }
     let canonicalRoot: String
-    guard let rootPath = resolve(reportedRoot) else {
+    guard let rootPath = canonicalPath(reportedRoot) else {
         return .checkFailed("The Git worktree root is not available.")
     }
     canonicalRoot = rootPath
@@ -344,7 +344,7 @@ private func inspectHook(
     }
     let prefix = (executable as NSString).deletingLastPathComponent as NSString
     let packagedHook = prefix.deletingLastPathComponent + "/libexec/hooks/pre-commit"
-    guard let packagedPath = resolve(packagedHook), hookPath == packagedPath else {
+    guard let packagedPath = canonicalPath(packagedHook), hookPath == packagedPath else {
         return .required("The managed pre-commit hook does not use the packaged hook path.")
     }
     guard validWorkflow(command.workflow), !command.job.isEmpty, !command.job.contains("\0") else {
@@ -540,7 +540,11 @@ private func runBounded(
     return .success(stdout)
 }
 
-private func resolve(_ path: String) -> String? {
+/// Resolve a path the way the daemon does, keeping a `/private` prefix.
+///
+/// Foundation's `resolvingSymlinksInPath` strips `/private`, so it does not match the
+/// daemon's `realpath` result for folders under `/tmp` or `/var`.
+public func canonicalPath(_ path: String) -> String? {
     guard let resolved = realpath(path, nil) else { return nil }
     defer { free(resolved) }
     return String(cString: resolved)

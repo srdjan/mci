@@ -75,7 +75,7 @@ final class MonitorModel {
                 actionError = nil
                 actionUncertain = false
                 use(snapshot: snapshot, daemonAvailable: true)
-                let canonical = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+                let canonical = canonicalPath(path) ?? path
                 if let row = rows.first(where: { $0.workspace == canonical }) {
                     if installingHook(row), let registration = hookRegistrations[row.repositoryID] {
                         pendingHookInstallations[row.repositoryID] = registration
@@ -190,7 +190,7 @@ final class MonitorModel {
                 actionError = error.message
             case .unavailable, .invalidResponse:
                 actionUncertain = true
-                actionError = "The request returned no result. Reload status before you try again."
+                actionError = "The request returned no result. Wait for the status to refresh, then try again."
             }
             refresh()
         }

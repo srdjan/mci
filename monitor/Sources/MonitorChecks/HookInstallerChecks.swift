@@ -119,6 +119,9 @@ private actor StartGate {
 }
 
 @MainActor func checkHookInstaller() async {
+    equal(
+        canonicalPath("/tmp"), "/private/tmp",
+        "canonical paths keep the /private prefix that the daemon stores")
     var status = HookStatus(readiness: .required("The effective pre-commit hook is absent."))
     status.recordInstallation(.failure(.failed(exitCode: 23, stderr: "installation failed\n")))
     equal(
