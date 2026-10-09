@@ -552,11 +552,14 @@ export const installCodexHooksWith = async (
 ): Promise<Result<string>> => {
   const supplied = await metadata(repository);
   if (!supplied.ok) return supplied;
-  if (
-    supplied.value === null || !supplied.value.isDirectory || supplied.value.isSymlink
-  ) return err("The repository must be a real directory");
+  if (supplied.value === null) return err("The repository must be a directory");
   const root = await attempt(() => Deno.realPath(repository));
   if (!root.ok) return root;
+  const resolved = await metadata(root.value);
+  if (!resolved.ok) return resolved;
+  if (resolved.value === null || !resolved.value.isDirectory) {
+    return err("The repository must be a directory");
+  }
   const command = await hookCommand();
   if (!command.ok) return command;
   const directory = `${root.value}/.codex`;

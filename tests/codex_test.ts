@@ -816,6 +816,22 @@ Deno.test("Codex installer creates hook configuration with mode 0644", () =>
     }
   }));
 
+Deno.test("Codex installer accepts a linked repository path like other commands", () =>
+  inWorkspace(async (workspace) => {
+    const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-codex-" });
+    const repository = `${workspace}/repository`;
+    const link = `${workspace}/repository link`;
+    try {
+      await Deno.mkdir(repository);
+      await Deno.symlink(repository, link);
+      const installed = await cli(workspace, home, ["codex", "install", link]).output();
+      equal(installed.code, 0);
+      assert((await Deno.lstat(`${repository}/.codex/hooks.json`)).isFile);
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  }));
+
 Deno.test("Codex installer rejects malformed and linked hook configuration", () =>
   inWorkspace(async (workspace) => {
     const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-codex-" });
