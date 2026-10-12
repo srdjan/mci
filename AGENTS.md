@@ -23,5 +23,8 @@ mci provides general tasks that repositories can select through configuration. K
 repository-specific commands and task choices in each repository's configuration. Do not
 add behavior selected by a repository name or path to mci.
 
+Before a change to the daemon, worker, CLI, or hook setup, search `docs/solutions/` for
+recorded learnings. `CONCEPTS.md` defines the project terms.
+
 Work directly on local main. Commit each complete unit locally. Never push; the user owns
 repository backups.
