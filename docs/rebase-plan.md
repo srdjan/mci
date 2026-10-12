@@ -11,6 +11,36 @@ Two independent read-only analyses (Fable and codex astra) produced the findings
 owner accepted six decisions on 2026-10-11. Projected sizes in this plan are estimates.
 Each phase measures its real result.
 
+## Status on 2026-10-12
+
+P0 to P9 are complete on local `main`. Each commit passed the pre-commit gate. The host
+runs the packaged daemon and monitor built from `b844bf7`.
+
+| Measure                | Baseline `b6e9f89` | After P8 |
+| ---------------------- | -----------------: | -------: |
+| `src/*.ts` lines       |              8,364 |    6,068 |
+| `scripts/*.ts` lines   |              1,881 |      562 |
+| TypeScript test lines  |             13,900 |    8,729 |
+| Swift lines            |              3,952 |    2,367 |
+| All tracked code lines |             28,097 |   17,726 |
+| Markdown lines         |              5,611 |    1,311 |
+| Deno tests             |                462 |      264 |
+| Native checks          |                340 |      247 |
+| Full suite wall time   |             46.4 s |   24.4 s |
+| Line coverage          |              78.5% |    79.7% |
+| Branch coverage        |              82.9% |    83.9% |
+
+Manual checks on an isolated daemon: two repositories ran at the same time. After
+`kill -9` of the daemon and a restart, both latest results were INTERRUPTED, and no worker
+survived. On the installed daemon, a nested `mci ci` exited 2 in 0.03 s.
+
+Decision 8 asked whether the Homebrew service needs `process_type :interactive`. The old
+hook-installer checks from `76c2cbf` failed in 1 of 10 runs under the service and in 2 of
+10 runs in a terminal. The flakiness came from those checks, which P5 deleted, and not
+from launchd scheduling. The formula stays unchanged.
+
+The remaining item is the deferred work at the end of this plan.
+
 ## Core that stays
 
 The product runs one selected job of a small GitHub Actions YAML subset against the
