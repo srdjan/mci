@@ -7,8 +7,8 @@ tree.
 One daemon serves all registered repositories for one user. Each repository has a FIFO
 queue, while different repositories can run at the same time.
 
-The runner uses trusted local commands and one selected job. See
-[VERIFICATION.md](VERIFICATION.md) for tested hosts, commands, and remaining evidence
+The runner uses trusted local commands and one selected job. The verified host is macOS
+26.6 on Apple Silicon. [docs/design.md](docs/design.md) states the remaining evidence
 limits.
 
 ## Install with a local Homebrew tap
@@ -475,10 +475,11 @@ OS boundaries.
 `deno task ci` submits the local YAML to the daemon, which saves its output.
 
 Read [docs/design.md](docs/design.md) for module responsibilities, recovery rules, and
-release ownership. The completed hardening and pruning ledger lives in
-[plans/hardening-pruning-list.md](plans/hardening-pruning-list.md). The local workflow
-lives in `ci/local-ci.yml` and uses the current checkout and installed Deno. Automatic CI
-runs only through the pre-commit hook. GitHub serves only as a repository backup service.
+release ownership. [docs/rebase-plan.md](docs/rebase-plan.md) records the current
+simplification plan. Git history keeps earlier plans and verification records. The local
+workflow lives in `ci/local-ci.yml` and uses the current checkout and installed Deno.
+Automatic CI runs only through the pre-commit hook. GitHub serves only as a repository
+backup service.
 
 The CLI identifies the host, runtime, and resolved Bash executable. Installed commands and
 the inherited environment remain inputs to each local run. A local pass does not establish

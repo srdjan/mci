@@ -41,7 +41,7 @@ display states.
 
 `MonitorApp` owns the SwiftUI panel, directory watch, log window, and login item.
 `MonitorChecks` runs plain checks because Swift Testing macros failed in 10 of 22 runs on
-the Command Line Tools toolchain. `VERIFICATION.md` records that evidence.
+the Command Line Tools toolchain.
 
 The YAML package version and integrity value reside in `deno.lock`. The parser checks the
 entire document before selected-job validation. An invalid unselected job can therefore
@@ -363,8 +363,7 @@ names the Apple Silicon prefix `/opt/homebrew`. On an Intel-prefix host, setup r
 as foreign until the task names `/usr/local/opt/mci/bin/mci`. The checks cover the working
 tree, including unstaged changes.
 
-Manual verification and compilation remain available. `VERIFICATION.md` records observed
-coverage and keeps evidence limits explicit.
+Manual verification and compilation remain available.
 
 ## Homebrew package and managed hooks
 
