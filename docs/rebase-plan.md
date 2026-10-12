@@ -176,14 +176,17 @@ validation compares the installed text with it. Keep the exports `hookScript`,
 3. Validate the packaged hook installation (keep `validatePackagedHookInstallation`).
 4. Read the effective `core.hooksPath`. If it equals the packaged hooks directory or its
    real path, skip step 6. (`/opt/homebrew/opt/mci` is a symbolic link.) If it names
-   another directory, or `.git/hooks/pre-commit` is an active non-sample hook, refuse with
-   a message that names that hook.
+   another directory, refuse. Otherwise inspect the hooks directory that Git uses now
+   (`git rev-parse --git-path hooks`). A new hook path disables every hook in that
+   directory, so refuse when it holds any active Git hook (a known hook name, not a
+   `.sample` file). The message names each such hook.
 5. Add or keep the `mci:ci` task in `deno.json`. Preserve the POSIX permission bits and
    use atomic replacement. Keep a matching existing task unchanged.
 6. Run `git config --local core.hooksPath <packaged hooks directory>`.
 
 If step 6 fails, report the error and name the step. A rerun completes the work. There is
 no cancellation, no rollback, no `extensions.worktreeConfig`, and no `--replace-pre-push`.
+Remove the `--replace-pre-push` flag from `src/cli.ts` and its tests.
 
 `mci hooks setup <repository>`: if `ci/local-ci.yml` is absent, generate it with one step
 per defined standard task in the order `fmt:check`, `lint`, `check`, `test`. Require at
