@@ -73,6 +73,9 @@ struct PanelView: View {
             }
             .buttonStyle(.plain)
             .padding(.vertical, 2)
+            Text("Then run mci hooks setup <path> once in a terminal.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Toggle(
                 "Launch at login",
@@ -172,7 +175,6 @@ struct RowView: View {
                         }
                     }
                 }
-                hookStatus
             }
         }
         .padding(.horizontal, 12)
@@ -183,41 +185,5 @@ struct RowView: View {
         guard let lastRun = row.lastRun else { return "" }
         return row.active != nil
             ? runningTime(since: lastRun, now: now) : relativeTime(from: lastRun, now: now)
-    }
-
-    @ViewBuilder private var hookStatus: some View {
-        if model.installingHook(row) {
-            Text("Installing hook").font(.caption).foregroundStyle(.secondary)
-        } else {
-            switch row.hookReadiness {
-            case .installed: EmptyView()
-            case .required(let detail):
-                hookWarning("Hook installation required", detail: detail, action: "Retry hook installation") {
-                    model.retryHookInstallation(row)
-                }
-            case .checkFailed(let detail):
-                hookWarning("Cannot check hook installation", detail: detail, action: "Retry hook check") {
-                    model.retryHookCheck(row)
-                }
-            case nil:
-                Text(model.daemonAvailable ? "Checking hook installation" : "Hook installation not checked")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func hookWarning(
-        _ title: String, detail: String, action: String, retry: @escaping () -> Void
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.red)
-            Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(detail)
-            if !model.daemonAvailable {
-                Text("Last hook check: daemon unavailable").font(.caption).foregroundStyle(.secondary)
-            }
-            Button(action, action: retry)
-                .buttonStyle(.borderless)
-                .disabled(!model.daemonAvailable || model.checkingHook(row))
-        }
     }
 }

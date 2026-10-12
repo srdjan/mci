@@ -102,23 +102,6 @@ private func defaultSnapshotFixtureDirectory() -> String {
     }
 
     let live = rowState(repository: repository, daemonAvailable: true)
-    let hookFailure = HookReadiness.required("The pre-commit hook is missing.")
-    let withHookWarning = rowState(
-        repository: repository, daemonAvailable: true, hookReadiness: hookFailure)
-    equal(withHookWarning.kind, live.kind, "a hook warning preserves active CI state")
-    equal(withHookWarning.latest, live.latest, "a hook warning preserves completed history")
-    equal(withHookWarning.hookReadiness, hookFailure, "a rebuilt row keeps its hook warning")
-    let staleHookWarning = rowState(
-        repository: repository, daemonAvailable: false, hookReadiness: hookFailure)
-    equal(staleHookWarning.hookReadiness, hookFailure, "an offline row retains the last hook check")
-    equal(staleHookWarning.active, nil, "a cached hook warning does not retain an active CI run")
-    let completed = DaemonRepository(
-        id: repository.id, path: repository.path, queued: 0, active: nil,
-        latest: repository.latest, blocked: nil)
-    let completedWarning = rowState(
-        repository: completed, daemonAvailable: true, hookReadiness: hookFailure)
-    equal(completedWarning.hookReadiness, hookFailure, "completed history keeps its hook warning")
-    equal(completedWarning.latest, repository.latest, "a hook warning preserves the completed result")
     equal(live.repositoryID, "stable-id", "row uses the stable repository ID")
     equal(live.kind, .running, "an active job is running")
     equal(live.detail, "test", "an active job shows its step")

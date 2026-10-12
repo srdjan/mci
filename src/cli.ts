@@ -8,13 +8,7 @@ import {
 } from "./ci-receipt.ts";
 import { codexCommand } from "./codex.ts";
 import { runDaemon } from "./daemon.ts";
-import {
-  doctor,
-  type DoctorReport,
-  type HookCancellationReason,
-  installHook,
-  setupHook,
-} from "./hooks.ts";
+import { doctor, type DoctorReport, installHook, setupHook } from "./hooks.ts";
 import { setup } from "./install.ts";
 import { managementCommand } from "./management.ts";
 import { attempt, err, ok, type Result } from "./result.ts";
@@ -30,27 +24,23 @@ Usage: mci <check|run|ci> <workflow.yml> --job <id>
        mci status [repository-id-or-path] [--json]
        mci logs <repository-id-or-path> [--follow]
        mci doctor [repository-id-or-path]
-       mci hooks install <repository> --workflow <file> --job <id> [--timeout-ms <milliseconds>]
-       mci hooks setup <repository> [--replace-pre-push] [--timeout-ms <milliseconds>]
+       mci hooks install <repository> --workflow <file> --job <id>
+       mci hooks setup <repository> [--replace-pre-push]
        mci codex hook | mci codex install <repository>
 
 Run from the workspace root. check executes no workflow commands.
 ci requires a registered repository and a running daemon. It waits for its request.
 Only run steps with an explicit effective shell: bash are supported.`;
 
-const hookTimeoutMaximumMs = 120000;
-
 type HookSetupCommand = {
   readonly repository: string;
   readonly replacePrePush: boolean;
-  readonly timeoutMs: number;
 };
 
 type HookInstallCommand = {
   readonly repository: string;
   readonly workflow: string;
   readonly job: string;
-  readonly timeoutMs: number;
 };
 
 type WorkflowInputs = {
@@ -64,114 +54,53 @@ type WorkflowPreparation = WorkflowInputs & {
   readonly shell: string;
 };
 
-const parseHookTimeout = (value: string): Result<number> => {
-  if (!/^[1-9][0-9]*$/.test(value)) return err("invalid hook timeout");
-  const timeoutMs = Number(value);
-  return Number.isSafeInteger(timeoutMs) && timeoutMs <= hookTimeoutMaximumMs
-    ? ok(timeoutMs)
-    : err("invalid hook timeout");
-};
-
 const parseHookSetup = (args: readonly string[]): Result<HookSetupCommand> => {
   const repository = args[2];
   if (args[0] !== "hooks" || args[1] !== "setup" || repository === undefined) {
     return err("invalid hook setup command");
   }
   let replacePrePush = false;
-  let timeoutMs = hookTimeoutMaximumMs;
-  let timeoutSeen = false;
   for (let index = 3; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--replace-pre-push" && !replacePrePush) {
       replacePrePush = true;
       continue;
     }
-    if (argument === "--timeout-ms" && !timeoutSeen) {
-      const value = args[index + 1];
-      if (value === undefined) return err("missing hook timeout");
-      const parsed = parseHookTimeout(value);
-      if (!parsed.ok) return parsed;
-      timeoutMs = parsed.value;
-      timeoutSeen = true;
-      index += 1;
-      continue;
-    }
     return err("invalid hook setup option");
   }
-  return ok({ repository, replacePrePush, timeoutMs });
+  return ok({ repository, replacePrePush });
 };
 
 const parseHookInstall = (args: readonly string[]): Result<HookInstallCommand> => {
   if (
     args[0] !== "hooks" || args[1] !== "install" || args[2] === undefined ||
     args[3] !== "--workflow" || args[4] === undefined || args[5] !== "--job" ||
-    args[6] === undefined || (args.length !== 7 && args.length !== 9)
+    args[6] === undefined || args.length !== 7
   ) return err("invalid hook install command");
-  let timeoutMs = hookTimeoutMaximumMs;
-  if (args.length === 9) {
-    if (args[7] !== "--timeout-ms" || args[8] === undefined) {
-      return err("invalid hook install timeout");
-    }
-    const parsed = parseHookTimeout(args[8]);
-    if (!parsed.ok) return parsed;
-    timeoutMs = parsed.value;
-  }
   return ok({
     repository: args[2],
     workflow: args[4],
     job: args[6],
-    timeoutMs,
   });
 };
 
-const hookCancellationCode = (reason: unknown): 124 | 130 | 143 | null => {
-  if (typeof reason !== "object" || reason === null || !("tag" in reason)) return null;
-  if (
-    reason.tag === "timeout" && "timeoutMs" in reason &&
-    typeof reason.timeoutMs === "number" && Number.isSafeInteger(reason.timeoutMs) &&
-    reason.timeoutMs > 0 && reason.timeoutMs <= hookTimeoutMaximumMs
-  ) return 124;
-  if (reason.tag === "SIGINT") return 130;
-  if (reason.tag === "SIGTERM") return 143;
-  return null;
-};
-
 const runHookOperation = async (
-  timeoutMs: number,
   repository: string,
-  operation: (root: string, signal: AbortSignal) => Promise<Result<void>>,
+  operation: (root: string) => Promise<Result<void>>,
   success: string,
 ): Promise<number> => {
-  const controller = new AbortController();
-  const interrupt = () =>
-    controller.abort({ tag: "SIGINT" } satisfies HookCancellationReason);
-  const terminate = () =>
-    controller.abort({ tag: "SIGTERM" } satisfies HookCancellationReason);
-  Deno.addSignalListener("SIGINT", interrupt);
-  Deno.addSignalListener("SIGTERM", terminate);
-  const timer = setTimeout(
-    () =>
-      controller.abort({ tag: "timeout", timeoutMs } satisfies HookCancellationReason),
-    timeoutMs,
-  );
-  try {
-    const root = await attempt(() => Deno.realPath(repository));
-    if (!root.ok) {
-      console.error(root.error);
-      return 2;
-    }
-    const result = await operation(root.value, controller.signal);
-    if (result.ok) {
-      console.log(success);
-      return 0;
-    }
-    console.error(result.error);
-    return hookCancellationCode(controller.signal.reason) ?? 1;
-  } finally {
-    clearTimeout(timer);
-    Deno.removeSignalListener("SIGINT", interrupt);
-    Deno.removeSignalListener("SIGTERM", terminate);
+  const root = await attempt(() => Deno.realPath(repository));
+  if (!root.ok) {
+    console.error(root.error);
+    return 2;
   }
+  const result = await operation(root.value);
+  if (result.ok) {
+    console.log(success);
+    return 0;
+  }
+  console.error(result.error);
+  return 1;
 };
 
 // Aborts the controller when the original parent process exits. Returns the stop function.
@@ -371,13 +300,8 @@ export const main = async (args: readonly string[]): Promise<number> => {
       return 2;
     }
     return await runHookOperation(
-      parsed.value.timeoutMs,
       parsed.value.repository,
-      (root, signal) =>
-        setupHook(root, {
-          replacePrePush: parsed.value.replacePrePush,
-          signal,
-        }),
+      (root) => setupHook(root, { replacePrePush: parsed.value.replacePrePush }),
       "Configured pre-commit CI for this worktree.",
     );
   }
@@ -388,10 +312,8 @@ export const main = async (args: readonly string[]): Promise<number> => {
       return 2;
     }
     return await runHookOperation(
-      parsed.value.timeoutMs,
       parsed.value.repository,
-      (root, signal) =>
-        installHook(root, parsed.value.workflow, parsed.value.job, { signal }),
+      (root) => installHook(root, parsed.value.workflow, parsed.value.job),
       "Installed the pre-commit hook and its Deno task.",
     );
   }

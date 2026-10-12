@@ -26,21 +26,4 @@ import MonitorCore
     equal(
         combinedState(rows([.pass]), daemonAvailable: false).kind, .unavailable,
         "daemon availability overrides historical rows")
-
-    let hookMissing = RowState(
-        workspace: "/repository", kind: .pass,
-        hookReadiness: .required("The pre-commit hook is missing."))
-    equal(hookMissing.kind, .pass, "a missing hook does not change the completed CI result")
-    equal(combinedState([hookMissing]).kind, .error, "a missing hook needs menu bar attention")
-    equal(combinedState([hookMissing]).attention, 1, "a missing hook counts once")
-    let hookUnknown = RowState(
-        workspace: "/repository", kind: .fail,
-        hookReadiness: .checkFailed("Git could not read the repository."))
-    equal(combinedState([hookUnknown]).attention, 1, "hook and CI errors count one repository")
-    equal(
-        combinedState([hookMissing], daemonAvailable: false).kind, .unavailable,
-        "daemon unavailability overrides a cached hook warning")
-    let hookInstalled = RowState(workspace: "/repository", kind: .noRuns, hookReadiness: .installed)
-    equal(combinedState([hookInstalled]).kind, .noRuns, "an installed hook does not invent a CI run")
-    equal(combinedState([hookInstalled]).attention, 0, "an installed hook needs no attention")
 }

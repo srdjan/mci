@@ -17,7 +17,7 @@ final class AddRepositoryPresenter {
         chooser.canChooseFiles = false
         chooser.allowsMultipleSelection = false
         chooser.prompt = "Add"
-        chooser.message = "Choose a repository folder. mci creates missing CI configuration from defined standard Deno tasks: fmt:check, lint, check, and test. Repository YAML selects optional build or browser tasks. Setup replaces pre-push with pre-commit CI for the selected worktree."
+        chooser.message = "Choose a repository folder. The monitor registers it with the daemon."
         panel = chooser
         chooser.begin { [weak self] response in
             MainActor.assumeIsolated {

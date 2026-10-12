@@ -418,16 +418,16 @@ run. Removing the `status.json` projection requires a compatibility decision.
 `mci:ci` Deno task and selects the packaged hook through an absolute Homebrew path. Git
 configuration applies to the current worktree.
 
-`mci hooks setup` supplies the menu bar's automatic repository setup. It preserves an
-existing `ci/local-ci.yml` and validates job `check`. If that workflow is absent, it
-creates one step per defined standard Deno task. The order is `fmt:check`, `lint`,
-`check`, then `test`. An absent task is omitted. Setup requires at least one task and
-rejects empty, invalid, or recursive selected tasks before mutation. The repository
-workflow selects optional tasks, including builds and browser checks. The corresponding
-commands remain in `deno.json`. The YAML is the sole task-selection configuration. No
-repository name or path selects different behavior in mci. Setup adds `.mci/` to
-`.gitignore` when necessary. This entry keeps runtime files outside Git changes and Deno
-formatting. Setup restores the previous ignore file when installation fails.
+`mci hooks setup` configures one repository from a terminal. It preserves an existing
+`ci/local-ci.yml` and validates job `check`. If that workflow is absent, it creates one
+step per defined standard Deno task. The order is `fmt:check`, `lint`, `check`, then
+`test`. An absent task is omitted. Setup requires at least one task and rejects empty,
+invalid, or recursive selected tasks before mutation. The repository workflow selects
+optional tasks, including builds and browser checks. The corresponding commands remain in
+`deno.json`. The YAML is the sole task-selection configuration. No repository name or path
+selects different behavior in mci. Setup adds `.mci/` to `.gitignore` when necessary. This
+entry keeps runtime files outside Git changes and Deno formatting. Setup restores the
+previous ignore file when installation fails.
 
 Dependency discovery and recursion detection use one literal invocation scanner. The
 scanner consumes required option values before the task name. Deno 2.9.7 consumes a
@@ -453,11 +453,10 @@ With `--replace-pre-push`, setup can replace repository-owned `.githooks` config
 for the selected worktree. The flag authorizes disabling that directory's pre-push hook.
 Setup preserves the old hook files and shared Git settings. An unknown pre-commit hook or
 another active hook blocks replacement. Setup removes a generated workflow when
-installation fails. The monitor retains installation errors across inspections until
-installation or inspection succeeds.
+installation fails.
 
 All repositories use the same packaged-hook validation. A tracked source hook is not an
-installation exception. An unknown active pre-commit hook blocks automatic setup.
+installation exception. An unknown active pre-commit hook blocks setup.
 
 If Git configuration fails after the task write, the installer attempts to restore the
 previous `deno.json` contents. If the installer enabled `extensions.worktreeConfig`, it
@@ -566,49 +565,9 @@ The panel refreshes relative times every second.
 The app can register or unregister a repository through daemon requests. Unregistration
 fails while that repository has accepted requests.
 
-After folder registration succeeds, the app invokes the installed CLI to install the
-managed pre-commit hook. The menu action selects `ci/local-ci.yml` and job `check`. The
-app finds the CLI through the stable Homebrew paths and passes arguments directly. The
-command runs outside the main actor. The CLI owns its 120-second deadline for forward work
-through `--timeout-ms`.
-
-The CLI owns hook validation, conflict detection, and rollback. If hook installation
-fails, the app keeps the registered repository and shows the hook error. Status refreshes
-preserve that error. A subsequent successful action clears it.
-
-Hook operations share an optional `AbortSignal` with a tagged cancellation reason. SIGINT,
-SIGTERM, and timeout request cancellation before commit. Checkpoints follow each completed
-mutation and precede the final Git configuration command. Helpers keep their individual
-bounds and finish before cancellation checks.
-
-Restoration ignores the forward signal and attempts required actions in reverse order.
-Restoration preserves concurrent file and Git extension edits and reports failed attempts.
-Successful final `core.hooksPath` configuration commits the transaction. Later
-cancellation cannot change that success result. Cancellation exits with 130 for SIGINT,
-143 for SIGTERM, or 124 for timeout after restoration attempts finish.
-
-Installation captures output in private files and reads a bounded diagnostic tail after
-CLI exit. Cancellation sends SIGTERM once and waits for exit. The monitor applies no
-installation deadline, output-triggered termination, or SIGKILL escalation. Read-only
-inspection retains its existing bounds. An older CLI rejects `--timeout-ms` before
-mutation. The monitor never retries without that argument.
-
-The monitor retains installation tasks after cancellation requests. Daemon loss,
-repository removal, and path changes request cancellation while tasks finish cleanup. A
-retained task prevents duplicate installation during cleanup. Completion updates only the
-matching registration and repository path. Removal and path changes invalidate the
-registration token. Daemon loss preserves tokens for unchanged registrations in the saved
-snapshot. A failed removal preserves the registration token and installation diagnostic.
-Failed completions preserve diagnostics even after the repository row disappears.
-
-If registration succeeds during older cleanup, the monitor retains one automatic setup
-request for that registration. The request starts after cleanup completes. Removal, path
-changes, daemon loss, and normal Quit discard that pending request.
-
-Normal AppKit termination closes installation admission and waits for retained tasks. The
-application delegate replies after installation completion. An app with no installation
-can quit immediately. Forced termination and host crashes can interrupt restoration.
-Cleanup has no fixed deadline for the complete operation.
+The app does not install hooks. After folder registration succeeds, the panel shows a
+hint. The hint tells the user to run `mci hooks setup <path>` once in a terminal. The
+monitor does not inspect hooks.
 
 The monitor does not submit or cancel CI. It opens repositories and reads selected spool
 logs without changing them.
@@ -622,12 +581,9 @@ login preference.
 Each row shows the active request, queued count, and latest completed result. A separate
 button opens the last completed log during an active request.
 
-The combined icon uses the most urgent repository state. A hook that needs installation or
-a failed hook check raises the icon to error when no more urgent state exists. The states
-include unavailable, error, missing, interrupted, failure, running, queued, cancelled,
-pass, and no runs. The attention count covers unavailable, error, missing, interrupted,
-and failed repositories. It also counts each repository whose hook needs installation or
-whose hook check failed.
+The combined icon uses the most urgent repository state. The states include unavailable,
+error, missing, interrupted, failure, running, queued, cancelled, pass, and no runs. The
+attention count covers unavailable, error, missing, interrupted, and failed repositories.
 
 Both installers stage the bundle next to the destination. They replace
 `~/Applications/mci Monitor.app` only when the destination is a real folder whose
@@ -653,8 +609,7 @@ shutdown retains the new bundle and any previous backup. A fresh packaged instal
 retains only its new bundle when shutdown fails. The diagnostic retains the primary
 failure and names the recovery location.
 
-SIGTERM forces termination and can interrupt hook restoration. Normal application Quit
-retains its cleanup contract. Custom argument lists, ambiguous whitespace, process
+SIGTERM forces termination. Custom argument lists, ambiguous whitespace, process
 replacement, and launches after inspection remain process matching limits.
 
 `deno task monitor:install` builds the app, signs it ad hoc, verifies the signature, and

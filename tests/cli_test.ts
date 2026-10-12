@@ -232,12 +232,12 @@ Deno.test("CLI help and version use the public configuration", () =>
     assert(text(help.stdout).includes("<check|run|ci>"));
     assert(
       text(help.stdout).includes(
-        "hooks setup <repository> [--replace-pre-push] [--timeout-ms <milliseconds>]",
+        "hooks setup <repository> [--replace-pre-push]",
       ),
     );
     assert(
       text(help.stdout).includes(
-        "hooks install <repository> --workflow <file> --job <id> [--timeout-ms <milliseconds>]",
+        "hooks install <repository> --workflow <file> --job <id>",
       ),
     );
     equal(text(help.stderr), "");
@@ -285,116 +285,49 @@ Deno.test("CLI hook setup validates arguments and requires a standard task", () 
     assert(!await exists(`${workspace}/ci`));
   }));
 
-Deno.test("CLI hook commands reject invalid deadlines before repository mutation", () =>
+Deno.test("CLI hook commands reject the removed timeout option", () =>
   inWorkspace(async (workspace) => {
-    for (const value of ["0", "-1", "1.5", "120001", "9007199254740992"]) {
-      const setup = await command(workspace, [
-        "hooks",
-        "setup",
-        workspace,
-        "--timeout-ms",
-        value,
-      ]).output();
-      equal(setup.code, 2);
-      assert(text(setup.stderr).includes("Usage:"));
-      assert(!await exists(`${workspace}/ci`));
-
-      const install = await command(workspace, [
-        "hooks",
-        "install",
-        workspace,
-        "--workflow",
-        "ci/local-ci.yml",
-        "--job",
-        "check",
-        "--timeout-ms",
-        value,
-      ]).output();
-      equal(install.code, 2);
-      assert(text(install.stderr).includes("Usage:"));
-      assert(!await exists(`${workspace}/ci`));
-    }
-  }));
-
-Deno.test("CLI hook timeout restores repository state and returns 124", () =>
-  inWorkspace(async (workspace) => {
-    await initializeHookRepository(workspace);
-    const before = await Deno.readTextFile(`${workspace}/deno.json`);
-    const result = await command(workspace, [
+    const setup = await command(workspace, [
       "hooks",
       "setup",
       workspace,
-      "--replace-pre-push",
       "--timeout-ms",
-      "1",
+      "1000",
     ]).output();
+    equal(setup.code, 2);
+    assert(text(setup.stderr).includes("Usage:"));
+    assert(!await exists(`${workspace}/ci`));
 
-    equal(result.code, 124);
-    assert(text(result.stderr).includes("timed out"));
-    equal(await Deno.readTextFile(`${workspace}/deno.json`), before);
+    const install = await command(workspace, [
+      "hooks",
+      "install",
+      workspace,
+      "--workflow",
+      "ci/local-ci.yml",
+      "--job",
+      "check",
+      "--timeout-ms",
+      "1000",
+    ]).output();
+    equal(install.code, 2);
+    assert(text(install.stderr).includes("Usage:"));
+    assert(!await exists(`${workspace}/ci`));
   }));
 
-Deno.test("CLI hook install accepts current and deadline forms", () =>
+Deno.test("CLI hook install configures the repository", () =>
   inWorkspace(async (workspace) => {
     await initializeHookRepository(workspace);
-    for (const deadline of [[], ["--timeout-ms", "120000"]] as const) {
-      const result = await command(workspace, [
-        "hooks",
-        "install",
-        workspace,
-        "--workflow",
-        "ci/local-ci.yml",
-        "--job",
-        "check",
-        ...deadline,
-      ]).output();
-      assert(result.code === 0, text(result.stderr));
-    }
+    const result = await command(workspace, [
+      "hooks",
+      "install",
+      workspace,
+      "--workflow",
+      "ci/local-ci.yml",
+      "--job",
+      "check",
+    ]).output();
+    assert(result.code === 0, text(result.stderr));
   }));
-
-for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
-  Deno.test(`CLI hook ${signal} waits for its active helper and returns ${code}`, () =>
-    inWorkspace(async (workspace) => {
-      await initializeHookRepository(workspace);
-      const configPath = `${workspace}/deno.json`;
-      const config = await Deno.readTextFile(configPath);
-      const gitConfigPath = `${workspace}/.git/config`;
-      const gitConfig = await Deno.readTextFile(gitConfigPath);
-      const gate = `${workspace}/git-config-gate`;
-      const createdGate = await new Deno.Command("/usr/bin/mkfifo", {
-        args: [gate],
-        stdout: "piped",
-        stderr: "piped",
-      }).output();
-      equal(createdGate.code, 0);
-      await Deno.writeTextFile(
-        gitConfigPath,
-        `${gitConfig}\n[include]\n\tpath = ${gate}\n`,
-      );
-      const child = command(workspace, [
-        "hooks",
-        "setup",
-        workspace,
-        "--timeout-ms",
-        "120000",
-      ]).spawn();
-      const output = child.output();
-      let gateWriter: Deno.FsFile | null = null;
-      try {
-        gateWriter = await Deno.open(gate, { write: true });
-        child.kill(signal);
-        await Deno.writeTextFile(gitConfigPath, gitConfig);
-        gateWriter.close();
-        gateWriter = null;
-        const result = await output;
-        equal(result.code, code);
-        assert(text(result.stderr).includes(signal));
-        equal(await Deno.readTextFile(configPath), config);
-      } finally {
-        gateWriter?.close();
-      }
-    }));
-}
 
 Deno.test("CLI reports missing workflow and Bash preflight failures", () =>
   inWorkspace(async (workspace) => {

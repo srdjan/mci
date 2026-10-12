@@ -291,9 +291,9 @@ installation sets the worktree hook path to the packaged hook, which calls
 `deno task mci:ci`. The maintainer's checkout selects the packaged hook through its
 worktree configuration. Git runs one effective pre-commit hook before each commit.
 
-The two hooks are alternatives. Managed setup and the monitor refuse an active tracked
-hook, because its text differs from the packaged hook. To use the packaged hook, run
-`mci hooks setup` before `deno task hooks:install`, or skip `hooks:install`.
+The two hooks are alternatives. Managed setup refuses an active tracked hook, because its
+text differs from the packaged hook. To use the packaged hook, run `mci hooks setup`
+before `deno task hooks:install`, or skip `hooks:install`.
 
 The tracked `mci:ci` task in this repository names the Apple Silicon prefix
 `/opt/homebrew`. On a host with the Intel prefix `/usr/local`, setup refuses that task as
@@ -372,14 +372,14 @@ less .mci/ci/latest.log
 The menu bar app observes daemon snapshots and status. It can register or unregister a
 repository, open a repository, and open saved logs.
 
-When you add a folder, the app registers the repository, then configures pre-commit CI.
-The app calls `mci hooks setup` with `--replace-pre-push` for the selected worktree. Setup
-uses `ci/local-ci.yml` and job `check`. Setup preserves an existing workflow. If the
-workflow is absent, setup selects defined tasks in this order: `fmt:check`, `lint`,
-`check`, and `test`. Setup creates one step per task and omits absent tasks. The
-repository must define at least one standard task. Each selected task must be a nonempty
-string. Setup adds `.mci/` to `.gitignore` when that entry is absent. This entry excludes
-saved logs and runtime files from Git and Deno formatting.
+When you add a folder, the app only registers the repository with the daemon. The panel
+reminds you to run `mci hooks setup <path>` once in a terminal. Add `--replace-pre-push`
+to replace an active pre-push hook. Setup uses `ci/local-ci.yml` and job `check`. Setup
+preserves an existing workflow. If the workflow is absent, setup selects defined tasks in
+this order: `fmt:check`, `lint`, `check`, and `test`. Setup creates one step per task and
+omits absent tasks. The repository must define at least one standard task. Each selected
+task must be a nonempty string. Setup adds `.mci/` to `.gitignore` when that entry is
+absent. This entry excludes saved logs and runtime files from Git and Deno formatting.
 
 Setup inspects literal Deno task commands at supported shell command positions. It parses
 task options before task names. Default configuration and explicit root `deno.json` use
@@ -420,37 +420,14 @@ jobs:
         run: deno task build
 ```
 
-Every repository managed through the menu uses the packaged hook. A tracked source hook is
-a custom hook and receives the same conflict result as another unknown active hook. The
-maintainer's mci checkout selects the packaged hook through its local worktree
+Every repository set up with `mci hooks setup` uses the packaged hook. A tracked source
+hook is a custom hook and receives the same conflict result as another unknown active
+hook. The maintainer's mci checkout selects the packaged hook through its local worktree
 configuration.
 
-If setup fails, the folder stays registered and the app retains the installation error
-during refresh. Successful installation or inspection clears that error. For another
-workflow or job, use `mci hooks install` with the required arguments. That command
-preserves its strict refusal rules.
-
-The monitor checks each repository's effective pre-commit hook and Deno task. A missing
-hook shows `Hook installation required` beside the run history. `Retry hook installation`
-repeats the same automatic setup. The retry action does not start CI.
-
-Hook setup and installation accept `--timeout-ms <milliseconds>`. The value must be a
-positive integer no greater than 120000. The default is 120000 milliseconds. The CLI owns
-this deadline for forward work.
-
-SIGINT, SIGTERM, and deadline expiry request cancellation. The CLI finishes an active
-bounded helper and completes restoration attempts before exit. Cleanup can continue after
-the forward deadline. A committed installation returns success after late cancellation.
-
-The monitor waits for the CLI result during cancellation and normal Quit. It retains
-installation diagnostics, including results for removed repositories. An older CLI rejects
-the deadline argument before mutation. The monitor does not retry without that argument.
-Forced termination and host crashes can interrupt restoration.
-
-An inspection failure shows its own error instead of claiming that the hook is missing.
-`Retry hook check` repeats that read-only inspection. The monitor checks again after
-restart and during status refresh. Offline rows keep the last hook check and disable
-retry.
+If setup fails, the command prints the error and exits with status 1. The repository stays
+registered. For another workflow or job, use `mci hooks install` with the required
+arguments. That command preserves its strict refusal rules.
 
 Hook installation preserves `deno.json` when its managed task already matches. A folder
 must be the Git worktree root; the installer checks that root before local configuration.
