@@ -61,13 +61,7 @@ mci run ci/local-ci.yml --job check
 mci ci ci/local-ci.yml --job check
 mci status
 mci logs "$PWD" --follow
-mci doctor "$PWD"
 ```
-
-`mci doctor` prints every check. It returns zero when all checks pass and one when any
-check fails. Existing scripts must treat a nonzero status as an unhealthy installation.
-The `repository hook` check accepts only the packaged Homebrew hook. A checkout that uses
-the tracked `.githooks` hook therefore fails that check.
 
 `mci ci` requires a registered repository and a running daemon. It waits for the submitted
 request and streams that request's log.
@@ -277,30 +271,18 @@ instead of terminating an unrelated process.
 
 ## Develop and validate
 
-This repository provides a tracked development hook. After cloning, its installation
-command is:
-
-```sh
-deno task hooks:install
-```
-
-This command sets the repository-local hook path to `.githooks`. A worktree setting takes
-precedence. The tracked hook calls `deno task ci` from the repository root. Managed
-installation sets the worktree hook path to the packaged hook, which calls
-`deno task mci:ci`. The maintainer's checkout selects the packaged hook through its
-worktree configuration. Git runs one effective pre-commit hook before each commit.
-
-The two hooks are alternatives. Managed setup refuses an active tracked hook, because its
-text differs from the packaged hook. To use the packaged hook, run `mci hooks setup`
-before `deno task hooks:install`, or skip `hooks:install`.
+Git runs one effective pre-commit hook before each commit. Managed installation sets the
+worktree hook path to the packaged Homebrew hook, which calls `deno task mci:ci`. The
+maintainer's checkout selects the packaged hook through its worktree configuration. A
+worktree setting takes precedence over a repository-local setting.
 
 The tracked `mci:ci` task in this repository names the Apple Silicon prefix
 `/opt/homebrew`. On a host with the Intel prefix `/usr/local`, setup refuses that task as
 foreign. Before managed setup on such a host, change the task path to
 `/usr/local/opt/mci/bin/mci`.
 
-Both paths submit `ci/local-ci.yml`, job `check`, to the local daemon. The daemon saves
-output under `.mci/ci/`. Both hooks need a running daemon and a registered checkout.
+The packaged hook submits `ci/local-ci.yml`, job `check`, to the local daemon. The daemon
+saves output under `.mci/ci/`. The hook needs a running daemon and a registered checkout.
 
 The local YAML selects the four standard tasks and the optional `app:check` task. A failed
 check blocks the commit, and the checks include unstaged changes.
@@ -449,7 +431,7 @@ small CLI. The Deno source has no application classes, inheritance, expression e
 plugin system. Typed results carry failures; exception handling is limited to library and
 OS boundaries.
 
-`deno task ci` submits the local YAML to the daemon, which saves its output.
+`deno task mci:ci` submits the local YAML to the daemon, which saves its output.
 
 Read [docs/design.md](docs/design.md) for module responsibilities, recovery rules, and
 release ownership. [docs/rebase-plan.md](docs/rebase-plan.md) records the current

@@ -60,15 +60,10 @@ for each registered repository.
 The daemon starts one worker per active repository. Different repositories can run at the
 same time, while each repository runs one request at a time.
 
-If `accept()` fails while the daemon is open, the daemon writes the error to stderr and
-retries. The wait starts at 50 ms, doubles after each consecutive error, and stops at 1000
-ms. A successful accept resets the wait. Shutdown ends the wait at once.
-
-If `accept()` fails without a success for 60000 ms, the daemon stops. It writes
-`mci daemon: accept failed for <n> ms; stopping` to stderr and shuts down. The shutdown
-interrupts running jobs, as any shutdown does. The process exits with code 1. launchd
-restarts the Homebrew service. A daemon from `deno task start` stays stopped. The value
-60000 ms is a policy, not a measured capacity.
+If `accept()` fails while the daemon is open, the daemon writes
+`mci daemon: accept failed: <error>` to stderr and shuts down. The daemon does not retry.
+The shutdown cancels the running job, as any shutdown does. The process exits with code 1.
+The Homebrew service restarts the daemon. A daemon from `deno task start` stays stopped.
 
 A connection must send its first request within 5000 ms. The daemon closes a connection
 that sends no first frame in that time. This value is a policy, not a measured capacity.
@@ -137,18 +132,11 @@ boundary adds no timer and does not bound other filesystem operations during shu
 
 Registration and daemon startup recover each workspace. A held workspace lock, such as a
 direct `mci run`, does not block the repository. The worker acquires the workspace before
-each job, so recovery still precedes the next command. `mci doctor` reads `blocked`, so it
-reports such a repository as ready.
-
-Doctor reports contain each check's name, passed state, and detail. Aggregate health
-requires every check to pass. The CLI prints all reports and returns one after any failed
-check. The `repository hook` check accepts only the packaged Homebrew hook path. A
-checkout that uses the tracked `.githooks` hook fails that check by design.
-
-A request that leaves the queue before it starts is not a result. Its own client receives
-the terminal, and the daemon removes its journal entry and spool. It never replaces the
-latest completed result. This rule also covers a queued request at shutdown. An active
-request at shutdown still records INTERRUPTED as the latest result.
+each job, so recovery still precedes the next command. A request that leaves the queue
+before it starts is not a result. Its own client receives the terminal, and the daemon
+removes its journal entry and spool. It never replaces the latest completed result. This
+rule also covers a queued request at shutdown. An active request at shutdown still records
+INTERRUPTED as the latest result.
 
 The request journal records whether a request began. The daemon writes `begun: true`
 before it spawns the worker. After a daemon crash, restart recovery records INTERRUPTED
@@ -215,8 +203,8 @@ disconnect. It projects the new result to `latest.json`.
 The daemon accepts three limits. First, per-path routing keeps the arrival order only for
 one path text. Two texts for one repository can reorder. The CLI sends the real path, so
 the effect is small. Second, an older daemon refuses an 8-key journal entry. A downgrade
-with pending requests fails to start. Third, the accept failure stop interrupts running
-jobs.
+with pending requests fails to start. Third, one accept failure ends the daemon and
+cancels the running job. The Homebrew service restarts the daemon.
 
 ## Workspace lifecycle
 
@@ -348,20 +336,16 @@ GitHub serves only as a repository backup service. The repository has no GitHub 
 workflow or remote test trigger.
 
 Automatic CI runs only through Git's effective pre-commit hook. Git selects one hook path
-for the worktree. The tracked source hook resolves the repository root and calls
-`deno task ci`. The packaged hook calls `deno task mci:ci`. Both tasks submit
+for the worktree. The packaged hook calls `deno task mci:ci`. That task submits
 `ci/local-ci.yml`, job `check`, to the local daemon.
 
-`deno task hooks:install` sets the repository-local hook path to `.githooks`. A worktree
-setting takes precedence. Managed hook installation sets the packaged Homebrew path for
-the worktree. The maintainer's checkout selects the packaged hook through
-`.git/config.worktree`. Each clone needs its own configuration because Git does not copy
-local settings. The two hooks are alternatives for this repository. Managed setup refuses
-an active `.githooks` hook because its text differs from the packaged hook. Run managed
-setup before `deno task hooks:install`, or use only one of them. The tracked `mci:ci` task
-names the Apple Silicon prefix `/opt/homebrew`. On an Intel-prefix host, setup refuses it
-as foreign until the task names `/usr/local/opt/mci/bin/mci`. The checks cover the working
-tree, including unstaged changes.
+Managed hook installation sets the packaged Homebrew path for the worktree. The
+maintainer's checkout selects the packaged hook through `.git/config.worktree`. Each clone
+needs its own configuration because Git does not copy local settings. A worktree setting
+takes precedence over a repository-local setting. The tracked `mci:ci` task names the
+Apple Silicon prefix `/opt/homebrew`. On an Intel-prefix host, setup refuses it as foreign
+until the task names `/usr/local/opt/mci/bin/mci`. The checks cover the working tree,
+including unstaged changes.
 
 Manual verification and compilation remain available.
 

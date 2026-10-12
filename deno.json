@@ -22,11 +22,9 @@
     "verify": "deno task fmt:check && deno task lint && deno task check && deno task test && deno task app:check",
     "app:check": "deno run --quiet --allow-run=swift scripts/app-check.ts",
     "monitor:install": "deno run --quiet --permission-set=mci scripts/install-monitor.ts",
-    "hooks:install": "git config --local core.hooksPath .githooks",
     "demo": "deno task mci run examples/basic.yml --job check",
     "compile": "deno compile --permission-set=mci --output dist/mci src/main.ts",
     "package": "deno run --quiet --permission-set=mci scripts/package.ts",
-    "ci": "MCI_TASK_PARENT=true deno run --quiet --permission-set=mci src/main.ts ci ci/local-ci.yml --job check",
     "mci:ci": "'/opt/homebrew/opt/mci/bin/mci' ci 'ci/local-ci.yml' --job 'check'"
   },
   "compilerOptions": { "strict": true, "noUncheckedIndexedAccess": true },

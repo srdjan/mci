@@ -1292,57 +1292,16 @@ const withTestDaemon = async (
   }
 };
 
-Deno.test("daemon survives an accept error and keeps serving", () =>
-  inWorkspace((workspace) =>
-    withTestDaemon({ listen: failingListener(1) }, async (directory, daemon) => {
-      let closed = false;
-      void daemon.closed.then(() => closed = true);
-      assert((await rpc({ version: 1, op: "register", path: workspace }, directory)).ok);
-      const result = await submit(
-        {
-          version: 1,
-          op: "submit",
-          path: workspace,
-          workflow: "after-accept-error.yml",
-          job: "check",
-          source: fixture("      - run: touch after-accept-error"),
-          env: capturedEnv(),
-        },
-        new AbortController().signal,
-        directory,
-      );
-      assert(result.ok && result.value.kind === "success");
-      const paths = servicePaths(directory);
-      assert(paths.ok);
-      assert(await exists(paths.value.socket));
-      assert(!closed);
-    })
-  ));
-
-Deno.test("closing the daemon ends the accept retry wait without a pending timer", async () => {
-  await withTestDaemon(
-    { listen: failingListener(Infinity) },
-    async (_directory, daemon) => {
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      await daemon.close();
-      await daemon.closed;
-    },
-  );
-});
-
-Deno.test("daemon stops after an accept failure lasts past its limit", () =>
-  withTestDaemon(
-    { listen: failingListener(Infinity), acceptFailureLimitMs: 200 },
-    async (directory, daemon) => {
-      const outcome = await within(daemon.closed, 3000);
-      assert(outcome !== null, "the daemon did not stop");
-      assert(!outcome.ok);
-      assert(outcome.error.includes("accept failed"), outcome.error);
-      const paths = servicePaths(directory);
-      assert(paths.ok);
-      assert(!await exists(paths.value.socket));
-    },
-  ));
+Deno.test("an accept failure stops the daemon and reports the error", () =>
+  withTestDaemon({ listen: failingListener(1) }, async (directory, daemon) => {
+    const outcome = await within(daemon.closed, 3000);
+    assert(outcome !== null, "the daemon did not stop");
+    assert(!outcome.ok);
+    assert(outcome.error.includes("injected accept failure"), outcome.error);
+    const paths = servicePaths(directory);
+    assert(paths.ok);
+    assert(!await exists(paths.value.socket));
+  }));
 
 Deno.test("daemon closes a connection that sends no first request", () =>
   withTestDaemon({ requestDeadlineMs: 100 }, async (directory) => {

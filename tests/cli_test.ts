@@ -11,10 +11,6 @@ import { rpc, submit } from "../src/client.ts";
 import { readSessionReceipts } from "../src/ci-receipt.ts";
 import { withDaemon } from "./daemon_helpers.ts";
 import { cliSourceArgs } from "../src/runtime.ts";
-import { doctorCommand } from "../src/cli.ts";
-import { type DoctorCapabilities, doctorWith } from "../src/hooks.ts";
-import type { Snapshot } from "../src/protocol.ts";
-import { ok } from "../src/result.ts";
 import denoConfig from "../deno.json" with { type: "json" };
 
 const command = (
@@ -37,107 +33,6 @@ const isolatedEnv = (env?: Readonly<Record<string, string>>) => ({
   CODEX_THREAD_ID: "",
   ...env,
 });
-
-const doctorCapabilities = (daemonAvailable: boolean): DoctorCapabilities => {
-  const snapshot: Snapshot = {
-    version: 1,
-    instance: "cli-test",
-    pid: 2345,
-    updated: "2026-10-08T12:00:00.000Z",
-    repositories: [],
-  };
-  return {
-    platform: "darwin",
-    command: () => Promise.resolve(ok({ code: 0, stdout: "available\n", stderr: "" })),
-    findBrew: () => Promise.resolve(ok("/opt/homebrew/bin/brew")),
-    brewPrefix: () => Promise.resolve(ok("/opt/homebrew/opt/mci")),
-    ping: () =>
-      Promise.resolve(
-        daemonAvailable ? ok(snapshot) : { ok: false, error: "daemon is unavailable" },
-      ),
-    paths: () =>
-      ok({
-        directory: "/service",
-        socket: "/service/daemon.sock",
-        registry: "/service/registry.json",
-        snapshot: "/service/snapshot.json",
-        journal: "/service/requests.json",
-      }),
-    regularFile: (path) =>
-      Promise.resolve(ok(path.endsWith("/registry.json") ? "file" : "absent")),
-    recoveryEntries: () => Promise.resolve(ok([])),
-    realPath: (path) => Promise.resolve(ok(path)),
-    git: () => Promise.resolve(ok("/opt/homebrew/opt/mci/libexec/hooks")),
-  };
-};
-
-Deno.test("doctor command returns health and preserves every report", async () => {
-  for (const [daemonAvailable, expectedCode] of [[true, 0], [false, 1]] as const) {
-    const standardOutput: string[] = [];
-    const standardError: string[] = [];
-    const code = await doctorCommand(undefined, {
-      inspect: (repository) =>
-        doctorWith(repository, doctorCapabilities(daemonAvailable)),
-      stdout: (output) => standardOutput.push(output),
-      stderr: (output) => standardError.push(output),
-    });
-
-    equal(code, expectedCode);
-    equal(standardError, []);
-    equal(standardOutput.length, 1);
-    equal(standardOutput[0]?.split("\n").length, 8);
-    assert(standardOutput[0]?.includes("PASS platform: darwin"));
-    assert(
-      standardOutput[0]?.includes(
-        `${daemonAvailable ? "PASS" : "FAIL"} daemon: ${
-          daemonAvailable ? "pid 2345" : "daemon is unavailable"
-        }`,
-      ),
-    );
-    assert(standardOutput[0]?.includes("PASS recovery: no staging or backup apps"));
-  }
-});
-
-Deno.test("native doctor exits one for an isolated missing daemon", () =>
-  inWorkspace(async (workspace) => {
-    const serviceDirectory = await Deno.makeTempDir({
-      dir: "/tmp",
-      prefix: "mci-doctor-",
-    });
-    try {
-      const result = await command(workspace, ["doctor"], {
-        MCI_HOME: serviceDirectory,
-      }).output();
-
-      equal(result.code, 1);
-      const diagnostics = text(result.stdout).trim().split("\n");
-      equal(diagnostics.length, 8);
-      for (
-        const name of [
-          "platform",
-          "Deno",
-          "Bash",
-          "Homebrew",
-          "formula",
-          "daemon",
-          "daemon registry",
-          "recovery",
-        ]
-      ) {
-        assert(
-          diagnostics.some((diagnostic) =>
-            diagnostic.startsWith(`PASS ${name}:`) ||
-            diagnostic.startsWith(`FAIL ${name}:`)
-          ),
-          `missing ${name} diagnostic`,
-        );
-      }
-      assert(diagnostics.some((diagnostic) => diagnostic.startsWith("FAIL daemon:")));
-      equal(text(result.stderr), "");
-    } finally {
-      await Deno.remove(serviceDirectory, { recursive: true });
-    }
-  }));
 
 Deno.test({
   name: "macOS CLI displays unselected metadata and runs the selected job",

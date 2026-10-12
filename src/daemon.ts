@@ -1056,14 +1056,10 @@ export type DaemonListener = {
 
 // A policy value, not a measured capacity.
 const defaultRequestDeadlineMs = 5000;
-const firstAcceptBackoffMs = 50;
-const maximumAcceptBackoffMs = 1000;
-const defaultAcceptFailureLimitMs = 60000;
 
 export const startDaemon = async (options: {
   readonly listen?: (path: string) => DaemonListener;
   readonly requestDeadlineMs?: number;
-  readonly acceptFailureLimitMs?: number;
   readonly directory?: string;
   readonly signal?: AbortSignal;
   readonly openStore?: (paths: ServicePaths) => Promise<Result<DaemonStore>>;
@@ -1173,41 +1169,15 @@ export const startDaemon = async (options: {
     lock.close();
     return privateSocket;
   }
-  let cancelBackoff = (): void => {};
-  const backoff = (ms: number): Promise<void> =>
-    new Promise((resolve) => {
-      const timer = setTimeout(resolve, ms);
-      cancelBackoff = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-    });
-  const acceptFailureLimitMs = options.acceptFailureLimitMs ??
-    defaultAcceptFailureLimitMs;
   // The accept loop resolves with a failure only when it stops on its own.
   const accepting = (async (): Promise<string | null> => {
-    let wait = 0;
-    let failingSince: number | null = null;
     while (!runtime.value.closed) {
       const accepted = await attempt(() => listener.accept());
       if (!accepted.ok) {
         if (runtime.value.closed) break;
-        const now = performance.now();
-        failingSince ??= now;
-        const lasted = Math.round(now - failingSince);
-        if (lasted >= acceptFailureLimitMs) {
-          console.error(`mci daemon: accept failed for ${lasted} ms; stopping`);
-          return `accept failed for ${lasted} ms: ${accepted.error}`;
-        }
-        console.error(`mci daemon: accept failed: ${accepted.error}`);
-        wait = wait === 0
-          ? firstAcceptBackoffMs
-          : Math.min(wait * 2, maximumAcceptBackoffMs);
-        await backoff(wait);
-        continue;
+        // runDaemon prints this failure once as it exits.
+        return `accept failed: ${accepted.error}`;
       }
-      wait = 0;
-      failingSince = null;
       if (runtime.value.closed) {
         closeConnection(accepted.value);
         break;
@@ -1234,7 +1204,6 @@ export const startDaemon = async (options: {
       try {
         listener.close();
       } catch { /* The listener is already closed. */ }
-      cancelBackoff();
       for (const connection of connections) closeConnection(connection);
       const jobs = Array.from(runtime.value.repositories.values()).flatMap((state) => [
         ...(state.active === null ? [] : [state.active]),
