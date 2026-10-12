@@ -516,14 +516,10 @@ const managedHandler = (value: unknown): boolean =>
   object(value) && value.type === "command" && value.statusMessage === managedStatus &&
   ownedHookCommand(value.command);
 
-const legacyHandler = (value: unknown, command: string): boolean =>
-  object(value) && value.type === "command" && value.command === command;
-
 const mergeEvent = (
   value: unknown,
   name: HookEventName,
   command: string,
-  legacyCommand: string,
 ): Result<readonly unknown[]> => {
   if (value !== undefined && !Array.isArray(value)) {
     return err(`Codex hook group ${name} must be an array`);
@@ -533,10 +529,7 @@ const mergeEvent = (
     if (!object(group) || !Array.isArray(group.hooks)) {
       return err(`Codex hook group ${name} is malformed`);
     }
-    const hooks = group.hooks.filter((handler) =>
-      !managedHandler(handler) &&
-      !(name === "PostToolUse" && legacyHandler(handler, legacyCommand))
-    );
+    const hooks = group.hooks.filter((handler) => !managedHandler(handler));
     if (hooks.length > 0) groups.push({ ...group, hooks });
   }
   const handler = {
@@ -592,12 +585,9 @@ export const installCodexHooksWith = async (
       )
     ) return err(`Codex hook group ${name} is malformed`);
   }
-  const legacyCommand = `${
-    shellQuote(`${root.value}/.codex/hooks/ci-summary.sh`)
-  } 2>/dev/null || true`;
   const merged: Record<string, unknown> = { ...hooks };
   for (const name of hookEvents) {
-    const event = mergeEvent(hooks[name], name, command.value, legacyCommand);
+    const event = mergeEvent(hooks[name], name, command.value);
     if (!event.ok) return event;
     merged[name] = event.value;
   }

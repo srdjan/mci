@@ -34,8 +34,7 @@ mci setup
 ```
 
 `mci setup` installs and opens `~/Applications/mci Monitor.app`. It starts the Homebrew
-service only when the daemon does not answer. The daemon imports the earlier registry only
-when its own registry does not exist.
+service only when the daemon does not answer.
 
 Register each repository. Then configure its managed pre-commit hook.
 
@@ -357,16 +356,17 @@ deno task monitor:install "$PWD"
 ```
 
 Each repository keeps request logs under `.mci/ci/requests/`. The daemon projects the
-latest completed result to `.mci/ci/latest.json`, `status.json`, and `latest.log`.
+latest completed result to `.mci/ci/latest.json`. The `log` field of that file names the
+saved output of the result.
 
 The daemon keeps the latest completed result visible while another request runs or waits.
 It retains that result and every spool file used by a connected client. Pending journal
 entries also retain recovery files.
 
-To read the latest saved output:
+To read the latest saved output, open the file that the `log` field names:
 
 ```sh
-less .mci/ci/latest.log
+less "$(jq -r .log .mci/ci/latest.json)"
 ```
 
 The menu bar app observes daemon snapshots and status. It can register or unregister a

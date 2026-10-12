@@ -82,30 +82,28 @@ const prepareRecovery = async (workspace: string, directory: string) => {
   return { store: store.value, save };
 };
 
-for (const projection of ["latest.json", "latest.log", "status.json"] as const) {
-  Deno.test(`recorded terminal survives a ${projection} projection failure`, () =>
-    inWorkspace(async (workspace) => {
-      const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-project-" });
-      try {
-        const recovery = await prepareRecovery(workspace, directory);
-        const terminal = await recovery.save(
-          `blocked-${projection.replace(".", "-")}`,
-          "2026-10-03T18:00:01.000Z",
-        );
-        assert((await recovery.store.writeTerminal(workspace, terminal)).ok);
-        await Deno.mkdir(`${workspace}/.mci/ci/${projection}`);
-        const projected = await recovery.store.projectTerminal(workspace, terminal);
-        assert(!projected.ok);
-        const repository = recovery.store.repositories()[0];
-        assert(repository !== undefined);
-        const recorded = await recovery.store.readTerminal(repository, terminal.id);
-        assert(recorded.ok);
-        equal(recorded.value, terminal);
-      } finally {
-        await Deno.remove(directory, { recursive: true });
-      }
-    }));
-}
+Deno.test("recorded terminal survives a latest.json projection failure", () =>
+  inWorkspace(async (workspace) => {
+    const directory = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-project-" });
+    try {
+      const recovery = await prepareRecovery(workspace, directory);
+      const terminal = await recovery.save(
+        "blocked-latest-json",
+        "2026-10-03T18:00:01.000Z",
+      );
+      assert((await recovery.store.writeTerminal(workspace, terminal)).ok);
+      await Deno.mkdir(`${workspace}/.mci/ci/latest.json`);
+      const projected = await recovery.store.projectTerminal(workspace, terminal);
+      assert(!projected.ok);
+      const repository = recovery.store.repositories()[0];
+      assert(repository !== undefined);
+      const recorded = await recovery.store.readTerminal(repository, terminal.id);
+      assert(recorded.ok);
+      equal(recorded.value, terminal);
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }));
 
 Deno.test("terminal recording is idempotent and rejects a conflicting result", () =>
   inWorkspace(async (workspace) => {
@@ -194,7 +192,7 @@ Deno.test("restart accepts a pending completion found only in latest.json", () =
           JSON.parse(await Deno.readTextFile(`${directory}/requests.json`)).requests,
           [],
         );
-        equal(await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`), "latest-only");
+        equal(await Deno.readTextFile(terminal.log), "latest-only");
       } finally {
         await daemon.value.close();
       }
@@ -417,7 +415,7 @@ Deno.test("restart restores a durable completion after latest projection fails",
           JSON.parse(await Deno.readTextFile(`${directory}/requests.json`)).requests,
           [],
         );
-        equal(await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`), "second");
+        equal(await Deno.readTextFile(second.log), "second");
         assert(await exists(second.log));
         assert(!await exists(first.log));
       } finally {
@@ -527,14 +525,6 @@ Deno.test("projection failure preserves the recorded workflow result for recover
           JSON.parse(await Deno.readTextFile(`${workspace}/.mci/ci/latest.json`)),
           completed,
         );
-        equal(
-          await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`),
-          await Deno.readTextFile(completed.log),
-        );
-        equal(
-          JSON.parse(await Deno.readTextFile(`${workspace}/.mci/ci/status.json`)),
-          { version: 2, ...completed },
-        );
         assert(!await exists(prior.log));
         assert(await exists(completed.log));
         equal(await Deno.readTextFile(`${workspace}/executions`), "priorcurrent");
@@ -642,7 +632,8 @@ Deno.test("restart recovers a pending request whose spool log is missing", () =>
           JSON.parse(await Deno.readTextFile(`${directory}/requests.json`)).requests,
           [],
         );
-        equal(await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`), "");
+        assert(repository?.latest !== null && repository?.latest !== undefined);
+        equal(await Deno.readTextFile(repository.latest.log), "");
         const result = await submit(
           {
             version: 1,

@@ -65,7 +65,6 @@ Deno.test("doctor returns every healthy check in diagnostic order", async () => 
       { name: "Homebrew", passed: true, detail: "/opt/homebrew/bin/brew" },
       { name: "formula", passed: true, detail: "/opt/homebrew/opt/mci" },
       { name: "daemon", passed: true, detail: "pid 1234" },
-      { name: "legacy registry", passed: true, detail: "absent" },
       { name: "daemon registry", passed: true, detail: "file" },
       { name: "recovery", passed: true, detail: "no staging or backup apps" },
       { name: "repository registration", passed: true, detail: repository.id },

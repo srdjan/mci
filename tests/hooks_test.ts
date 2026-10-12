@@ -1761,7 +1761,7 @@ Deno.test("hook installation refuses a foreign Git hook path", async () => {
 
 Deno.test("hook installation refuses shared managed hook paths", async () => {
   await withRepository(async (repository, prefix) => {
-    for (const hooksPath of [".mci-hooks", `${prefix}/libexec/hooks`]) {
+    for (const hooksPath of [`${prefix}/libexec/hooks`]) {
       await runGit(repository, [
         "config",
         "--local",

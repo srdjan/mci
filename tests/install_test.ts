@@ -7,7 +7,6 @@ type Scene = {
   readonly source: string;
   readonly applications: string;
   readonly destination: string;
-  readonly legacy: string;
   readonly options: SetupOptions;
 };
 
@@ -24,7 +23,6 @@ const withScene = async (test: (scene: Scene) => Promise<void>): Promise<void> =
   try {
     const source = `${root}/package/mci Monitor.app`;
     const applications = `${root}/Applications`;
-    const legacy = `${root}/state/monitor.json`;
     await Deno.mkdir(source, { recursive: true });
     await Deno.writeTextFile(`${source}/marker`, "new");
     await test({
@@ -32,7 +30,6 @@ const withScene = async (test: (scene: Scene) => Promise<void>): Promise<void> =
       source,
       applications,
       destination: `${applications}/mci Monitor.app`,
-      legacy,
       options: {
         sourceBundle: source,
         applicationsDirectory: applications,
@@ -103,36 +100,6 @@ const fakeCapabilities = (overrides: Overrides = {}): Fake => {
   };
   return { calls, registrations, capabilities };
 };
-
-Deno.test("repeated setup does not replay the preserved legacy registry", async () => {
-  await withScene(async (scene) => {
-    const one = `${scene.root}/one`;
-    const two = `${scene.root}/two`;
-    await Deno.mkdir(one);
-    await Deno.mkdir(two);
-    await Deno.mkdir(`${scene.root}/state`);
-    await Deno.writeTextFile(
-      scene.legacy,
-      `${JSON.stringify({ version: 1, workspaces: [one, two] }, null, 2)}\n`,
-    );
-    const fake = fakeCapabilities();
-    unwrap(await setupWith(scene.options, fake.capabilities));
-    unwrap(await setupWith(scene.options, fake.capabilities));
-    equal(await Deno.readTextFile(`${scene.destination}/marker`), "new");
-    equal(
-      JSON.parse(await Deno.readTextFile(scene.legacy)),
-      { version: 1, workspaces: [one, two] },
-    );
-    equal(fake.registrations, []);
-    assert(!fake.calls.includes("service"));
-    equal(
-      await Array.fromAsync(Deno.readDir(scene.applications)).then((items) =>
-        items.map((item) => item.name)
-      ),
-      ["mci Monitor.app"],
-    );
-  });
-});
 
 Deno.test("setup refuses a foreign destination before it copies files", async () => {
   await withScene(async (scene) => {

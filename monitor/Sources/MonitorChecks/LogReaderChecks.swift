@@ -3,6 +3,8 @@ import MonitorCore
 
 private func logDirectory(_ root: String) -> String { root + "/.mci/ci" }
 
+private func logFile(_ root: String) -> String { logDirectory(root) + "/latest.log" }
+
 private func makeDirectory(_ path: String) {
     try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
 }
@@ -22,40 +24,36 @@ private func tail(_ result: Result<LogTail, LogError>) -> LogTail? {
     defer { removeScratch(root) }
     func workspace(_ name: String) -> String { root + "/" + name }
 
-    equal(readLogTail(workspace: workspace("none")), .failure(.missing), "missing workspace")
+    equal(readLogTail(path: logFile(workspace("none"))), .failure(.missing), "missing workspace")
     makeDirectory(logDirectory(workspace("empty")))
-    equal(readLogTail(workspace: workspace("empty")), .failure(.missing), "missing log")
+    equal(readLogTail(path: logFile(workspace("empty"))), .failure(.missing), "missing log")
 
     let linked = workspace("linked")
     writeFile(root + "/target.log", "secret\n")
     makeDirectory(logDirectory(linked))
     try? FileManager.default.createSymbolicLink(
         atPath: logDirectory(linked) + "/latest.log", withDestinationPath: root + "/target.log")
-    equal(readLogTail(workspace: linked), .failure(.notFile), "symlink is not read")
+    equal(readLogTail(path: logFile(linked)), .failure(.notFile), "symlink is not read")
 
     let directory = workspace("dir")
     makeDirectory(logDirectory(directory) + "/latest.log")
-    equal(readLogTail(workspace: directory), .failure(.notFile), "directory is not read")
+    equal(readLogTail(path: logFile(directory)), .failure(.notFile), "directory is not read")
 
     let small = workspace("small")
     writeFile(logDirectory(small) + "/latest.log", "line one\nline two\n")
     equal(
-        readLogTail(workspace: small + "/"),
+        readLogTail(path: logFile(small)),
         .success(LogTail(text: "line one\nline two\n", truncated: false, size: 18)),
         "small file is read whole")
     equal(
-        readLogTail(path: logDirectory(small) + "/latest.log"),
-        .success(LogTail(text: "line one\nline two\n", truncated: false, size: 18)),
-        "an immutable log path is read")
-    equal(
-        readLogTail(workspace: small, maxBytes: 18),
+        readLogTail(path: logFile(small), maxBytes: 18),
         .success(LogTail(text: "line one\nline two\n", truncated: false, size: 18)),
         "file of exactly the limit is not truncated")
 
     let zero = workspace("zero")
     writeFile(logDirectory(zero) + "/latest.log", "")
     equal(
-        readLogTail(workspace: zero), .success(LogTail(text: "", truncated: false, size: 0)),
+        readLogTail(path: logFile(zero)), .success(LogTail(text: "", truncated: false, size: 0)),
         "empty file")
 
     // 300 KiB of numbered lines of different lengths.
@@ -68,7 +66,7 @@ private func tail(_ result: Result<LogTail, LogError>) -> LogTail? {
     }
     let lastLine = "line \(number - 1) " + String(repeating: "x", count: (number - 1) % 37)
     writeFile(logDirectory(big) + "/latest.log", text)
-    let cut = tail(readLogTail(workspace: big))
+    let cut = tail(readLogTail(path: logFile(big)))
     check(cut != nil, "big file is read")
     if let cut {
         check(cut.truncated, "big file is truncated")
@@ -86,35 +84,35 @@ private func tail(_ result: Result<LogTail, LogError>) -> LogTail? {
     let boundary = workspace("boundary")
     writeFile(logDirectory(boundary) + "/latest.log", "aaaa\nbbbb\ncccc\n")
     equal(
-        readLogTail(workspace: boundary, maxBytes: 10),
+        readLogTail(path: logFile(boundary), maxBytes: 10),
         .success(LogTail(text: "bbbb\ncccc\n", truncated: true, size: 10)),
         "window on a line boundary keeps its first line")
     equal(
-        readLogTail(workspace: boundary, maxBytes: 11),
+        readLogTail(path: logFile(boundary), maxBytes: 11),
         .success(LogTail(text: "bbbb\ncccc\n", truncated: true, size: 10)),
         "window inside a line drops the partial line")
     equal(
-        readLogTail(workspace: boundary, maxBytes: 3),
+        readLogTail(path: logFile(boundary), maxBytes: 3),
         .success(LogTail(text: "", truncated: true, size: 0)),
         "a window that holds only a line end shows nothing")
     let oneLine = workspace("oneline")
     writeFile(logDirectory(oneLine) + "/latest.log", "aaaaaaaaaa")
     equal(
-        readLogTail(workspace: oneLine, maxBytes: 3),
+        readLogTail(path: logFile(oneLine), maxBytes: 3),
         .success(LogTail(text: "aaa", truncated: true, size: 3)),
         "a window with no line end keeps its bytes")
 
     let invalid = workspace("invalid")
     writeBytes(logDirectory(invalid) + "/latest.log", [0x61, 0xFF, 0x62, 0xC3, 0x0A])
     equal(
-        tail(readLogTail(workspace: invalid))?.text, "a\u{FFFD}b\u{FFFD}\n",
+        tail(readLogTail(path: logFile(invalid)))?.text, "a\u{FFFD}b\u{FFFD}\n",
         "invalid UTF-8 becomes replacement characters")
 
     // The reader never changes the file.
     let path = logDirectory(big) + "/latest.log"
     let before = try? FileManager.default.attributesOfItem(atPath: path)
     let bytesBefore = FileManager.default.contents(atPath: path)
-    _ = readLogTail(workspace: big)
+    _ = readLogTail(path: logFile(big))
     let after = try? FileManager.default.attributesOfItem(atPath: path)
     check(
         (before?[.modificationDate] as? Date) == (after?[.modificationDate] as? Date),

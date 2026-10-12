@@ -105,8 +105,7 @@ terminal record preserves completed work if projection or journal cleanup fails.
 
 Terminal recording and projection are separate operations. Recording preserves the first
 result for each request identifier. An identical repeated record succeeds. A conflicting
-record fails. Projection updates `latest.json`, `latest.log`, and `status.json` from the
-recorded result.
+record fails. Projection updates `latest.json` from the recorded result.
 
 After recording succeeds, the daemon returns that result and preserves it in memory. A
 projection fault blocks further repository work and retains the journal and recovery
@@ -148,8 +147,8 @@ checkout that uses the tracked `.githooks` hook fails that check by design.
 
 A request that leaves the queue before it starts is not a result. Its own client receives
 the terminal, and the daemon removes its journal entry and spool. It never replaces the
-latest completed result or `latest.log`. This rule also covers a queued request at
-shutdown. An active request at shutdown still records INTERRUPTED as the latest result.
+latest completed result. This rule also covers a queued request at shutdown. An active
+request at shutdown still records INTERRUPTED as the latest result.
 
 The request journal records whether a request began. The daemon writes `begun: true`
 before it spawns the worker. After a daemon crash, restart recovery records INTERRUPTED
@@ -162,26 +161,27 @@ obsolete controls, including files left after normal deletion fails. Failed reco
 retains pending controls for the next restart.
 
 A crash between the journal write and the worker spawn records INTERRUPTED for a worker
-that never ran. This order keeps the safe direction. A journal entry without the `begun`
-key comes from an older daemon. The new daemon reads such an entry as begun.
+that never ran. This order keeps the safe direction. The journal requires the `begun` key
+in every entry. The daemon refuses to start on an entry without it and reports a decode
+error. It does not guess whether the worker began.
 
-The daemon writes the registry, the request journal, the terminal records, `latest.json`,
-`status.json`, `latest.log`, and the legacy log copy as durable writes. A durable write
-syncs the temporary file, renames it, and then syncs the parent directory. A sync failure
-fails the write and removes the temporary file. The daemon also syncs the spool log before
-it closes the log. The daemon does not sync `snapshot.json`. It never reads that file, and
-it rewrites the file at each step change. On 2026-10-03, a 2 KB atomic write took 0.23 ms
-without sync and 8.58 ms with sync on an Apple Silicon host. Each value is the mean of 50
-writes. No power-loss test confirms this behavior. Nobody verified whether Deno `syncData`
-on macOS flushes the drive cache or only the kernel buffers.
+The daemon writes the registry, the request journal, the terminal records, and
+`latest.json` as durable writes. A durable write syncs the temporary file, renames it, and
+then syncs the parent directory. A sync failure fails the write and removes the temporary
+file. The daemon also syncs the spool log before it closes the log. The daemon does not
+sync `snapshot.json`. It never reads that file, and it rewrites the file at each step
+change. On 2026-10-03, a 2 KB atomic write took 0.23 ms without sync and 8.58 ms with sync
+on an Apple Silicon host. Each value is the mean of 50 writes. No power-loss test confirms
+this behavior. Nobody verified whether Deno `syncData` on macOS flushes the drive cache or
+only the kernel buffers.
 
-An interrupted atomic write leaves a `.write-*` or `.copy-*` file. Older daemons also left
-`.latest-*` files. At startup, before the listener opens, the daemon removes regular files
-with these three prefixes from the service directory, `.mci/ci`, and `.mci/ci/requests`.
-Only the daemon that holds `daemon.lock` writes these prefixes, so the cleanup cannot
-remove a file in use. The daemon keeps other names, such as `.status-*` from an earlier
-direct CI run. A removal failure in the service directory stops the daemon at startup. A
-removal failure in a repository blocks that repository, as other retention failures do.
+An interrupted atomic write leaves a `.write-*` file. At startup, before the listener
+opens, the daemon removes regular files with this prefix from the service directory,
+`.mci/ci`, and `.mci/ci/requests`. Only the daemon that holds `daemon.lock` writes this
+prefix, so the cleanup cannot remove a file in use. The daemon keeps other names, such as
+`.copy-*` and `.latest-*` from earlier versions. A removal failure in the service
+directory stops the daemon at startup. A removal failure in a repository blocks that
+repository, as other retention failures do.
 
 After a worker exits, the daemon waits at most 2000 ms for its output to close. It then
 cancels the readers. A request whose output stays open after that fails unless it was
@@ -210,7 +210,7 @@ latest completed spool and every spool held by a connected client. Pending journ
 also retain their recovery files.
 
 When a newer request completes, the daemon removes the older spool after its clients
-disconnect. It projects the new result to `latest.json`, `status.json`, and `latest.log`.
+disconnect. It projects the new result to `latest.json`.
 
 The daemon accepts three limits. First, per-path routing keeps the arrival order only for
 one path text. Two texts for one repository can reorder. The CLI sends the real path, so
@@ -403,16 +403,10 @@ service, readiness, or launch failure, setup confirms monitor exit before restor
 previous app. Uncertain shutdown retains the app and backup. Setup stops only a service
 that setup started.
 
-The daemon imports the earlier registry only when its own registry does not exist. For a
-repository without `latest.json`, the daemon imports a version 1 `status.json` from the
-legacy CI adapter. A missing legacy `latest.log` counts as an empty log, and the daemon
-creates that empty file. A legacy log that is not a regular file blocks the repository.
-The legacy adapter held an exclusive lock on `.mci/ci/lock` for its whole run. While
-another process holds that lock, the daemon skips the import and keeps `status.json`. A
-later registration or daemon start imports the final status. A running record without that
-lock comes from a stopped adapter and becomes INTERRUPTED. The adapter wrote its running
-status before it replaced `latest.log`, so that log can be empty or belong to the previous
-run. Removing the `status.json` projection requires a compatibility decision.
+The daemon does not import state from earlier versions. It ignores `monitor.json` and
+starts with an empty registry when `registry.json` does not exist. The daemon does not
+read `status.json` or `latest.log`. A repository without `latest.json` has no latest
+result. A state file with an unknown format stops the daemon with a decode error.
 
 `mci hooks install` validates one job and rejects recursive CI calls. It adds a stable
 `mci:ci` Deno task and selects the packaged hook through an absolute Homebrew path. Git

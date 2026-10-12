@@ -85,7 +85,7 @@ Deno.test("doctor command returns health and preserves every report", async () =
     equal(code, expectedCode);
     equal(standardError, []);
     equal(standardOutput.length, 1);
-    equal(standardOutput[0]?.split("\n").length, 9);
+    equal(standardOutput[0]?.split("\n").length, 8);
     assert(standardOutput[0]?.includes("PASS platform: darwin"));
     assert(
       standardOutput[0]?.includes(
@@ -111,7 +111,7 @@ Deno.test("native doctor exits one for an isolated missing daemon", () =>
 
       equal(result.code, 1);
       const diagnostics = text(result.stdout).trim().split("\n");
-      equal(diagnostics.length, 9);
+      equal(diagnostics.length, 8);
       for (
         const name of [
           "platform",
@@ -120,7 +120,6 @@ Deno.test("native doctor exits one for an isolated missing daemon", () =>
           "Homebrew",
           "formula",
           "daemon",
-          "legacy registry",
           "daemon registry",
           "recovery",
         ]
@@ -638,9 +637,9 @@ Deno.test({
         assert(status.ok);
         equal(status.value.repositories[0]?.latest?.kind, "success");
         equal(status.value.repositories[0]?.latest?.code, 0);
-        assert(
-          (await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`)).includes("hello"),
-        );
+        const latestLog = status.value.repositories[0]?.latest?.log;
+        assert(latestLog !== undefined);
+        assert((await Deno.readTextFile(latestLog)).includes("hello"));
         const receipts = unwrap(await readSessionReceipts("cli-pass", directory));
         equal(receipts.length, 1);
         equal(receipts[0]?.outcome.kind, "success");
@@ -706,8 +705,7 @@ Deno.test({
           MCI_HOME: directory,
         }).output();
         equal(prior.code, 0);
-        const saved = await Deno.readTextFile(`${workspace}/.mci/ci/status.json`);
-        const log = await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`);
+        const saved = await Deno.readTextFile(`${workspace}/.mci/ci/latest.json`);
         await Deno.writeTextFile(
           `${workspace}/ci.yml`,
           fixture("      - run: touch unreachable\n        unsupported-field: true"),
@@ -718,8 +716,7 @@ Deno.test({
         }).output();
         equal(result.code, 2);
         assert(text(result.stderr).includes("unsupported-field"));
-        equal(await Deno.readTextFile(`${workspace}/.mci/ci/status.json`), saved);
-        equal(await Deno.readTextFile(`${workspace}/.mci/ci/latest.log`), log);
+        equal(await Deno.readTextFile(`${workspace}/.mci/ci/latest.json`), saved);
         assert(!await exists(`${workspace}/unreachable`));
         equal(
           (unwrap(await readSessionReceipts("validation-error", directory)))[0]

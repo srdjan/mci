@@ -735,15 +735,12 @@ Deno.test("Codex installer refuses a linked configuration before replacement", (
     await assertNoCodexStages(directory);
   }));
 
-Deno.test("Codex installer merges hooks, migrates the legacy hook, and is idempotent", () =>
+Deno.test("Codex installer merges hooks, replaces the managed hook, and is idempotent", () =>
   inWorkspace(async (workspace) => {
     const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-codex-" });
     const repository = `${workspace}/repository's path`;
     try {
       await Deno.mkdir(`${repository}/.codex/hooks`, { recursive: true });
-      const legacy = `${
-        shellQuote(`${repository}/.codex/hooks/ci-summary.sh`)
-      } 2>/dev/null || true`;
       const foreign = {
         type: "command",
         command: "printf foreign",
@@ -754,10 +751,6 @@ Deno.test("Codex installer merges hooks, migrates the legacy hook, and is idempo
         hooks: {
           ForeignEvent: [{ hooks: [foreign] }],
           PostToolUse: [
-            {
-              matcher: "Bash",
-              hooks: [{ type: "command", command: legacy, timeout: 10 }],
-            },
             { matcher: "Write", hooks: [foreign] },
             {
               hooks: [{
@@ -783,7 +776,6 @@ Deno.test("Codex installer merges hooks, migrates the legacy hook, and is idempo
       assert(typeof installed === "object" && installed !== null);
       assert(JSON.stringify(installed).includes("ForeignEvent"));
       assert(JSON.stringify(installed).includes("printf foreign"));
-      assert(!JSON.stringify(installed).includes("ci-summary.sh"));
       assert(!JSON.stringify(installed).includes("/old/src/main.ts"));
       const expectedCommand = [
         Deno.execPath(),

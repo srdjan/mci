@@ -1,6 +1,5 @@
 import {
   decodeTerminal,
-  finishTime,
   type Repository,
   type Snapshot,
   type Terminal,
@@ -155,22 +154,6 @@ const atomicJson = (
     durable,
   );
 
-const atomicCopy = async (source: string, target: string): Promise<Result<void>> => {
-  const safe = await regularTarget(target);
-  if (!safe.ok) return safe;
-  const temporary = await attempt(() =>
-    Deno.makeTempFile({ dir: parent(target), prefix: ".copy-" })
-  );
-  if (!temporary.ok) return temporary;
-  const copied = await attempt(async () => {
-    await Deno.copyFile(source, temporary.value);
-    await commitTemporary(temporary.value, target, true);
-  });
-  if (copied.ok) return copied;
-  await attempt(() => Deno.remove(temporary.value));
-  return copied;
-};
-
 const parseFile = async (path: string): Promise<Result<unknown | null>> => {
   const found = await metadata(path);
   if (!found.ok) return found;
@@ -218,24 +201,21 @@ const decodeRegistry = (value: unknown): Result<readonly Repository[]> => {
   return ok(repositories);
 };
 
-const decodeLegacyRegistry = (value: unknown): Result<readonly string[]> => {
-  if (
-    !object(value) || !exact(value, ["version", "workspaces"]) || value.version !== 1 ||
-    !Array.isArray(value.workspaces) || !value.workspaces.every(absolute)
-  ) {
-    return err("invalid legacy monitor registry");
-  }
-  return ok(value.workspaces);
-};
+const pendingKeys = [
+  "id",
+  "repositoryId",
+  "workflow",
+  "job",
+  "started",
+  "log",
+  "total",
+  "begun",
+];
 
-const pendingKeys = ["id", "repositoryId", "workflow", "job", "started", "log", "total"];
-
-// A journal from an older daemon has no begun key. It decodes as begun.
 const decodePending = (value: unknown): Result<PendingRequest> => {
   if (
     !object(value) ||
-    !(exact(value, pendingKeys) ||
-      (exact(value, [...pendingKeys, "begun"]) && typeof value.begun === "boolean")) ||
+    !exact(value, pendingKeys) || typeof value.begun !== "boolean" ||
     !nonempty(value.id) || !nonempty(value.repositoryId) || !nonempty(value.workflow) ||
     !nonempty(value.job) || !timestamp(value.started) || !absolute(value.log) ||
     typeof value.total !== "number" || !Number.isSafeInteger(value.total) ||
@@ -249,7 +229,7 @@ const decodePending = (value: unknown): Result<PendingRequest> => {
     started: value.started,
     log: value.log,
     total: value.total,
-    begun: value.begun !== false,
+    begun: value.begun,
   });
 };
 
@@ -270,92 +250,6 @@ const decodeJournal = (value: unknown): Result<readonly PendingRequest[]> => {
   return ok(requests);
 };
 
-const decodeLegacyTerminal = (
-  value: unknown,
-  repository: Repository,
-  log: string,
-): Result<Terminal | null> => {
-  if (!object(value) || value.version !== 1) return ok(null);
-  const expected = Object.hasOwn(value, "logger") ? 7 : 6;
-  if (
-    Object.keys(value).length !== expected || !nonempty(value.state) ||
-    typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid < 1 ||
-    !timestamp(value.started)
-  ) return err("invalid legacy CI status");
-  if (
-    Object.hasOwn(value, "logger") && value.logger !== null && (
-      !object(value.logger) || !exact(value.logger, ["started", "command"]) ||
-      !nonempty(value.logger.started) || !nonempty(value.logger.command)
-    )
-  ) return err("invalid legacy CI logger");
-  if (value.state === "running") {
-    if (value.finished !== null || value.code !== null) {
-      return err("invalid legacy running status");
-    }
-    return ok({
-      id: `legacy-${value.pid}-${value.started.replaceAll(/[^0-9]/g, "")}`,
-      repositoryId: repository.id,
-      workflow: "legacy",
-      job: "legacy",
-      started: value.started,
-      finished: finishTime(value.started, new Date().toISOString()),
-      kind: "interrupted",
-      code: 143,
-      completed: 0,
-      total: 0,
-      detail: "The daemon found an unfinished legacy run.",
-      log,
-    });
-  }
-  if (
-    (value.state !== "pass" && value.state !== "fail" && value.state !== "cancelled") ||
-    !timestamp(value.finished) ||
-    Date.parse(value.finished) < Date.parse(value.started) ||
-    typeof value.code !== "number" ||
-    !Number.isSafeInteger(value.code) || value.code < 0 ||
-    (value.state === "pass" ? value.code !== 0 : value.code === 0)
-  ) return err("invalid legacy terminal status");
-  return ok({
-    id: `legacy-${value.pid}-${value.started.replaceAll(/[^0-9]/g, "")}`,
-    repositoryId: repository.id,
-    workflow: "legacy",
-    job: "legacy",
-    started: value.started,
-    finished: value.finished,
-    kind: value.state === "pass"
-      ? "success"
-      : value.state === "cancelled"
-      ? "cancelled"
-      : "failure",
-    code: value.code,
-    completed: 0,
-    total: 0,
-    detail: "Imported from the legacy CI status.",
-    log,
-  });
-};
-
-/** True while a legacy CI adapter holds its exclusive lock. Never creates the lock. */
-const legacyAdapterActive = async (path: string): Promise<Result<boolean>> => {
-  const found = await metadata(path);
-  if (!found.ok) return found;
-  if (found.value === null || !found.value.isFile || found.value.isSymlink) {
-    return ok(false);
-  }
-  const opened = await attempt(() => Deno.open(path, { read: true }));
-  if (!opened.ok) return opened;
-  const lock = opened.value;
-  const locked = await attempt(() => lock.tryLock(true));
-  const released = locked.ok && locked.value
-    ? await attempt(() => lock.unlock())
-    : ok(undefined);
-  const closed = await attempt(() => lock.close());
-  if (!locked.ok) return locked;
-  if (!released.ok) return released;
-  if (!closed.ok) return closed;
-  return ok(!locked.value);
-};
-
 const requestDirectory = (path: string): string => `${path}/.mci/ci/requests`;
 
 const presentDirectory = async (path: string): Promise<Result<boolean>> => {
@@ -368,11 +262,9 @@ const presentDirectory = async (path: string): Promise<Result<boolean>> => {
   return ok(true);
 };
 
-// An interrupted atomic write leaves its temporary file. Older daemons used .latest- for
-// the latest.log copy. Only the daemon that holds the service lock writes these prefixes,
-// and the sweep runs before the listener opens.
-const temporary = (name: string): boolean =>
-  [".write-", ".copy-", ".latest-"].some((prefix) => name.startsWith(prefix));
+// An interrupted atomic write leaves its temporary file. Only the daemon that holds the
+// service lock writes this prefix, and the sweep runs before the listener opens.
+const temporary = (name: string): boolean => name.startsWith(".write-");
 
 const removeTemporaries = async (directory: string): Promise<Result<void>> => {
   const present = await presentDirectory(directory);
@@ -418,21 +310,7 @@ export const openDaemonStore = async (
     if (!decoded.ok) return decoded;
     repositories = decoded.value;
   } else {
-    const legacyPath = `${paths.directory}/monitor.json`;
-    const legacy = await parseFile(legacyPath);
-    if (!legacy.ok) return legacy;
-    const imported: Repository[] = [];
-    if (legacy.value !== null) {
-      const decoded = decodeLegacyRegistry(legacy.value);
-      if (!decoded.ok) return decoded;
-      for (const path of decoded.value) {
-        const saved = path.replace(/\/$/, "");
-        if (!imported.some((entry) => entry.path === saved)) {
-          imported.push({ id: await repositoryId(saved), path: saved });
-        }
-      }
-    }
-    repositories = imported;
+    repositories = [];
     const recorded = await atomicJson(paths.registry, { version: 1, repositories });
     if (!recorded.ok) return recorded;
   }
@@ -570,44 +448,7 @@ export const openDaemonStore = async (
           ? terminal
           : err("terminal belongs to another repository");
       }
-      const legacy = await parseFile(`${repository.path}/.mci/ci/status.json`);
-      if (!legacy.ok) return legacy;
-      if (legacy.value === null) return ok(null);
-      const decoded = decodeLegacyTerminal(
-        legacy.value,
-        repository,
-        `${repository.path}/.mci/ci/latest.log`,
-      );
-      if (!decoded.ok || decoded.value === null) return decoded;
-      // The legacy adapter held this lock for its whole run. Import after it ends.
-      const active = await legacyAdapterActive(`${repository.path}/.mci/ci/lock`);
-      if (!active.ok) return active;
-      if (active.value) return ok(null);
-      const foundLog = await metadata(decoded.value.log);
-      if (!foundLog.ok) return foundLog;
-      if (
-        foundLog.value !== null && (!foundLog.value.isFile || foundLog.value.isSymlink)
-      ) {
-        return err(`legacy CI log must be a real file: ${decoded.value.log}`);
-      }
-      const allocated = await prepareRequestDirectory(repository.path);
-      if (!allocated.ok) return allocated;
-      // A missing legacy log counts as an empty log, as in terminal recovery. The
-      // create follows the directory checks, so it never writes through a symlinked
-      // .mci. The exclusive create never replaces a log that a legacy adapter renamed in.
-      if (foundLog.value === null) {
-        const created = await createPrivateFile(decoded.value.log);
-        if (!created.ok) return created;
-      }
-      const immutableLog = `${allocated.value}/${decoded.value.id}.log`;
-      const copied = await atomicCopy(decoded.value.log, immutableLog);
-      if (!copied.ok) return copied;
-      const terminal = { ...decoded.value, log: immutableLog };
-      const recorded = await atomicJson(
-        `${repository.path}/.mci/ci/latest.json`,
-        terminal,
-      );
-      return recorded.ok ? ok(terminal) : recorded;
+      return ok(null);
     },
     writeTerminal: (path, terminal) =>
       sequenceTerminal(path, async () => {
@@ -643,12 +484,7 @@ export const openDaemonStore = async (
         if (!directory.ok) return directory;
         const reference = await atomicJson(`${path}/.mci/ci/latest.json`, terminal);
         if (!reference.ok) return reference;
-        const projected = await atomicCopy(terminal.log, `${path}/.mci/ci/latest.log`);
-        if (!projected.ok) return projected;
-        return await atomicJson(`${path}/.mci/ci/status.json`, {
-          version: 2,
-          ...terminal,
-        });
+        return reference;
       }),
     writeSnapshot: (snapshot) => {
       const update = snapshotChain.then(() =>

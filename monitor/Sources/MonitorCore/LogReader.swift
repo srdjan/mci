@@ -23,21 +23,11 @@ public struct LogTail: Equatable, Sendable {
 
 public let logTailLimit = 262_144
 
-public func logPath(workspace: String) -> String {
-    let trimmed = workspace.hasSuffix("/") ? String(workspace.dropLast()) : workspace
-    return trimmed + "/.mci/ci/latest.log"
-}
-
 private func errnoText() -> String { String(cString: strerror(errno)) }
 
-/// Reads at most the last `maxBytes` of `<workspace>/.mci/ci/latest.log`.
+/// Reads at most the last `maxBytes` of one log path.
 /// It opens the file read-only and never follows a symlink.
 /// A cut file starts at its first whole line.
-public func readLogTail(workspace: String, maxBytes: Int = logTailLimit) -> Result<LogTail, LogError> {
-    readLogTail(path: logPath(workspace: workspace), maxBytes: maxBytes)
-}
-
-/// Reads one immutable log path without following a symbolic link.
 public func readLogTail(path: String, maxBytes: Int = logTailLimit) -> Result<LogTail, LogError> {
     let limit = max(maxBytes, 1)
     var info = stat()

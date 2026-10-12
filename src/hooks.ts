@@ -7,7 +7,6 @@ import type { Snapshot } from "./protocol.ts";
 import { attempt, err, ok, type Result } from "./result.ts";
 import { type Plan, planWorkflow } from "./workflow.ts";
 
-const legacyHookDirectory = ".mci-hooks";
 const hookName = "pre-commit";
 const taskName = "mci:ci";
 
@@ -929,8 +928,7 @@ const installHookWithPolicy = async (
   }
   if (
     commonConfigured.ok &&
-    (commonConfigured.value === legacyHookDirectory ||
-      commonConfigured.value === hooksPath ||
+    (commonConfigured.value === hooksPath ||
       commonConfigured.value === canonicalHooksPath)
   ) {
     return err(
@@ -1509,16 +1507,6 @@ export const doctorWith = async (
   const paths = capabilities.paths();
   if (!paths.ok) reports.push(status("service paths", false, paths.error));
   else {
-    const legacy = await capabilities.regularFile(
-      `${paths.value.directory}/monitor.json`,
-    );
-    reports.push(
-      status(
-        "legacy registry",
-        legacy.ok,
-        !legacy.ok ? legacy.error : legacy.value === "file" ? "present" : "absent",
-      ),
-    );
     const registry = await capabilities.regularFile(paths.value.registry);
     reports.push(
       status(
