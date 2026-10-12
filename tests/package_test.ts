@@ -1,5 +1,6 @@
 import {
   formulaText,
+  infoPlist,
   nativePackagePublicationCapabilities,
   type PackageMetadata,
   publishPackageWith,
@@ -449,3 +450,7 @@ Deno.test("source cleanup failure preserves the previous formula", () =>
     assert(!await exists(preparedFormula));
     await assertPreviousPair(scene);
   }));
+
+Deno.test("Info.plist escapes XML in the version", () => {
+  assert(infoPlist("1<&>2").includes("<string>1&lt;&amp;&gt;2</string>"));
+});

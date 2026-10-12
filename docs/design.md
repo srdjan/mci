@@ -28,12 +28,9 @@ the authority of the invoking user.
 | `command.ts`         | Helper command capture with deadlines, byte budgets, and bounded cleanup       |
 | `management.ts`      | Register, unregister, status, and log commands over the daemon socket          |
 | `paths.ts`           | Service directory and socket paths, including the `MCI_HOME` override          |
-| `homebrew.ts`        | Absolute Homebrew executable location shared by installers and service control |
-| `monitor-process.ts` | Monitor process inspection and confirmed shutdown for both installers          |
+| `homebrew.ts`        | Absolute Homebrew executable location shared by the installers                 |
+| `monitor-process.ts` | Monitor process inspection and confirmed shutdown for the installer            |
 | `main.ts`            | Process entry point: runs the CLI, reports a fatal error, and exits            |
-
-`scripts/service.ts` owns the source commands `deno task start` and `deno task stop`.
-Start returns after the daemon and monitor run. Stop waits for both components to stop.
 
 The menu bar app lives in the Swift package `monitor/`. `MonitorCore` decodes daemon
 snapshots, talks to the daemon socket, reads log tails, and maps repository states to
@@ -63,7 +60,7 @@ same time, while each repository runs one request at a time.
 If `accept()` fails while the daemon is open, the daemon writes
 `mci daemon: accept failed: <error>` to stderr and shuts down. The daemon does not retry.
 The shutdown cancels the running job, as any shutdown does. The process exits with code 1.
-The Homebrew service restarts the daemon. A daemon from `deno task start` stays stopped.
+The Homebrew service restarts the daemon. A daemon that runs in a terminal stays stopped.
 
 A connection must send its first request within 5000 ms. The daemon closes a connection
 that sends no first frame in that time. This value is a policy, not a measured capacity.
@@ -266,9 +263,8 @@ original diagnostic. Confirmed group cleanup and reaping allow the process modul
 the record even after registration fails.
 
 Capture policies require independent byte budgets for stdout and stderr. Ordinary helpers
-allow 1 MiB per stream. The source monitor's Swift build allows 16 MiB per stream. A MiB
-is 1,048,576 bytes. These budgets limit retained bytes, not total process memory. The
-packager and `app:check` run helpers without capture budgets.
+allow 1 MiB per stream. A MiB is 1,048,576 bytes. These budgets limit retained bytes, not
+total process memory. The packager and `app:check` run helpers without capture budgets.
 
 An exact budget remains valid. The first chunk beyond the remaining budget causes a
 capture failure. The diagnostic names the command, stream, and byte budget. The module
@@ -351,10 +347,9 @@ Manual verification and compilation remain available.
 
 ## Homebrew package and managed hooks
 
-Hook installation, packaged installation, and source service control share supported
-Homebrew location checks. They inspect `/opt/homebrew/bin/brew` before
-`/usr/local/bin/brew`. Source service stop uses the selected absolute executable and
-retains its command budget. Location does not depend on `PATH`.
+Hook installation and packaged installation share supported Homebrew location checks. They
+inspect `/opt/homebrew/bin/brew` before `/usr/local/bin/brew`. Location does not depend on
+`PATH`.
 
 `scripts/package.ts` compiles the CLI and builds the signed monitor bundle. It writes a
 local archive and `dist/tap/Formula/mci.rb`.
@@ -553,7 +548,7 @@ logs without changing them.
 The log window reads only a regular file and refuses symbolic links. It reads the last 256
 KiB, replaces invalid UTF-8, and renders ANSI SGR foreground colors and bold text.
 
-The Launch at login control uses `SMAppService.mainApp`. The installers never change the
+The Launch at login control uses `SMAppService.mainApp`. The installer never changes the
 login preference.
 
 Each row shows the active request, queued count, and latest completed result. A separate
@@ -563,13 +558,13 @@ The combined icon uses the most urgent repository state. The states include unav
 error, missing, interrupted, failure, running, queued, cancelled, pass, and no runs. The
 attention count covers unavailable, error, missing, interrupted, and failed repositories.
 
-Both installers stage the bundle next to the destination. They replace
+The packaged installer stages the bundle next to the destination. It replaces
 `~/Applications/mci Monitor.app` only when the destination is a real folder whose
-`Info.plist` carries `MCIInstaller = mci`. Each installer moves the old bundle aside, then
+`Info.plist` carries `MCIInstaller = mci`. The installer moves the old bundle aside, then
 moves the new bundle into place. If that move fails, the installer restores the old
 bundle.
 
-Both installers share monitor process inspection and shutdown. The matcher requires the
+The installer uses monitor process inspection and shutdown. The matcher requires the
 complete executable path at the command start, followed by whitespace or the command end.
 The matcher treats regular-expression characters in the path literally and rejects sibling
 executable prefixes. Native commands inspect full argument lists; this does not
@@ -578,8 +573,7 @@ authenticate the executable or make inspection and signaling atomic.
 Shutdown sends SIGTERM once, then confirms absence through process inspection. The
 observation policy is 2000 ms, with 100 ms between inspections. Command capture can extend
 elapsed time beyond that policy. Packaged capture retains a 5000 ms deadline and 1000 ms
-reaping policy. Source capture retains a 10000 ms deadline and 2000 ms reaping policy.
-Both capture policies allow one MiB per output stream.
+reaping policy. Packaged capture allows one MiB per output stream.
 
 An inspection failure or observation timeout blocks bundle removal and replacement.
 Packaged rollback also confirms shutdown before removing the new bundle. Failed rollback
@@ -590,45 +584,8 @@ failure and names the recovery location.
 SIGTERM forces termination. Custom argument lists, ambiguous whitespace, process
 replacement, and launches after inspection remain process matching limits.
 
-`deno task monitor:install` builds the app, signs it ad hoc, verifies the signature, and
-registers the repository through the daemon. It requires a running daemon. On a reinstall,
-the source installer keeps the old bundle until the new app runs. After a registration,
-open, or startup failure, it confirms new app shutdown, restores the previous bundle, and
-opens it. Failed shutdown retains both bundles. If restoration fails, the error names the
-retained backup. The command `mci setup` copies the packaged bundle and verifies its
-signature. Setup also requires a valid signature on an existing owned bundle.
-
-The source start command reuses a responding daemon or launches a detached daemon. For the
-default service directory, start first disables a loaded mci Homebrew service that does
-not answer. `brew services start mci` restores that service. The command saves daemon
-output and a process identity in the private service directory. The command registers the
-checkout and opens the monitor for that service directory. If the monitor is absent, the
-command builds and installs it.
-
-Source launch observes child exit status before detaching the child. Startup captures PID,
-process group, and start time before readiness. Those fields must remain stable through
-the launcher-to-Deno transition. Readiness confirmation also captures the daemon command.
-
-Startup rollback checks child status and process ownership before signaling. Unknown
-status or changed ownership produces a cleanup diagnostic without a signal. Unresolved
-cleanup preserves the recovery record. Successful cleanup restores any prior launch
-record. Inspection and signaling remain separate operations; this check does not make
-ownership atomic.
-
-The command reopens a running monitor so the app reads the selected service directory. One
-installed monitor serves the user. Stop quits this shared monitor even when `MCI_HOME`
-selects another daemon directory.
-
-If the monitor has the former installer name, `meeci`, the command replaces it through the
-same installer. This migration requires a valid signature on the previous app. The
-installer restores the previous app if the replacement fails to start.
-
-The source stop command quits the installed monitor and stops the daemon with SIGTERM. The
-command checks the process identity before signaling and waits for termination. For the
-default service directory, stop first disables a loaded mci Homebrew service. This step
-prevents Homebrew from restarting the daemon. Custom service directories keep their
-Homebrew service unchanged. Stop cancels active requests and drops queued requests across
-registered repositories.
+The command `mci setup` copies the packaged bundle and verifies its signature. Setup also
+requires a valid signature on an existing owned bundle.
 
 ## Release responsibility
 

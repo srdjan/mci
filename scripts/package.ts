@@ -2,7 +2,6 @@
 import { attempt, err, message, ok, type Result } from "../src/result.ts";
 import { cliVersion } from "../src/runtime.ts";
 import { hookScript } from "../src/hooks.ts";
-import { infoPlist } from "./install-monitor.ts";
 
 export type PackageOptions = {
   readonly root: string;
@@ -41,6 +40,44 @@ export type PackagePublicationCapabilities = {
 
 const bundleName = "mci Monitor.app";
 const ownerValue = "mci";
+const executableName = "MonitorApp";
+
+const escapeXml = (value: string): string =>
+  value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+
+const plistEntries = (version: string): readonly (readonly [string, string])[] => [
+  ["CFBundleIdentifier", `<string>dev.mci.monitor</string>`],
+  ["CFBundleName", `<string>mci Monitor</string>`],
+  ["CFBundleDisplayName", `<string>mci Monitor</string>`],
+  ["CFBundleExecutable", `<string>${executableName}</string>`],
+  ["CFBundlePackageType", `<string>APPL</string>`],
+  ["CFBundleShortVersionString", `<string>${escapeXml(version)}</string>`],
+  ["CFBundleVersion", `<string>${escapeXml(version)}</string>`],
+  ["LSUIElement", `<true/>`],
+  ["LSMinimumSystemVersion", `<string>14.0</string>`],
+  ["NSHighResolutionCapable", `<true/>`],
+  ["MCIInstaller", `<string>${ownerValue}</string>`],
+];
+
+export const infoPlist = (version: string): string =>
+  [
+    `<?xml version="1.0" encoding="UTF-8"?>`,
+    `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" ` +
+    `"http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
+    `<plist version="1.0">`,
+    `<dict>`,
+    ...plistEntries(version).flatMap(([key, value]) => [
+      `  <key>${key}</key>`,
+      `  ${value}`,
+    ]),
+    `</dict>`,
+    `</plist>`,
+    ``,
+  ].join("\n");
 
 const rubyString = (value: string): string =>
   value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
@@ -333,10 +370,10 @@ export const packageRelease = async (
     }
     const assembled = await attempt(async () => {
       const executableDirectory = `${stagedBundle}/Contents/MacOS`;
-      const executable = `${executableDirectory}/MonitorApp`;
+      const executable = `${executableDirectory}/${executableName}`;
       await Deno.mkdir(executableDirectory, { recursive: true });
       await Deno.copyFile(
-        `${options.root}/monitor/.build/release/MonitorApp`,
+        `${options.root}/monitor/.build/release/${executableName}`,
         executable,
       );
       await Deno.chmod(executable, 0o755);

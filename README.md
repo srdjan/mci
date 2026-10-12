@@ -226,9 +226,9 @@ runner bounds its subsequent wait for the direct child. Cleanup errors preserve 
 original execution detail and make the run fail. Process identity inspection also has a
 deadline and bounded cleanup.
 
-Helper commands that the `mci` CLI runs allow 1 MiB per output stream. The source monitor
-build allows 16 MiB per stream. A MiB is 1,048,576 bytes. Output beyond a budget fails the
-helper and starts bounded cleanup. Workflow steps continue to stream their output.
+Helper commands that the `mci` CLI runs allow 1 MiB per output stream. A MiB is 1,048,576
+bytes. Output beyond a budget fails the helper and starts bounded cleanup. Workflow steps
+continue to stream their output.
 
 Under the `mci` task, `mci run` monitors its native Deno task parent. If that parent
 exits, the CLI cancels the active job and cleans the workspace. `mci ci` always monitors
@@ -286,56 +286,6 @@ saves output under `.mci/ci/`. The hook needs a running daemon and a registered 
 
 The local YAML selects the four standard tasks and the optional `app:check` task. A failed
 check blocks the commit, and the checks include unstaged changes.
-
-Start the daemon and menu bar monitor from this checkout:
-
-```sh
-deno task start
-```
-
-The task reuses a running daemon or starts a daemon in the background. For the default
-service directory, the task first disables a loaded mci Homebrew service that does not
-answer. Run `brew services start mci` to restore that service. The task registers this
-checkout and opens the monitor. If the monitor is absent, the task builds and installs it.
-The task returns after both components are ready. Repeated starts reuse the daemon and
-reopen the monitor. The monitor reads the same service directory as the daemon.
-
-The background daemon saves output to `~/Library/Application Support/mci/daemon.log`.
-`MCI_HOME` selects another service directory. One monitor app serves the user. Start
-switches that monitor to the selected directory. Stop quits the shared monitor and stops
-the daemon in the selected directory.
-
-Stop both components:
-
-```sh
-deno task stop
-```
-
-Stop waits for shutdown. It cancels active CI and drops queued requests across the
-daemon's registered repositories. Repeated stops succeed when both components are absent.
-For the default service directory, stop also disables a loaded mci Homebrew service.
-
-An installed Homebrew service also accepts requests from the source CLI. For a daemon in
-the foreground, use a separate terminal:
-
-```sh
-deno task mci daemon
-```
-
-For a foreground daemon, register this checkout from another terminal. Then submit its
-local workflow:
-
-```sh
-deno task mci register "$PWD"
-deno task mci ci ci/local-ci.yml --job check
-```
-
-The source monitor installer requires a running daemon. It builds, signs, installs, and
-opens the native app.
-
-```sh
-deno task monitor:install "$PWD"
-```
 
 Each repository keeps request logs under `.mci/ci/requests/`. The daemon projects the
 latest completed result to `.mci/ci/latest.json`. The `log` field of that file names the
@@ -444,6 +394,29 @@ The CLI identifies the host, runtime, and resolved Bash executable. Installed co
 the inherited environment remain inputs to each local run. A local pass does not establish
 a clean commit, toolchain reproducibility, hosted-image parity, or results for unselected
 jobs.
+
+### Development
+
+Installed use needs Homebrew. Run `brew services start mci`, then run `mci setup`.
+
+For development, run the daemon from this checkout in a terminal:
+
+```sh
+mkdir -p /tmp/mci-dev
+MCI_HOME=/tmp/mci-dev deno task mci daemon
+```
+
+`MCI_HOME` selects a temporary service directory. This isolates the daemon from the
+installed Homebrew service. Set the same `MCI_HOME` value in every other terminal.
+
+Register this checkout from another terminal. Then submit its local workflow:
+
+```sh
+MCI_HOME=/tmp/mci-dev deno task mci register "$PWD"
+MCI_HOME=/tmp/mci-dev deno task mci ci ci/local-ci.yml --job check
+```
+
+To build and test the menu bar app without installing it, run `deno task app:check`.
 
 ## References
 
