@@ -119,47 +119,46 @@ deno task --config /path/to/mci/deno.json mci codex install "$PWD"
 
 Inside the mci checkout, `deno task mci codex install "$PWD"` is sufficient.
 
-The installer updates `.codex/hooks.json` and preserves other hooks. Codex must review and
-trust the new definitions before the hooks run. The Codex CLI provides `/hooks` for that
-review. A current session can require a restart to load the new configuration. The
+The installer updates `.codex/hooks.json`, keeps other hooks, and removes older mci hooks
+that it no longer installs. Codex must review and trust the new definitions before the
+hooks run. The Codex CLI provides `/hooks` for that review. A current session can require
+a restart to load the new configuration. The
 [Codex hooks documentation](https://learn.chatgpt.com/docs/hooks) describes hook trust.
 
-When `mci ci` or `mci run` fails inside Codex, the adapter reports the failure in the
-session. The message identifies the workflow, job, failure detail, and available log. The
-adapter also directs the agent to fix CI before continuing other work. A check before turn
-completion requests repair continuation when a failure remains unresolved.
+When `mci ci` or `mci run` fails inside Codex, the adapter reports the failure at the
+start of the session and at each prompt. The message names the workflow, job, failure
+detail, and log. It also tells the agent to fix CI before other work. When a failure
+remains unresolved, the `Stop` hook asks Codex to continue the repair once. The adapter
+does not report a failure after each tool call.
 
-A later passing run clears only failures for the same workspace, workflow, and job. A
-passing run that began before a failure finished cannot clear that failure. Failures in
-other jobs or sessions remain separate. A validation error with exit code 2 is the one
-exception. Any later passing run in the same workspace clears it, because a mistyped job
-or workflow path cannot pass on a rerun. The adapter does not use a result age limit or
-infer CI results from Git command text.
+A later passing run clears a failure for the same workspace, workflow, and job. The
+passing run must start at or after the finish time of the failure. Failures in other jobs
+or sessions stay separate. A validation error with exit code 2 is the one exception. Any
+later passing run in the same workspace clears it, because a mistyped job or workflow path
+cannot pass on a rerun.
 
-The CLI saves a receipt before validation or execution. Validation errors, daemon
-unavailability, cancellation, and unknown completion therefore remain visible. If the
-client exits before it saves a final result, its receipt remains pending. The adapter
-directs the agent to wait for active CI before attempting repair. A later passing run of
-the same checks can resolve that pending receipt.
+The CLI saves a pending receipt before validation or execution. It saves the final receipt
+after the outcome. Validation errors, daemon errors, cancellation, and unknown completion
+therefore stay visible. If the client exits before the final save, the receipt stays
+pending. The adapter then tells the agent to wait for active CI.
 
-If receipt creation fails, the CLI returns 1 before it starts CI. If receipt publication
-fails after CI passes, the CLI returns 1 and reports unresolved state. A publication
-failure preserves an existing nonzero CI exit code.
+A receipt write failure prints a warning on stderr. It does not change the CI exit code
+and it does not stop CI from starting. After a failed final write, the pending receipt
+stays in place. Fix the receipt storage when you see the warning.
 
 The CLI selects `MCI_SESSION_ID`, then `CODEX_SESSION_ID`, then `CODEX_THREAD_ID`. The
-adapter selects `MCI_SESSION_ID` when set. Otherwise, the adapter uses the Codex event's
-session identifier and ignores inherited Codex identifiers. Set an override before
-starting Codex so tools and hooks use the same value. Commands without a session
-identifier do not create session receipts. Receipts live under the mci service directory
-in `sessions/`. They contain result metadata, not environment values or transcript
-content. The adapter retains receipts until the owner removes the completed session
-directory.
+hook reads `MCI_SESSION_ID` when set. Otherwise, it reads the session identifier of the
+Codex event and ignores inherited Codex identifiers. Set `MCI_SESSION_ID` before starting
+Codex so that tools and hooks use the same value. A command without a session identifier
+does not create a receipt. Receipts live in `sessions/` under the mci service directory.
+They contain result metadata, not environment values or transcript content. The owner
+removes the directory of a finished session. The reader skips a receipt that it cannot
+decode and prints one warning for it.
 
 Session hooks read receipts and never start CI themselves. The pre-commit hook remains the
-only automatic CI trigger. Repair commands remain available. The adapter guides the agent
-and requests continuation; it does not lock every tool call. The adapter requests one
-repair continuation per turn. If the repair remains blocked, Codex reports the unresolved
-state and retains it for the next turn.
+only automatic CI trigger. The adapter guides the agent and requests continuation. It does
+not lock tool calls. If `stop_hook_active` is true, the adapter reports the unresolved
+state without another continuation.
 
 ## A workflow
 

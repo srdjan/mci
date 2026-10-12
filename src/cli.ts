@@ -107,20 +107,15 @@ const rerun = (command: "ci" | "run", file: string, job: string): void =>
     `Then rerun \`mci ${command} ${shellQuote(file)} --job ${shellQuote(job)}\`.`,
   );
 
+// A receipt failure only warns. The exit code stays the CI result.
 const recordCompletion = async (
   receipt: CiReceipt | null,
   outcome: CiReceiptOutcome,
   code: number,
-  command: "ci" | "run",
-  file: string,
-  job: string,
 ): Promise<number> => {
   const recorded = await finishReceipt(receipt, outcome);
-  if (recorded.ok) return code;
-  console.error(`CI receipt update failed: ${recorded.error}`);
-  console.error("The CI result is unresolved. Fix the receipt storage failure.");
-  rerun(command, file, job);
-  return code === 0 ? 1 : code;
+  if (!recorded.ok) console.error(`Warning: CI receipt update failed: ${recorded.error}`);
+  return code;
 };
 
 const failCommand = async (
@@ -138,7 +133,7 @@ const failCommand = async (
   const outcome: CiReceiptOutcome = kind === "unknown"
     ? { kind, code: 1, detail, requestId: null, log: null }
     : { kind, code, detail, requestId: null, log: null };
-  return await recordCompletion(receipt, outcome, code, command, file, job);
+  return await recordCompletion(receipt, outcome, code);
 };
 
 const prepareWorkflow = async (
@@ -226,9 +221,6 @@ const runCi = async (
         log: result.value.log,
       },
       result.value.code,
-      "ci",
-      file,
-      job,
     );
   } finally {
     stopWatching();
@@ -311,7 +303,7 @@ export const main = async (args: readonly string[]): Promise<number> => {
     return 2;
   }
   const executionCommand = command === "ci" || command === "run" ? command : null;
-  const receipt = executionCommand !== null
+  const begun = executionCommand !== null
     ? await beginReceipt({
       workspace: Deno.cwd(),
       workflow: file,
@@ -319,15 +311,11 @@ export const main = async (args: readonly string[]): Promise<number> => {
       command: executionCommand,
     })
     : { ok: true as const, value: null };
-  if (!receipt.ok) {
-    console.error(`CI receipt creation failed: ${receipt.error}`);
-    console.error("The CI result is unresolved. Fix the receipt storage failure.");
-    rerun(executionCommand!, file, job);
-    return 1;
-  }
+  if (!begun.ok) console.error(`Warning: CI receipt creation failed: ${begun.error}`);
+  const receipt = begun.ok ? begun.value : null;
   if (executionCommand !== null && Deno.build.os !== "darwin") {
     return await failCommand(
-      receipt.value,
+      receipt,
       executionCommand,
       file,
       job,
@@ -353,7 +341,7 @@ export const main = async (args: readonly string[]): Promise<number> => {
       return 2;
     }
     return await failCommand(
-      receipt.value,
+      receipt,
       executionCommand,
       file,
       job,
@@ -362,7 +350,7 @@ export const main = async (args: readonly string[]): Promise<number> => {
     );
   }
   if (command === "ci") {
-    return await runCi(file, job, parent, receipt.value, prepared.value);
+    return await runCi(file, job, parent, receipt, prepared.value);
   }
   const { environment, plan, shell, workspace } = prepared.value;
   console.log(`${file} :: ${job} (${plan.name})`);
@@ -407,7 +395,7 @@ export const main = async (args: readonly string[]): Promise<number> => {
       rerun("run", file, job);
     }
     return await recordCompletion(
-      receipt.value,
+      receipt,
       {
         kind: outcome.kind,
         code: outcome.code,
@@ -416,9 +404,6 @@ export const main = async (args: readonly string[]): Promise<number> => {
         log: null,
       },
       outcome.code,
-      "run",
-      file,
-      job,
     );
   } finally {
     stopWatching();

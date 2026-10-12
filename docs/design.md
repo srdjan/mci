@@ -438,77 +438,59 @@ available for diagnosis and release evidence.
 
 ## CI failure communication in Codex
 
-The CLI records each valid `ci` or `run` invocation when a session identifier exists. The
-CLI selects `MCI_SESSION_ID`, then `CODEX_SESSION_ID`, then `CODEX_THREAD_ID`. Commands
-outside a session do not create receipts.
+The CLI records each `ci` or `run` invocation when a session identifier exists. It selects
+`MCI_SESSION_ID`, then `CODEX_SESSION_ID`, then `CODEX_THREAD_ID`. A command outside a
+session creates no receipt.
 
-Receipts live under the service directory in `sessions/<session-hash>/<invocation>.json`.
-Receipt storage does not apply the daemon socket path limit, so a direct `mci run` works
-with a long `MCI_HOME`. The session hash uses SHA-256. Each invocation uses a UUID. Each
-receipt identifies the session, workspace, workflow, job, command, and start time.
-Workspace and workflow paths use canonical identities when those paths exist. A missing
-workflow keeps the canonical identity of its deepest existing parent, followed by the
-missing path parts.
+Receipts live in `sessions/<sha256 of session>/<uuid>.json` under the service directory.
+The receipt schema is version 1. It has the keys `version`, `id`, `sessionId`,
+`workspace`, `workflow`, `job`, `command`, `started`, `finished`, and `outcome`. The
+outcome has `kind`, `code`, `detail`, `requestId`, and `log`. A write uses a private
+temporary file and an atomic rename. The workspace and workflow paths use `Deno.realPath`.
+A path that does not resolve keeps its raw spelling.
 
-The CLI publishes a pending receipt before it validates the workflow or submits CI. The
-final receipt records validation errors, daemon errors, unknown completion, or the
-terminal outcome. The final time cannot precede the recorded start time. A completed
-daemon request also records its request identifier and saved log path. An interrupted
-client can leave a pending receipt. Receipt writes use private temporary files and atomic
-rename. The reader rejects malformed receipts and symlinked receipt directories or files.
+The CLI writes a pending receipt before it validates the workflow or submits CI. It writes
+the final receipt after the outcome. The final receipt keeps the request identifier and
+log path when they exist. The final time cannot precede the start time. An interrupted
+client leaves a pending receipt.
 
-Workflow identity resolves symbolic links before following parent components. Existing
-paths use filesystem resolution of the original invocation path. Missing paths resolve
-existing components in order and retain the unresolved suffix. Relative and dangling link
-targets follow the same order. Active link cycles and non-missing filesystem errors
-produce a failure instead of a guessed identity.
+A receipt write failure prints a warning on stderr. It does not change the CI exit code.
+If the pending write fails, CI still runs and no final receipt is written. If the final
+write fails, the pending receipt stays.
 
-Receipt fields and session rules remain unchanged. Earlier incorrect identities cannot
-always be reconstructed because receipts contain no original invocation path. The adapter
-does not rewrite or delete those receipts. A legacy unresolved receipt can need owner
-inspection. Concurrent path changes between recording and execution remain outside the
-atomicity contract.
+`mci codex hook` reads `MCI_SESSION_ID` or the session identifier of the event. It ignores
+inherited `CODEX_SESSION_ID` and `CODEX_THREAD_ID`, because a hook process can keep
+identifiers of a parent session. The reader ignores entries that do not end in `.json`. A
+receipt that fails to decode produces one warning on stderr and the reader skips it. An
+unreadable session directory also produces a warning, and the hook returns `{}`.
 
-`mci codex hook` reads receipts for an explicit `MCI_SESSION_ID` override or the event's
-session identifier. The adapter ignores inherited `CODEX_SESSION_ID` and `CODEX_THREAD_ID`
-because hook processes can retain identifiers from a parent session. An override must
-exist before Codex starts so tools and hooks receive the same value. The adapter does not
-correlate results through command text, modification times, or `latest.json`. A later
-success clears only matching workspace, workflow, and job failures. The success must start
-at or after the finish time of the failed invocation. For a pending invocation, the
-adapter compares start times. A backward clock change can delay resolution until a passing
-run starts at or after the recorded failure finish time. A result from another session
-cannot clear the failure. A validation error receipt, with kind `error` and code 2, is the
-one exception. A later success in the same workspace and session clears it for any
-workflow and job, because a mistyped job or workflow path cannot pass on a rerun.
+A later success clears a failure with the same workspace, workflow, and job. The success
+must start at or after the finish time of the failure. For a pending failure, the adapter
+compares start times. A validation error receipt, with kind `error` and code 2, is the one
+exception. A later success in the same workspace and session clears it for any workflow
+and job, because a mistyped job or workflow path cannot pass on a rerun.
 
-The adapter sends a warning for the user and repair context for the agent. Session start
-and prompt submission restore unresolved failure context. A `Stop` event requests repair
-continuation when unresolved results remain. If `stop_hook_active` is true, the adapter
-reports the unresolved state without another continuation. The failure remains pending for
-the next turn. This bound permits a blocker report without an endless continuation loop.
+Session start and prompt submission restore unresolved failure context. The adapter sends
+a warning for the user and repair context for the agent. A `Stop` event requests repair
+continuation when unresolved failures remain. If `stop_hook_active` is true, the adapter
+reports the unresolved state without continuation. `PostToolUse` returns `{}`. The hook
+accepts that event name only so that an old handler does not fail.
 
-`mci codex install` merges managed handlers into the repository's `.codex/hooks.json`. The
-installer preserves foreign handlers and replaces recognized mci handlers. Source hooks
-call the source CLI. Packaged hooks call the stable Homebrew binary. Codex requires review
-and trust for each new hook definition. The installer does not bypass trust or change the
-daemon protocol. Session hooks read receipts and never start CI themselves.
+`mci codex install` merges managed handlers into the repository's `.codex/hooks.json`. A
+managed handler has the status message `mci: check unresolved CI receipts`. The installer
+keeps foreign handlers. It removes every managed handler, including handlers for events
+that mci no longer uses, and adds one handler each to `SessionStart`, `UserPromptSubmit`,
+and `Stop`. A source run calls the source CLI. A packaged run calls the Homebrew binary.
+The installer keeps the POSIX permission bits of an existing file. A new file uses mode
+`0644`. The installer writes a temporary file and renames it. It does not detect a
+concurrent edit of `hooks.json`. Codex requires review and trust for each new hook
+definition. Session hooks never start CI themselves.
 
-Codex hook installation preserves existing POSIX permission bits. A new `hooks.json` uses
-the explicit `0644` creation policy. Hosts without POSIX file modes do not establish
-permission preservation through these checks.
-
-Before replacing Codex configuration, installation compares the captured input with the
-current file. Changed bytes, available identity metadata, or permissions cause a conflict.
-Concurrent creation or removal also causes a conflict. The installer retains the current
-file and removes its staged replacement. Separate inspection and rename do not exclude an
-arbitrary writer after the comparison.
-
-The adapter stores notification state separately from receipt JSON files. Receipts contain
-result metadata, not inherited environment values or transcript content. Receipt storage
-is separate from daemon projection and spool retention. The session owner removes receipt
-directories after the session no longer needs them. No power-loss test establishes receipt
-durability.
+Receipts contain result metadata, not environment values or transcript content. Receipt
+storage is separate from daemon projection and spool retention. The session owner removes
+receipt directories after the session no longer needs them. Earlier releases left
+`.codex-notified` and `.codex-notified.lock` files in these directories. The reader
+ignores them. No power-loss test establishes receipt durability.
 
 ## Menu bar monitor
 

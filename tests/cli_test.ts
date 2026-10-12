@@ -432,55 +432,61 @@ Deno.test({
 });
 
 Deno.test({
-  name: "CLI receipt storage failure prevents execution or overrides job success",
+  name: "CLI receipt storage failure warns and keeps the CI exit code",
   ignore: Deno.build.os !== "darwin",
   fn: () =>
     inWorkspace(async (workspace) => {
       const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-storage-" });
       const env = { MCI_HOME: home, MCI_SESSION_ID: "storage-contract" };
+      const run = (): Deno.Command =>
+        command(workspace, ["run", "ci.yml", "--job", "check"], env);
+      // A file named `sessions` makes every receipt write fail.
+      const blockSessions =
+        'mv "$MCI_HOME/sessions" "$MCI_HOME/saved-sessions" && touch "$MCI_HOME/sessions"';
       try {
-        await Deno.mkdir(`${home}/outside`);
-        await Deno.symlink(`${home}/outside`, `${home}/sessions`);
+        await Deno.writeTextFile(`${home}/sessions`, "not a directory");
         await Deno.writeTextFile(
           `${workspace}/ci.yml`,
           fixture("      - run: touch passed"),
         );
-        const creation = await command(
-          workspace,
-          ["run", "ci.yml", "--job", "check"],
-          env,
-        ).output();
-        equal(creation.code, 1);
-        assert(text(creation.stderr).includes("CI receipt creation failed"));
-        assert(!await exists(`${workspace}/passed`));
+        const creation = await run().output();
+        equal(creation.code, 0);
+        assert(await exists(`${workspace}/passed`));
+        assert(text(creation.stderr).includes("Warning: CI receipt creation failed"));
+        assert(!text(creation.stderr).includes("update failed"));
+
         await Deno.remove(`${home}/sessions`);
+        await Deno.remove(`${workspace}/passed`);
         await Deno.writeTextFile(
           `${workspace}/ci.yml`,
-          fixture(
-            '      - run: |\n          touch passed\n          mv "$MCI_HOME/sessions" "$MCI_HOME/saved-sessions"\n          ln -s "$MCI_HOME/saved-sessions" "$MCI_HOME/sessions"',
-          ),
+          fixture(`      - run: |\n          touch passed\n          ${blockSessions}`),
         );
-        const completion = await command(
-          workspace,
-          ["run", "ci.yml", "--job", "check"],
-          env,
-        ).output();
-        equal(completion.code, 1);
+        const completion = await run().output();
+        equal(completion.code, 0);
         assert(await exists(`${workspace}/passed`));
         assert(text(completion.stdout).includes("success: all selected steps passed"));
-        assert(text(completion.stderr).includes("CI receipt update failed"));
-        assert(text(completion.stderr).includes("CI result is unresolved"));
-        assert(!(await readSessionReceipts("storage-contract", home)).ok);
+        assert(!text(completion.stderr).includes("creation failed"));
+        assert(text(completion.stderr).includes("Warning: CI receipt update failed"));
+
         await Deno.remove(`${home}/sessions`);
         await Deno.rename(`${home}/saved-sessions`, `${home}/sessions`);
         await Deno.writeTextFile(
           `${workspace}/ci.yml`,
+          fixture("      - run: exit 3"),
+        );
+        const failed = await run().output();
+        equal(failed.code, 1);
+        const kept = unwrap(await readSessionReceipts("storage-contract", home));
+        // The first run lost its final write, so its pending receipt stays.
+        equal(kept.map((entry) => entry.outcome.kind), ["pending", "failure"]);
+
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
           fixture(
-            '      - run: |\n          mv "$MCI_HOME/sessions" "$MCI_HOME/saved-sessions"\n          ln -s "$MCI_HOME/saved-sessions" "$MCI_HOME/sessions"\n          touch ready\n          sleep 30',
+            `      - run: |\n          ${blockSessions}\n          touch ready\n          sleep 30`,
           ),
         );
-        const child = command(workspace, ["run", "ci.yml", "--job", "check"], env)
-          .spawn();
+        const child = run().spawn();
         const output = child.output();
         try {
           await waitFor(() => exists(`${workspace}/ready`));
@@ -489,7 +495,7 @@ Deno.test({
         }
         const cancelled = await output;
         equal(cancelled.code, 130);
-        assert(text(cancelled.stderr).includes("CI receipt update failed"));
+        assert(text(cancelled.stderr).includes("Warning: CI receipt update failed"));
       } finally {
         await Deno.remove(home, { recursive: true });
       }
