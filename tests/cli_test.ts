@@ -124,11 +124,8 @@ Deno.test("CLI help and version use the public configuration", () =>
     equal(help.code, 0);
     assert(text(help.stdout).includes(`mci ${denoConfig.version}`));
     assert(text(help.stdout).includes("<check|run|ci>"));
-    assert(
-      text(help.stdout).includes(
-        "hooks setup <repository> [--replace-pre-push]",
-      ),
-    );
+    assert(text(help.stdout).includes("hooks setup <repository>\n"));
+    assert(!text(help.stdout).includes("--replace-pre-push"));
     assert(
       text(help.stdout).includes(
         "hooks install <repository> --workflow <file> --job <id>",
@@ -153,6 +150,14 @@ Deno.test("CLI hook setup validates arguments and requires a standard task", () 
     equal(invalid.code, 2);
     assert(text(invalid.stderr).includes("Usage:"));
     assert(!await exists(`${workspace}/ci`));
+    const removed = await command(workspace, [
+      "hooks",
+      "setup",
+      workspace,
+      "--replace-pre-push",
+    ]).output();
+    equal(removed.code, 2);
+    assert(text(removed.stderr).includes("Usage:"));
 
     const initialized = await new Deno.Command("/usr/bin/git", {
       args: ["init", "--quiet", workspace],
@@ -170,7 +175,6 @@ Deno.test("CLI hook setup validates arguments and requires a standard task", () 
       "hooks",
       "setup",
       workspace,
-      "--replace-pre-push",
     ], { GIT_DIR: `${workspace}/.git`, GIT_WORK_TREE: workspace }).output();
     equal(missing.code, 1);
     assert(text(missing.stderr).includes("fmt:check"));
@@ -222,6 +226,72 @@ Deno.test("CLI hook install configures the repository", () =>
     ]).output();
     assert(result.code === 0, text(result.stderr));
   }));
+
+Deno.test({
+  name: "CLI ci refuses inside a job of the same repository and daemon",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace(async (workspace) => {
+      const home = await Deno.makeTempDir({ dir: "/tmp", prefix: "mci-nested-" });
+      try {
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture("      - run: touch ran"),
+        );
+        const nested = await command(
+          workspace,
+          ["ci", "ci.yml", "--job", "check"],
+          {
+            MCI_HOME: home,
+            MCI_SESSION_ID: "nested-refusal",
+            MCI_DAEMON_SOCKET: `${home}/daemon.sock`,
+            MCI_REPOSITORY_PATH: workspace,
+          },
+        ).output();
+        equal(nested.code, 2);
+        assert(text(nested.stderr).includes("cannot run inside a CI job"));
+        assert(!await exists(`${workspace}/ran`));
+        equal(unwrap(await readSessionReceipts("nested-refusal", home)).length, 0);
+        const otherRepository = await command(
+          workspace,
+          ["ci", "ci.yml", "--job", "check"],
+          {
+            MCI_HOME: home,
+            MCI_DAEMON_SOCKET: `${home}/daemon.sock`,
+            MCI_REPOSITORY_PATH: `${workspace}-other`,
+          },
+        ).output();
+        assert(!text(otherRepository.stderr).includes("cannot run inside a CI job"));
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    }),
+});
+
+Deno.test({
+  name: "CLI ci accepts a job from a test daemon with another socket",
+  ignore: Deno.build.os !== "darwin",
+  fn: () =>
+    inWorkspace((workspace) =>
+      withDaemon(workspace, async (directory) => {
+        await Deno.writeTextFile(
+          `${workspace}/ci.yml`,
+          fixture("      - run: touch ran"),
+        );
+        const result = await command(
+          workspace,
+          ["ci", "ci.yml", "--job", "check"],
+          {
+            MCI_HOME: directory,
+            MCI_DAEMON_SOCKET: "/tmp/mci-outer-daemon/daemon.sock",
+            MCI_REPOSITORY_PATH: workspace,
+          },
+        ).output();
+        assert(result.code === 0, text(result.stderr));
+        assert(await exists(`${workspace}/ran`));
+      })
+    ),
+});
 
 Deno.test("CLI reports missing workflow and Bash preflight failures", () =>
   inWorkspace(async (workspace) => {

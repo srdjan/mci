@@ -5,11 +5,10 @@ local Git pre-commit hook. Do not add GitHub Actions workflows or remote test tr
 
 Manual checks remain available for diagnosis and release evidence.
 
-Git selects one effective pre-commit hook for each worktree. Managed installation selects
-the packaged Homebrew hook, which calls `deno task mci:ci`. That task submits
-`ci/local-ci.yml`, job `check`, to the local daemon. A worktree setting takes precedence
-over a repository-local setting. Inspect effective Git configuration before identifying
-the active hook.
+Git selects one effective pre-commit hook. Managed installation sets the local
+`core.hooksPath` to the packaged Homebrew hook directory. That hook calls
+`deno task mci:ci`, which submits `ci/local-ci.yml`, job `check`, to the local daemon.
+Inspect effective Git configuration before identifying the active hook.
 
 CI YAML calls Deno tasks directly. Saved CI logs and status remain gitignored under
 `.mci/ci/`. One local daemon serves one user and multiple repositories. Each repository

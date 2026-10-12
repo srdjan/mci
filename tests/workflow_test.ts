@@ -69,6 +69,14 @@ Deno.test("unknown features and malformed values fail before execution", () => {
       "run: echo first",
       "run: echo x\n        env: {MCI_TASK_PARENT: 'true'}",
     ),
+    basic.replace(
+      "run: echo first",
+      "run: echo x\n        env: {MCI_DAEMON_SOCKET: /tmp/other.sock}",
+    ),
+    basic.replace(
+      "run: echo first",
+      "run: echo x\n        env: {MCI_REPOSITORY_PATH: /tmp/other}",
+    ),
     basic.replace("run: echo first", "run: echo x\n        env: {BASH_ENV: file}"),
     basic.replace("run: echo first", "run: echo x\n        env: {GITHUB_TOKEN: value}"),
     basic.replace("shell: bash", "shell: zsh"),

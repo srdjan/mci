@@ -11,6 +11,7 @@ import { runDaemon } from "./daemon.ts";
 import { installHook, setupHook } from "./hooks.ts";
 import { setup } from "./install.ts";
 import { managementCommand } from "./management.ts";
+import { servicePaths } from "./paths.ts";
 import { attempt, err, ok, type Result } from "./result.ts";
 import { resolveBash, runPlan } from "./runner.ts";
 import { cliVersion } from "./runtime.ts";
@@ -24,17 +25,12 @@ Usage: mci <check|run|ci> <workflow.yml> --job <id>
        mci status [repository-id-or-path] [--json]
        mci logs <repository-id-or-path> [--follow]
        mci hooks install <repository> --workflow <file> --job <id>
-       mci hooks setup <repository> [--replace-pre-push]
+       mci hooks setup <repository>
        mci codex hook | mci codex install <repository>
 
 Run from the workspace root. check executes no workflow commands.
 ci requires a registered repository and a running daemon. It waits for its request.
 Only run steps with an explicit effective shell: bash are supported.`;
-
-type HookSetupCommand = {
-  readonly repository: string;
-  readonly replacePrePush: boolean;
-};
 
 type HookInstallCommand = {
   readonly repository: string;
@@ -53,21 +49,12 @@ type WorkflowPreparation = WorkflowInputs & {
   readonly shell: string;
 };
 
-const parseHookSetup = (args: readonly string[]): Result<HookSetupCommand> => {
+const parseHookSetup = (args: readonly string[]): Result<string> => {
   const repository = args[2];
-  if (args[0] !== "hooks" || args[1] !== "setup" || repository === undefined) {
-    return err("invalid hook setup command");
-  }
-  let replacePrePush = false;
-  for (let index = 3; index < args.length; index += 1) {
-    const argument = args[index];
-    if (argument === "--replace-pre-push" && !replacePrePush) {
-      replacePrePush = true;
-      continue;
-    }
-    return err("invalid hook setup option");
-  }
-  return ok({ repository, replacePrePush });
+  return args[0] === "hooks" && args[1] === "setup" && repository !== undefined &&
+      args.length === 3
+    ? ok(repository)
+    : err("invalid hook setup command");
 };
 
 const parseHookInstall = (args: readonly string[]): Result<HookInstallCommand> => {
@@ -171,6 +158,17 @@ const prepareWorkflow = async (
     loaded.value.environment.PATH ?? "",
   );
   return shell.ok ? ok({ ...loaded.value, plan: plan.value, shell: shell.value }) : shell;
+};
+
+// A job of this repository on this daemon exports both names. Waiting would never end.
+const insideOwnJob = async (): Promise<boolean> => {
+  const socket = Deno.env.get("MCI_DAEMON_SOCKET");
+  const repository = Deno.env.get("MCI_REPOSITORY_PATH");
+  if (!socket || !repository) return false;
+  const paths = servicePaths();
+  const workspace = await attempt(() => Deno.realPath(Deno.cwd()));
+  return paths.ok && paths.value.socket === socket && workspace.ok &&
+    workspace.value.replace(/\/+$/, "") === repository.replace(/\/+$/, "");
 };
 
 const runCi = async (
@@ -277,9 +275,9 @@ export const main = async (args: readonly string[]): Promise<number> => {
       return 2;
     }
     return await runHookOperation(
-      parsed.value.repository,
-      (root) => setupHook(root, { replacePrePush: parsed.value.replacePrePush }),
-      "Configured pre-commit CI for this worktree.",
+      parsed.value,
+      setupHook,
+      "Configured pre-commit CI for this repository.",
     );
   }
   if (args[0] === "hooks" && args[1] === "install") {
@@ -304,6 +302,12 @@ export const main = async (args: readonly string[]): Promise<number> => {
     flag !== "--job" || !job
   ) {
     console.error(usage);
+    return 2;
+  }
+  if (command === "ci" && await insideOwnJob()) {
+    console.error(
+      "mci ci cannot run inside a CI job of the same repository; it would wait for itself.",
+    );
     return 2;
   }
   const executionCommand = command === "ci" || command === "run" ? command : null;

@@ -58,6 +58,7 @@ type MutableRepository = {
 type DaemonRuntime = {
   readonly store: DaemonStore;
   readonly instance: string;
+  readonly socket: string;
   readonly repositories: Map<string, MutableRepository>;
   readonly connectedRequests: Set<string>;
   readonly obsolete: Map<string, string>;
@@ -576,6 +577,7 @@ const registeredRepository = async (
 };
 
 const newJob = (
+  runtime: DaemonRuntime,
   id: string,
   repository: MutableRepository,
   request: Extract<Request, { readonly op: "submit" }>,
@@ -592,7 +594,11 @@ const newJob = (
     repository,
     workflow: request.workflow,
     plan,
-    inherited: { ...request.env },
+    inherited: {
+      ...request.env,
+      MCI_DAEMON_SOCKET: runtime.socket,
+      MCI_REPOSITORY_PATH: repository.repository.path,
+    },
     shell,
     started: new Date().toISOString(),
     log,
@@ -701,6 +707,7 @@ const prepareSubmission = async (
     return null;
   }
   const job = newJob(
+    runtime,
     id,
     repository,
     request,
@@ -944,6 +951,7 @@ const handleConnection = async (
 
 const prepareRuntime = async (
   store: DaemonStore,
+  socket: string,
   resolvePath: (path: string) => Promise<Result<string>>,
   requestDeadlineMs: number,
   reportDiagnostic: (detail: string) => void,
@@ -951,6 +959,7 @@ const prepareRuntime = async (
   const runtime: DaemonRuntime = {
     store,
     instance: crypto.randomUUID(),
+    socket,
     repositories: new Map(),
     connectedRequests: new Set(),
     obsolete: new Map(),
@@ -1121,6 +1130,7 @@ export const startDaemon = async (options: {
   }
   const runtime = await prepareRuntime(
     store.value,
+    paths.socket,
     options.resolvePath ?? ((path) => attempt(() => Deno.realPath(path))),
     options.requestDeadlineMs ?? defaultRequestDeadlineMs,
     options.reportDiagnostic ?? console.error,

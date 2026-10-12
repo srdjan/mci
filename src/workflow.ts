@@ -30,7 +30,15 @@ const mapping = (value: unknown): value is MapValue =>
 const own = (value: MapValue, key: string) => Object.hasOwn(value, key);
 const reserved = (key: string) =>
   /^(GITHUB_|RUNNER_)/.test(key) ||
-  ["CI", "MCI_LOCAL", "MCI_TASK_PARENT", "BASH_ENV", "ENV"].includes(key);
+  [
+    "CI",
+    "MCI_LOCAL",
+    "MCI_TASK_PARENT",
+    "MCI_DAEMON_SOCKET",
+    "MCI_REPOSITORY_PATH",
+    "BASH_ENV",
+    "ENV",
+  ].includes(key);
 
 export const validDirectory = (path: string): boolean => {
   if (!path || path.startsWith("/") || path.includes("\0")) return false;

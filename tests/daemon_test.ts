@@ -334,6 +334,36 @@ Deno.test("daemon shutdown closes idle clients and interrupts unfinished request
     }
   }));
 
+Deno.test("daemon gives each job its socket and repository path over client values", () =>
+  inWorkspace((workspace) =>
+    withDaemon(workspace, async (directory) => {
+      const result = await submit(
+        {
+          version: 1,
+          op: "submit",
+          path: workspace,
+          workflow: "ci/test.yml",
+          job: "check",
+          source: fixture(
+            '      - run: printf "%s\\n%s" "$MCI_DAEMON_SOCKET" "$MCI_REPOSITORY_PATH" > seen',
+          ),
+          env: capturedEnv({
+            MCI_DAEMON_SOCKET: "/tmp/client.sock",
+            MCI_REPOSITORY_PATH: "/tmp/client",
+          }),
+        },
+        new AbortController().signal,
+        directory,
+      );
+      assert(result.ok, result.ok ? "" : result.error);
+      equal(result.value.kind, "success");
+      equal(
+        await Deno.readTextFile(`${workspace}/seen`),
+        `${directory}/daemon.sock\n${workspace}`,
+      );
+    })
+  ));
+
 Deno.test("daemon runs a submitted job through its public socket", () =>
   inWorkspace((workspace) =>
     withDaemon(workspace, async (directory) => {

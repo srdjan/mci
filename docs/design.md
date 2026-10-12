@@ -332,16 +332,15 @@ GitHub serves only as a repository backup service. The repository has no GitHub 
 workflow or remote test trigger.
 
 Automatic CI runs only through Git's effective pre-commit hook. Git selects one hook path
-for the worktree. The packaged hook calls `deno task mci:ci`. That task submits
+for the repository. The packaged hook calls `deno task mci:ci`. That task submits
 `ci/local-ci.yml`, job `check`, to the local daemon.
 
-Managed hook installation sets the packaged Homebrew path for the worktree. The
-maintainer's checkout selects the packaged hook through `.git/config.worktree`. Each clone
-needs its own configuration because Git does not copy local settings. A worktree setting
-takes precedence over a repository-local setting. The tracked `mci:ci` task names the
-Apple Silicon prefix `/opt/homebrew`. On an Intel-prefix host, setup refuses it as foreign
-until the task names `/usr/local/opt/mci/bin/mci`. The checks cover the working tree,
-including unstaged changes.
+Managed hook installation sets the packaged Homebrew path with
+`git config --local core.hooksPath`. Each clone needs its own configuration because Git
+does not copy local settings. The tracked `mci:ci` task names the Apple Silicon prefix
+`/opt/homebrew`. On an Intel-prefix host, setup refuses it as foreign until the task names
+`/usr/local/opt/mci/bin/mci`. The checks cover the working tree, including unstaged
+changes.
 
 Manual verification and compilation remain available.
 
@@ -387,66 +386,52 @@ starts with an empty registry when `registry.json` does not exist. The daemon do
 read `status.json` or `latest.log`. A repository without `latest.json` has no latest
 result. A state file with an unknown format stops the daemon with a decode error.
 
-`mci hooks install` validates one job and rejects recursive CI calls. It adds a stable
-`mci:ci` Deno task and selects the packaged hook through an absolute Homebrew path. Git
-configuration applies to the current worktree.
+`mci hooks install` runs these steps in order. It stops at the first refusal.
 
-`mci hooks setup` configures one repository from a terminal. It preserves an existing
-`ci/local-ci.yml` and validates job `check`. If that workflow is absent, it creates one
-step per defined standard Deno task. The order is `fmt:check`, `lint`, `check`, then
-`test`. An absent task is omitted. Setup requires at least one task and rejects empty,
-invalid, or recursive selected tasks before mutation. The repository workflow selects
+1. Resolve the repository root with Git. A path that is not a worktree root is refused.
+2. Validate the workflow and job with the workflow planner.
+3. Validate the packaged hook installation: the binary exists, and the packaged
+   `pre-commit` text equals the built-in hook script.
+4. Read the effective `core.hooksPath`. If it equals the packaged hooks directory or its
+   real path, skip step 6. If it names another directory, refuse and name it. Otherwise
+   inspect the hooks directory that Git uses now. A new hook path disables every hook in
+   that directory, so the installer refuses when it holds an active Git hook. A known hook
+   name counts as active when the file is executable or a symbolic link. A `.sample` file
+   does not count. The message names each active hook.
+5. Add or keep the `mci:ci` task in `deno.json`. A matching task stays unchanged and
+   causes no write. A different `mci:ci` task is refused. The write keeps the POSIX
+   permission bits and replaces the file atomically. The write does not keep owners, ACLs,
+   or extended attributes.
+6. Run `git config --local core.hooksPath` with the packaged hooks directory.
+
+Steps 1 to 4 and the conflict check of step 5 write nothing. If step 6 fails after the
+`deno.json` write, the error names step 6 and says that a rerun completes the work.
+Installation has no cancellation and no rollback. It does not enable
+`extensions.worktreeConfig`. Linked worktrees share the local setting.
+
+`mci hooks setup` configures one repository from a terminal. It keeps an existing
+`ci/local-ci.yml` byte for byte. If that workflow is absent, it creates one step per
+defined standard Deno task. The order is `fmt:check`, `lint`, `check`, then `test`. An
+absent task is omitted. Setup requires at least one task. The repository workflow selects
 optional tasks, including builds and browser checks. The corresponding commands remain in
 `deno.json`. The YAML is the sole task-selection configuration. No repository name or path
-selects different behavior in mci. Setup adds `.mci/` to `.gitignore` when necessary. This
-entry keeps runtime files outside Git changes and Deno formatting. Setup restores the
-previous ignore file when installation fails.
+selects different behavior in mci. Setup runs all install checks on the generated or
+existing workflow before it writes the workflow or the ignore file. Then it adds `.mci/`
+to `.gitignore` when necessary. This entry keeps runtime files outside Git changes and
+Deno formatting. Last, setup runs steps 5 and 6 with job `check`.
 
-Dependency discovery and recursion detection use one literal invocation scanner. The
-scanner consumes required option values before the task name. Deno 2.9.7 consumes a
-separate optional `--lock` value. Other optional-value flags use `=` for a value.
-Arguments after the task name do not change dependency discovery.
-
-The scanner resolves default and explicit root `deno.json` commands against root tasks.
-Foreign configurations, changed directories, and workspace fan-out have opaque context. An
-opaque context means mci trusts the command without inspecting its task configuration.
-Literal `ci` and `mci:ci` names still cause refusal. Quotes protect printed command text
-from invocation detection. The scanner does not implement the complete shell grammar.
-
-Both installation routes validate defined root dependencies in the selected workflow job.
-Generated workflows use strict task validation. Existing workflows stop successfully at
-undefined optional tasks. Both modes reject invalid defined commands, reached CI calls,
-and defined task cycles before mutation.
-
-Pure dot step directories identify the root. Named directories and parent components have
-opaque task context. Direct literal recursion still causes refusal in any context.
-Installation preserves accepted workflow bytes and all optional steps.
-
-With `--replace-pre-push`, setup can replace repository-owned `.githooks` configuration
-for the selected worktree. The flag authorizes disabling that directory's pre-push hook.
-Setup preserves the old hook files and shared Git settings. An unknown pre-commit hook or
-another active hook blocks replacement. Setup removes a generated workflow when
-installation fails.
-
-All repositories use the same packaged-hook validation. A tracked source hook is not an
-installation exception. An unknown active pre-commit hook blocks setup.
-
-If Git configuration fails after the task write, the installer attempts to restore the
-previous `deno.json` contents. If the installer enabled `extensions.worktreeConfig`, it
-attempts to restore the previous value or absence of that setting. One failed rollback
-does not prevent the remaining restoration attempts.
-
-Task installation preserves the existing POSIX permission bits on `deno.json` replacement
-and restoration. Rejected or unchanged configuration retains its bytes and permissions.
-Atomic replacement does not preserve owners, ACLs, or extended attributes.
-
-The diagnostic retains the primary error and every failed restoration result. Each
-rollback failure names the affected target and gives the recovery action. Git recovery
-commands use the previous value or remove a previously absent setting. The rollback
-diagnostic does not print the previous `deno.json` contents.
+mci does not scan task commands for recursion. A runtime check replaces the scan. The
+daemon adds `MCI_DAEMON_SOCKET` and `MCI_REPOSITORY_PATH` to the inherited environment of
+each job, after the client values. The workflow planner reserves both names. Before
+`mci
+ci` creates a receipt or submits, it compares its own daemon socket with
+`MCI_DAEMON_SOCKET` and the real current directory with `MCI_REPOSITORY_PATH`. If both
+match, the command prints an error and exits with status 2, because the job would wait for
+itself. A daemon with another `MCI_HOME` has another socket, so a test daemon inside a job
+accepts the submission.
 
 A future worktree can inherit this hook path. Without the required task, the inherited
-hook blocks commits. Hook installation rejects unsafe shared Git settings.
+hook blocks commits.
 
 Git's effective pre-commit hook is the only automatic trigger. Manual CLI commands remain
 available for diagnosis and release evidence.
