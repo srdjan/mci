@@ -103,7 +103,7 @@ const signalWorker = (
   }
 };
 
-const snapshot = (runtime: DaemonRuntime, candidate?: MutableRepository): Snapshot => ({
+const snapshot = (runtime: DaemonRuntime): Snapshot => ({
   version: 1,
   instance: runtime.instance,
   pid: Deno.pid,
@@ -112,7 +112,7 @@ const snapshot = (runtime: DaemonRuntime, candidate?: MutableRepository): Snapsh
     state,
   ): RepositoryState => ({
     ...state.repository,
-    queued: state.queue.length + (state === candidate ? 1 : 0),
+    queued: state.queue.length,
     active: state.active === null ? null : {
       id: state.active.id,
       workflow: state.active.workflow,
@@ -125,26 +125,6 @@ const snapshot = (runtime: DaemonRuntime, candidate?: MutableRepository): Snapsh
     blocked: state.blocked,
   })),
 });
-
-const publish = async (
-  runtime: DaemonRuntime,
-  candidate?: MutableRepository,
-): Promise<Result<void>> =>
-  await runtime.store.writeSnapshot(snapshot(runtime, candidate));
-
-// Job snapshots are best effort: a failed write is reported and never changes the result.
-const publishJob = async (
-  runtime: DaemonRuntime,
-  id: string,
-  stage: "start" | "step" | "final",
-): Promise<void> => {
-  const published = await publish(runtime);
-  if (!published.ok) {
-    runtime.reportDiagnostic(
-      `mci daemon: ${stage} snapshot write failed for ${id}: ${published.error}`,
-    );
-  }
-};
 
 const blockRetention = (
   runtime: DaemonRuntime,
@@ -169,7 +149,6 @@ const release = async (runtime: DaemonRuntime, id: string): Promise<void> => {
   if (removed.ok) runtime.obsolete.delete(id);
   else {
     const blocked = blockRetention(runtime, path, removed.error);
-    await publish(runtime);
     if (blocked !== undefined) pump(runtime, blocked);
   }
 };
@@ -340,7 +319,7 @@ const failedTerminal = (job: Job, detail: string): Terminal => ({
   log: job.log,
 });
 
-const runWorkerProcess = async (runtime: DaemonRuntime, job: Job): Promise<Terminal> => {
+const runWorkerProcess = async (job: Job): Promise<Terminal> => {
   const spawned = await attempt(() =>
     new Deno.Command(Deno.execPath(), {
       args: cliSelfArgs(["__worker", job.control]),
@@ -396,10 +375,8 @@ const runWorkerProcess = async (runtime: DaemonRuntime, job: Job): Promise<Termi
       signalWorker(job, "SIGTERM", false);
       break;
     }
-    const changed = control.value.consumed !== consumed;
     consumed = control.value.consumed;
     final ??= control.value.result;
-    if (changed) await publishJob(runtime, job.id, "step");
     await delay(25);
   }
   await statusPromise;
@@ -470,7 +447,6 @@ const complete = async (
   }
   if (repository.active === job) repository.active = null;
   job.child = null;
-  await publishJob(runtime, job.id, "final");
   job.resolve(result);
   pump(runtime, repository);
 };
@@ -490,7 +466,6 @@ const settleUnstarted = async (
   }
   await retire(runtime, repository.repository.path, result);
   job.child = null;
-  await publishJob(runtime, job.id, "final");
   job.resolve(result);
 };
 
@@ -526,8 +501,7 @@ const pump = (runtime: DaemonRuntime, repository: MutableRepository): void => {
     if (!begun.ok) {
       return failedTerminal(job, `request journal write failed: ${begun.error}`);
     }
-    await publishJob(runtime, job.id, "start");
-    return await runWorkerProcess(runtime, job);
+    return await runWorkerProcess(job);
   }).then((terminal) => complete(runtime, repository, job, terminal)).catch(
     async (error) => {
       await complete(runtime, repository, job, failedTerminal(job, message(error)));
@@ -662,15 +636,9 @@ const rollbackSubmission = async (
   if (failures.length === 0) return primary;
   const detail = `${primary}; ${failures.join("; ")}`;
   repository.blocked ??= `submission rollback failed: ${detail}`;
-  const published = await publish(runtime);
-  const diagnostic = published.ok
-    ? detail
-    : `${detail}; rollback snapshot write failed: ${published.error}`;
-  runtime.reportDiagnostic(
-    `mci daemon: submission rollback failed for ${id}: ${diagnostic}`,
-  );
+  runtime.reportDiagnostic(`mci daemon: submission rollback failed for ${id}: ${detail}`);
   pump(runtime, repository);
-  return diagnostic;
+  return detail;
 };
 
 const prepareSubmission = async (
@@ -730,18 +698,6 @@ const prepareSubmission = async (
   const accepted = await runtime.store.accept(pending);
   if (!accepted.ok) {
     const detail = await rollbackSubmission(runtime, repository, id, accepted.error);
-    await sendJson(connection, responseError("storage", detail));
-    closeConnection(connection);
-    return null;
-  }
-  if (runtime.closed) {
-    await rollbackSubmission(runtime, repository, id, "daemon is closed");
-    closeConnection(connection);
-    return null;
-  }
-  const published = await publish(runtime, repository);
-  if (!published.ok) {
-    const detail = await rollbackSubmission(runtime, repository, id, published.error);
     await sendJson(connection, responseError("storage", detail));
     closeConnection(connection);
     return null;
@@ -846,8 +802,7 @@ const manageRepositories = async (
     if (runtime.repositories.has(registered.value.id)) return okResponse(runtime);
     const state = await loadRepositoryState(registered.value, runtime.store);
     runtime.repositories.set(registered.value.id, state);
-    const published = await publish(runtime);
-    return published.ok ? okResponse(runtime) : responseError("storage", published.error);
+    return okResponse(runtime);
   }
   const state = Array.from(runtime.repositories.values()).find((candidate) =>
     candidate.repository.id === request.repository ||
@@ -863,8 +818,7 @@ const manageRepositories = async (
   const removed = await runtime.store.unregister(state.repository.id);
   if (removed.ok) runtime.repositories.delete(state.repository.id);
   else state.removing = false;
-  const published = removed.ok ? await publish(runtime) : removed;
-  return published.ok ? okResponse(runtime) : responseError("storage", published.error);
+  return removed.ok ? okResponse(runtime) : responseError("storage", removed.error);
 };
 
 const handleOperation = async (
@@ -1054,8 +1008,7 @@ const prepareRuntime = async (
     const pruned = await store.pruneRuns(state.repository.path, keep, controls);
     if (!pruned.ok) state.blocked ??= `request retention failed: ${pruned.error}`;
   }
-  const published = await publish(runtime);
-  return published.ok ? ok(runtime) : published;
+  return ok(runtime);
 };
 
 export type DaemonListener = {

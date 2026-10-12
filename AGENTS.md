@@ -15,7 +15,7 @@ CI YAML calls Deno tasks directly. Saved CI logs and status remain gitignored un
 uses a FIFO queue, while different repositories can run concurrently. Restart interrupts
 started work and drops queued work. The daemon retries neither.
 
-The menu bar monitor app reads daemon snapshots and opens saved logs. It also registers
+The menu bar monitor app reads daemon status and opens saved logs. It also registers
 repositories. The monitor does not install hooks. The monitor must not start CI or add
 another automatic trigger.
 

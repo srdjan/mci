@@ -303,8 +303,8 @@ To read the latest saved output, open the file that the `log` field names:
 less "$(jq -r .log .mci/ci/latest.json)"
 ```
 
-The menu bar app observes daemon snapshots and status. It can register or unregister a
-repository, open a repository, and open saved logs.
+The menu bar app observes daemon status. It can register or unregister a repository, open
+a repository, and open saved logs.
 
 When you add a folder, the app only registers the repository with the daemon. The panel
 reminds you to run `mci hooks setup <path>` once in a terminal. Setup uses

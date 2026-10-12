@@ -1,9 +1,4 @@
-import {
-  decodeTerminal,
-  type Repository,
-  type Snapshot,
-  type Terminal,
-} from "./protocol.ts";
+import { decodeTerminal, type Repository, type Terminal } from "./protocol.ts";
 import type { ServicePaths } from "./paths.ts";
 import { attempt, err, message, ok, type Result } from "./result.ts";
 
@@ -39,7 +34,6 @@ export type DaemonStore = {
   ) => Promise<Result<Terminal | null>>;
   readonly writeTerminal: (path: string, terminal: Terminal) => Promise<Result<void>>;
   readonly projectTerminal: (path: string, terminal: Terminal) => Promise<Result<void>>;
-  readonly writeSnapshot: (snapshot: Snapshot) => Promise<Result<void>>;
   readonly removeRun: (path: string, id: string) => Promise<Result<void>>;
   readonly pruneRuns: (
     path: string,
@@ -111,22 +105,17 @@ const syncPath = async (path: string, kind: "file" | "directory"): Promise<void>
   }
 };
 
-// A durable commit syncs the file before the rename and the directory after it.
-const commitTemporary = async (
-  temporary: string,
-  target: string,
-  durable: boolean,
-): Promise<void> => {
+// A commit syncs the file before the rename and the directory after it.
+const commitTemporary = async (temporary: string, target: string): Promise<void> => {
   await Deno.chmod(temporary, 0o600);
-  if (durable) await syncPath(temporary, "file");
+  await syncPath(temporary, "file");
   await Deno.rename(temporary, target);
-  if (durable) await syncPath(parent(target), "directory");
+  await syncPath(parent(target), "directory");
 };
 
 const atomicBytes = async (
   path: string,
   bytes: Uint8Array,
-  durable: boolean,
 ): Promise<Result<void>> => {
   const safe = await regularTarget(path);
   if (!safe.ok) return safe;
@@ -136,7 +125,7 @@ const atomicBytes = async (
   if (!temporary.ok) return temporary;
   const written = await attempt(async () => {
     await Deno.writeFile(temporary.value, bytes);
-    await commitTemporary(temporary.value, path, durable);
+    await commitTemporary(temporary.value, path);
   });
   if (written.ok) return written;
   await attempt(() => Deno.remove(temporary.value));
@@ -146,13 +135,8 @@ const atomicBytes = async (
 const atomicJson = (
   path: string,
   value: unknown,
-  durable = true,
 ): Promise<Result<void>> =>
-  atomicBytes(
-    path,
-    new TextEncoder().encode(`${JSON.stringify(value, null, 2)}\n`),
-    durable,
-  );
+  atomicBytes(path, new TextEncoder().encode(`${JSON.stringify(value, null, 2)}\n`));
 
 const parseFile = async (path: string): Promise<Result<unknown | null>> => {
   const found = await metadata(path);
@@ -356,7 +340,6 @@ export const openDaemonStore = async (
     registryChain = updated.then((result) => result.ok ? ok(undefined) : result);
     return updated;
   };
-  let snapshotChain = Promise.resolve<Result<void>>(ok(undefined));
   const terminalChains = new Map<string, Promise<Result<void>>>();
   const sequenceTerminal = (
     path: string,
@@ -486,13 +469,6 @@ export const openDaemonStore = async (
         if (!reference.ok) return reference;
         return reference;
       }),
-    writeSnapshot: (snapshot) => {
-      const update = snapshotChain.then(() =>
-        atomicJson(paths.snapshot, snapshot, false)
-      );
-      snapshotChain = update;
-      return update;
-    },
     pruneRuns: async (path, keep, controls) => {
       const mci = await presentDirectory(`${path}/.mci`);
       if (!mci.ok) return mci;

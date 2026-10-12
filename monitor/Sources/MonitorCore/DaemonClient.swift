@@ -32,7 +32,6 @@ public struct DaemonClient: Sendable {
     }
 
     public var socketPath: String { directory + "/daemon.sock" }
-    public var snapshotPath: String { directory + "/snapshot.json" }
 
     public func ping() async -> Result<DaemonSnapshot, DaemonClientError> {
         await request(["version": 1, "op": "ping"])

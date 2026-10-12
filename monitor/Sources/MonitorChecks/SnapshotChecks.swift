@@ -29,7 +29,6 @@ private func defaultSnapshotFixtureDirectory() -> String {
         }
     }
 
-    checkSnapshotFileSafety()
     checkDaemonResponses()
     checkDaemonRows()
 }
@@ -57,24 +56,6 @@ private func defaultSnapshotFixtureDirectory() -> String {
     } else {
         check(false, "the monitor refuses a submit-only response")
     }
-}
-
-@MainActor private func checkSnapshotFileSafety() {
-    let root = makeScratch()
-    defer { removeScratch(root) }
-    let text = """
-        {"version":1,"instance":"daemon-a","pid":7,
-        "updated":"2026-10-03T18:00:00.000Z","repositories":[]}
-        """
-    writeFile(root + "/snapshot.json", text)
-    if case .success(let snapshot) = readSnapshot(path: root + "/snapshot.json") {
-        equal(snapshot.pid, 7, "a regular snapshot file is read")
-    } else {
-        check(false, "a regular snapshot file decodes")
-    }
-    try? FileManager.default.createSymbolicLink(
-        atPath: root + "/linked.json", withDestinationPath: root + "/snapshot.json")
-    equal(readSnapshot(path: root + "/linked.json"), .failure(.notFile), "snapshot symlink")
 }
 
 @MainActor private func checkDaemonRows() {

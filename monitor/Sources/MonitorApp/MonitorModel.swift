@@ -29,6 +29,7 @@ final class MonitorModel {
     @ObservationIgnored private var refreshAgain = false
     @ObservationIgnored private var pending: Task<Void, Never>?
     @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var lastRefresh = Date.distantPast
     @ObservationIgnored private var actionUncertain = false
     @ObservationIgnored private var repositories: [DaemonRepository] = []
 
@@ -39,7 +40,7 @@ final class MonitorModel {
     func start() {
         watcher = DirectoryWatcher(path: client.directory) { [weak self] in self?.schedule() }
         watcher?.ensureActive()
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
         refresh()
@@ -98,12 +99,20 @@ final class MonitorModel {
         }
     }
 
+    /// The timer ticks every second. It refreshes every second while work is queued or running,
+    /// and every 5 seconds otherwise.
     private func tick() {
         watcher?.ensureActive()
-        refresh()
+        if hasActiveWork || Date().timeIntervalSince(lastRefresh) >= 5 { refresh() }
+    }
+
+    private var hasActiveWork: Bool {
+        rows.contains { $0.kind == .running || $0.kind == .queued }
+            || repositories.contains { $0.active != nil || $0.queued > 0 }
     }
 
     func refresh() {
+        lastRefresh = Date()
         if refreshing {
             refreshAgain = true
             return
@@ -126,16 +135,8 @@ final class MonitorModel {
             case .failure(let error):
                 daemonAvailable = false
                 daemonError = error.message
-                let path = client.snapshotPath
-                let persisted = await Task.detached(priority: .utility) {
-                    readSnapshot(path: path)
-                }.value
-                switch persisted {
-                case .success(let snapshot): use(snapshot: snapshot, daemonAvailable: false)
-                case .failure:
-                    repositories = []
-                    rows = []
-                }
+                repositories = []
+                rows = []
             }
         } while refreshAgain
         refreshing = false

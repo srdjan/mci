@@ -5,7 +5,6 @@ export type ServicePaths = {
   readonly directory: string;
   readonly socket: string;
   readonly registry: string;
-  readonly snapshot: string;
   readonly journal: string;
 };
 /** Return the service directory without the daemon socket length check. */
@@ -36,7 +35,6 @@ export const servicePaths = (home?: string): Result<ServicePaths> => {
     directory: trimmed,
     socket,
     registry: `${trimmed}/registry.json`,
-    snapshot: `${trimmed}/snapshot.json`,
     journal: `${trimmed}/requests.json`,
   });
 };

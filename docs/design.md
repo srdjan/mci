@@ -107,14 +107,12 @@ retain the existing sync policy. Power-loss durability remains unmeasured.
 
 The daemon sends the response to a register or unregister request after the management
 chain step ends. A client that does not read its response cannot stall later management
-requests. The daemon publishes the snapshot before it resolves a job result. A shutdown
-therefore ends after the last snapshot write.
+requests.
 
-Job snapshot publication is best effort at job start, at each step change, and at the end.
-A failed write sends a diagnostic to stderr with the stage and request identifier. The
-worker continues, and the daemon preserves the workflow result and live status. Snapshot
-failure alone does not block execution. The fallback file can retain active or queued
-state until a later publication succeeds. Service startup saves stderr in `daemon.log`.
+The daemon keeps live status in memory only. It writes no status file. The `status`
+request returns the current in-memory snapshot. Older releases wrote `snapshot.json` in
+the service directory. The daemon ignores that file if it remains on disk. Service startup
+saves stderr in `daemon.log`.
 
 The daemon resolves request paths in one chain for each path text. A stalled volume delays
 only requests for its own path. An unregister request no longer reports busy after the
@@ -154,11 +152,10 @@ The daemon writes the registry, the request journal, the terminal records, and
 `latest.json` as durable writes. A durable write syncs the temporary file, renames it, and
 then syncs the parent directory. A sync failure fails the write and removes the temporary
 file. The daemon also syncs the spool log before it closes the log. The daemon does not
-sync `snapshot.json`. It never reads that file, and it rewrites the file at each step
-change. On 2026-10-03, a 2 KB atomic write took 0.23 ms without sync and 8.58 ms with sync
-on an Apple Silicon host. Each value is the mean of 50 writes. No power-loss test confirms
-this behavior. Nobody verified whether Deno `syncData` on macOS flushes the drive cache or
-only the kernel buffers.
+write a status file. On 2026-10-03, a 2 KB atomic write took 0.23 ms without sync and 8.58
+ms with sync on an Apple Silicon host. Each value is the mean of 50 writes. No power-loss
+test confirms this behavior. Nobody verified whether Deno `syncData` on macOS flushes the
+drive cache or only the kernel buffers.
 
 An interrupted atomic write leaves a `.write-*` file. At startup, before the listener
 opens, the daemon removes regular files with this prefix from the service directory,
@@ -495,12 +492,13 @@ ignores them. No power-loss test establishes receipt durability.
 ## Menu bar monitor
 
 The app requests status from the daemon. The request has a one-second deadline and a four
-MiB response limit. The app reads `snapshot.json` only when the daemon is unavailable, and
-treats active data in that snapshot as stale.
+MiB response limit. When the daemon is unavailable, the app shows "daemon unavailable" and
+no repository rows.
 
 The app watches the daemon state directory and refreshes on changes. It coalesces
-filesystem events for 100 ms. A five-second timer repairs the watch and refreshes status.
-The panel refreshes relative times every second.
+filesystem events for 100 ms. A timer repairs the watch every second. The timer refreshes
+status every second while a repository has queued or running work. Otherwise, it refreshes
+status every five seconds. The panel refreshes relative times every second.
 
 The app can register or unregister a repository through daemon requests. Unregistration
 fails while that repository has accepted requests.

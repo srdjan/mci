@@ -3,15 +3,11 @@ import Foundation
 public enum SnapshotError: Error, Equatable, Sendable {
     case json
     case shape(String)
-    case notFile
-    case read(String)
 
     public var message: String {
         switch self {
         case .json: "The daemon snapshot is not valid JSON."
         case .shape(let detail): detail
-        case .notFile: "The daemon snapshot is not a regular file."
-        case .read(let detail): "Cannot read the daemon snapshot: \(detail)"
         }
     }
 }
@@ -263,29 +259,4 @@ public func decodeDaemonResponse(data: Data) -> Result<DaemonResponse, SnapshotE
         return .success(.error(tag, detail))
     }
     return .failure(.shape("Invalid daemon response."))
-}
-
-/// Reads a persisted snapshot without following a symbolic link.
-public func readSnapshot(path: String) -> Result<DaemonSnapshot, SnapshotError> {
-    var info = stat()
-    if lstat(path, &info) != 0 {
-        return errno == ENOENT ? .failure(.read("The file does not exist."))
-            : .failure(.read(String(cString: strerror(errno))))
-    }
-    guard (info.st_mode & S_IFMT) == S_IFREG else { return .failure(.notFile) }
-    let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-    guard descriptor >= 0 else {
-        return errno == ELOOP ? .failure(.notFile)
-            : .failure(.read(String(cString: strerror(errno))))
-    }
-    defer { close(descriptor) }
-    guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
-        return .failure(.notFile)
-    }
-    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
-    do {
-        return decodeSnapshot(data: try handle.readToEnd() ?? Data())
-    } catch {
-        return .failure(.read(error.localizedDescription))
-    }
 }
